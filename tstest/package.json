@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "dev": "tsx watch src/main.ts",
+    "hello": "npx tsx hello.ts"
   },
   "keywords": [],
   "author": "",
@@ -12,6 +14,6 @@
   "type": "commonjs",
   "devDependencies": {
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.0"
   }
 }
