@@ -1,0 +1,16 @@
+# 依赖
+node_modules/
+
+# 构建产物
+lib/
+client/
+*.tsbuildinfo
+
+# 测试沙盒
+tstest/node_modules/
+
+# 本地/发布目录
+local/
+
+# 系统文件
+.DS_Store
