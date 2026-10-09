@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/main.ts",
-    "hello": "npx tsx hello.ts"
+    "hello": "tsx hello.ts"
   },
   "keywords": [],
   "author": "",

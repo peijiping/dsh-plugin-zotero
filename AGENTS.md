@@ -22,19 +22,20 @@ DSH (DeepSeek) Zotero 插件，基于 cordis 框架（`@deepseek-ai/cordis`）�
 ## 常用命令
 
 ```bash
-npm run build            # tsc 编译 src/ -> lib/
-npm run build:client     # tsdown 打包 client
-npm run typecheck:client # tsc --noEmit 校验 client
+pnpm build            # tsc 编译 src/ -> lib/
+pnpm build:client     # tsdown 打包 client
+pnpm typecheck:client # tsc --noEmit 校验 client
 ```
 
 测试子项目（在 `tstest/` 目录下）：
 
 ```bash
-npm run dev   # tsx watch src/main.ts
+pnpm dev   # tsx watch src/main.ts
 ```
 
 ## 硬性约束
 
+- **包管理器**：主包与 `tstest/` 统一使用 **pnpm**，不得与 npm / yarn 混用（锁文件互不兼容，混装会导致 `node_modules` 结构反复重建）。若某个工具报 `Cannot find module`，优先排查 pnpm 的软链接布局，可用 `nodeLinker: hoisted` 退回扁平结构，而不是换回 npm。
 - **TypeScript 版本**：主包使用 tsdown@0.22.0，其 peer 依赖要求 `typescript ^5.0.0 || ^6.0.0`，**不支持 TypeScript 7.x**。主包固定使用 ^5.9.0。
 - **tstest 沙盒**：可使用 TypeScript 7.x + tsx（tsx 负责转译，绕开 tsdown 限制）；commonjs 模块类型；不得将 tstest 依赖引入主包。
 - **构建产物**：不要修改 `lib/`、`client/client.js` 等产物文件。
