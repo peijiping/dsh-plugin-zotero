@@ -34,14 +34,43 @@ npm install -D tsx          # -D 是 --save-dev 的缩写
 # pnpm（注意：安装用 add，不是 install）
 pnpm add -D tsx
 pnpm add typescript
+pnpm add -D --save-exact tsx@4.23.15   # 开发依赖 + 锁死精确版本
 ```
 
 - 包会下载到 `node_modules/` 目录。
 - `--save-dev` / `-D`：记录为**开发依赖**（`devDependencies`），只在开发时用（如编译器、运行器），不会打包进最终产物。
 - 不加 `-D` 则记录为生产依赖（`dependencies`）。
+- `--save-exact`（简写 `-E`）：写版本号时用**精确值**，不加 `^` / `~` 前缀（详见本节末尾的补充）。
 - 同时会生成/更新锁文件，锁定依赖的精确版本，保证别人装到的版本和你一致：npm 是 `package-lock.json`，pnpm 是 `pnpm-lock.yaml`。
 - `pnpm install`（不带 `add`）专门表示"按清单和锁文件把依赖装齐"，对应 npm 的 `npm install`。
 - 卸载：npm 用 `npm uninstall xxx`，pnpm 用 `pnpm remove xxx`。
+
+### 补充：`--save-exact` —— 版本号前缀的取舍
+
+`-D` 和 `--save-exact` 是**两个独立**的参数，管的是不同的事：
+
+| 参数 | 全称 | 作用 |
+|------|------|------|
+| `-D` | `--save-dev` | 写进 `devDependencies` 而不是 `dependencies` |
+| `--save-exact`（简写 `-E`） | — | 写进 `package.json` 的版本号用精确值，不加 `^` / `~` |
+
+同一条命令，加不加 `--save-exact`，落到 `package.json` 的内容不同：
+
+```jsonc
+// pnpm add -D @deepseek-ai/dsh@0.2.0-rc.2
+"@deepseek-ai/dsh": "^0.2.0-rc.2"   // 允许后续装到 0.2.x 里的任何新版本
+
+// pnpm add -D --save-exact @deepseek-ai/dsh@0.2.0-rc.2
+"@deepseek-ai/dsh": "0.2.0-rc.2"    // 永远只认这一个版本
+```
+
+几个要点：
+
+- `^` 的含义是"主版本号相同即可"，`~` 是"次版本号相同即可"，去掉前缀就是完全相等。默认插入哪种前缀由 `save-prefix` 配置决定（默认 `^`），`--save-exact` 相当于一次性地把它覆盖成空。
+- `-D` 和 `--save-exact` 只影响**写进 `package.json` 的版本声明**。`pnpm-lock.yaml` 本来就会把版本钉死到精确值，所以短时间内看不出差别；差异出现在将来有人删掉 `node_modules`、或按 `package.json` 里的范围重新解析依赖时。
+- 什么时候该用：依赖的行为需要和某个具体版本严格对齐时（例如要和本机已装的桌面 App 内置运行时保持同一版本，避免行为不一致难排查）。
+- 什么时候不必用：多数工具类依赖（编译器、运行器）保留默认的 `^` 更方便，能自动吃到补丁修复。
+- 想全局默认精确，不必每次敲参数，写进 `.npmrc`（`save-exact=true`）即可。
 
 ## 4. npx / pnpm exec —— 运行项目里装好的命令
 
