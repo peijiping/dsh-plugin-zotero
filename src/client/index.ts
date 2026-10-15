@@ -13,6 +13,7 @@ import { createElement, type ComponentType, type ReactElement } from 'react'
 
 import type { InputActions } from './inline'
 import { dicts, NS, type Translate } from './locales'
+import { resetPaneStore } from './paneStore'
 import { ZoteroPane } from './ZoteroPane'
 
 /** locale 服务中本插件用到的那部分。 */
@@ -45,6 +46,8 @@ interface SidebarRightTabsService {
 /** slots 服务。 */
 interface SlotsService {
   register(meta: Record<string, unknown>, component: ComponentType<never>): unknown
+  /** 声明感知注册：席位尚未声明时先等，声明后（含重新声明）再注册。 */
+  inject(key: string, callback: () => unknown): unknown
 }
 
 interface ClientContext {
@@ -91,4 +94,7 @@ export function apply(ctx: ClientContext): void {
     ),
     'dsh-plugin-zotero: pane body',
   )
+
+  // 共享面板状态是模块级单例，插件卸载时清空。
+  ctx.effect(() => () => resetPaneStore(), 'dsh-plugin-zotero: pane state')
 }

@@ -1,16 +1,16 @@
 /**
  * 右侧栏面板容器：头部状态栏 + 左分类树 + 右详情。
  *
- * 数据源为 Host 的只读端点（同源 fetch）；「添加到会话」通过 ui-conversation
- * 下发的会话级标准 prop `inputActions` 完成。
+ * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）；
+ * 「添加到会话」通过 ui-conversation 下发的会话级标准 prop `inputActions` 完成。
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, type ReactElement } from 'react'
 
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroHealth, ZoteroItemDetail, ZoteroItemSummary } from '../zotero/types'
-import { fetchCollectionBib, fetchHealth, fetchItem, fetchItems, fetchTree } from './api'
+import type { ZoteroCollection, ZoteroItemDetail } from '../zotero/types'
+import { fetchItem, fetchItems } from './api'
 import { CollectionTree } from './CollectionTree'
 import { collectionText, excerptText, itemText } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
@@ -18,9 +18,7 @@ import { insertBuilt } from './inline'
 import { ItemDetail } from './ItemDetail'
 import type { Translate } from './locales'
 import { tpl } from './locales'
-
-/** 搜索防抖时长。 */
-const SEARCH_DEBOUNCE_MS = 250
+import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState } from './paneStore'
 
 /** 整目录插入时拉取的条目数（与 compose 的预览上限一致）。 */
 const COLLECTION_PREVIEW_LIMIT = 50
@@ -33,10 +31,6 @@ interface Props {
 
 function stripTags(html: string): string {
   return html.replace(/<[^>]*>/gu, '').replace(/\s+/gu, ' ').trim()
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function StatusDot({ ok, label }: { ok: boolean; label: string }): ReactElement {
@@ -57,88 +51,31 @@ function StatusDot({ ok, label }: { ok: boolean; label: string }): ReactElement 
 }
 
 export function ZoteroPane({ t, inputActions }: Props): ReactElement {
-  const [health, setHealth] = useState<ZoteroHealth | null>(null)
-  const [libraryName, setLibraryName] = useState('')
-  const [collections, setCollections] = useState<ZoteroCollection[]>([])
-  const [treeError, setTreeError] = useState<string | null>(null)
-  const [treeLoading, setTreeLoading] = useState(true)
-
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<ZoteroItemSummary[] | null>(null)
-
-  const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null)
-  const [selectedCollection, setSelectedCollection] = useState<ZoteroCollection | null>(null)
-  const [detail, setDetail] = useState<ZoteroItemDetail | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-
-  const [collectionBib, setCollectionBib] = useState<string | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
-  const toastTimer = useRef<number | null>(null)
-
-  const showToast = useCallback((message: string): void => {
-    setToast(message)
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 3000)
-  }, [])
-
-  const refresh = useCallback(async (): Promise<void> => {
-    setTreeLoading(true)
-    try {
-      const [healthData, tree] = await Promise.all([fetchHealth(), fetchTree()])
-      setHealth(healthData)
-      setCollections(tree.collections)
-      setLibraryName(tree.libraryName)
-      setTreeError(null)
-    } catch (error) {
-      setTreeError(errorMessage(error))
-    } finally {
-      setTreeLoading(false)
-    }
-  }, [])
+  const {
+    health,
+    libraryName,
+    collections,
+    treeError,
+    treeLoading,
+    query,
+    results,
+    selectedItemKey,
+    selectedCollection,
+    detail,
+    detailLoading,
+    collectionBib,
+    toast,
+  } = usePaneState()
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
-
-  // 搜索（防抖）；query 为空时回到分类树。
-  useEffect(() => {
-    if (query.trim() === '') {
-      setResults(null)
-      return
-    }
-    const handle = window.setTimeout(() => {
-      void fetchItems({ q: query.trim(), limit: 100 })
-        .then((data) => setResults(data.items))
-        .catch(() => setResults([]))
-    }, SEARCH_DEBOUNCE_MS)
-    return () => window.clearTimeout(handle)
-  }, [query])
-
-  const openItem = useCallback((key: string): void => {
-    setSelectedItemKey(key)
-    setDetail(null)
-    setDetailLoading(true)
-    void fetchItem(key)
-      .then(setDetail)
-      .catch((error: unknown) => showToast(errorMessage(error)))
-      .finally(() => setDetailLoading(false))
-  }, [showToast])
-
-  const selectCollection = useCallback((collection: ZoteroCollection): void => {
-    setSelectedItemKey(null)
-    setDetail(null)
-    setSelectedCollection(collection)
-    setCollectionBib(null)
-    void fetchCollectionBib(collection.key)
-      .then((data) => setCollectionBib(data.bib))
-      .catch(() => setCollectionBib(''))
+    void loadTree()
   }, [])
 
   const report = useCallback((outcome: InsertOutcome): void => {
     if (outcome === 'inserted') showToast(t('toast.inserted'))
     else if (outcome === 'no-editor') showToast(t('error.noEditor'))
     else showToast(t('error.draftChanged'))
-  }, [showToast, t])
+  }, [t])
 
   const insertItem = useCallback(async (key: string): Promise<void> => {
     report(await insertBuilt(inputActions, async () => {
@@ -174,7 +111,7 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
         <StatusDot ok={health?.zotero.running === true} label={t(health?.zotero.running === true ? 'status.zoteroOn' : 'status.zoteroOff')} />
         <StatusDot ok={health?.mcp.running === true} label={t(health?.mcp.running === true ? 'status.mcpOn' : 'status.mcpOff')} />
         <div style={{ flex: 1 }} />
-        <Button variant="ghost" size="sm" onClick={() => void refresh()}>
+        <Button variant="ghost" size="sm" onClick={() => void loadTree(true)}>
           {t('action.refresh')}
         </Button>
       </header>
