@@ -2,12 +2,13 @@
 node_modules/
 
 # 构建产物
-lib/
-client/
+/lib/
+/client/
 *.tsbuildinfo
 
 # 测试沙盒
 tstest/node_modules/
+plugin_helloword/lib/
 
 # 本地/发布目录
 local/

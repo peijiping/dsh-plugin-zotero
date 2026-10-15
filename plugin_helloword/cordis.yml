@@ -1,6 +1,6 @@
 - insert:
     - id: hello
-      name: '/Users/peijiping/Documents/Codes/TS/dsh-plugin-zotero/plugin_helloword/src/my-tool.ts'
+      name: '/Users/peijiping/Documents/Codes/TS/dsh-plugin-zotero/plugin_helloword/src/my-plugin.ts'
       config:
         greeting: 'Hi there!'
         maxRetries: 5
