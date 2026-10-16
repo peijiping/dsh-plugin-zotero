@@ -227,14 +227,14 @@
 
 ### Phase 2 · 右侧面板骨架
 
-1. `src/client/ZoteroPane.tsx`：左右两栏（左 260px 树 / 右自适应详情），各自滚动；顶部一行含文库名与刷新按钮。
+1. `src/client/ZoteroPane.tsx`：左右两栏（左栏默认 260px、可由中间分隔条拖动调宽并记住 / 右自适应详情），各自滚动；顶部一行含文库名与刷新按钮。右栏条目详情的「正文 / 参考文献」上下分区同样可拖动（`ItemDetail.tsx`，默认 80% / 20%，占比存 localStorage）。
 2. `src/client/api.ts`：`getHealth/getTree/getItems/getItem/getCollectionBib`，统一把 `{ok:false}` 转成可展示错误。
 3. 组件内状态机：`selectedCollectionKey | selectedItemKey`、`loading`、`error`；列表与详情各缓存最近一次结果。
 4. 空态/错误态文案：未运行 Zotero、本地 API 未开放、文库为空。
 
 ### Phase 3 · 目录树与详情
 
-1. `src/client/CollectionTree.tsx`：根节点「我的文库」→ 顶层条目；其下按 `parentKey` 建嵌套分类；展开时按需拉条目（`limit=200`），不预取全库；行用 `DisclosureRow`，选中态用 `Pill`；`onContextMenu` 用 primitives `Menu` 弹「添加到会话 / 复制条目引用」。
+1. `src/client/CollectionTree.tsx`：根节点「我的文库」→ 顶层条目；其下按 `parentKey` 建嵌套分类；展开时按需拉条目（`limit=200`），不预取全库；行是自绘的树行（常显三角箭头 + 文件夹/文档图标 + 右侧条目数，缩进按 `depth * 14px` 一次算好），选中态用行底色；`onContextMenu` 用 primitives `Menu` 弹「添加到会话」。
 2. `src/client/ItemDetail.tsx`：元数据块（标题、作者、年份、`publicationTitle`、DOI/URL、标签）→ 摘要 → 附件列表（点击加载全文）→ 全文块；全文容器 `onMouseUp` 检测非折叠选区，浮出「添加到会话」小按钮。
 3. `compose.ts` 三种文本模板（被三处调用）：
    - 单条目：`【Zotero 条目｜<itemKey>】标题 / 作者 / 年份 / DOI / 摘要`（可选 BibTeX）；

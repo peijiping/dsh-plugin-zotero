@@ -1,15 +1,15 @@
 /**
- * 左栏：文库分类树 + 条目叶子。
+ * 左栏：文库分类树 + 条目叶子（Zotero 风格）。
  *
- * - 根节点「我的文库」展开 = 全库顶层条目（`items/top`）。
- * - 分类节点按 `parentCollection` 嵌套；展开时按需拉该分类的顶层条目（limit=200）。
- * - 条目叶子点击选中 → 右栏显示详情；右键 → 「添加条目引用」。
- * - 分类节点展开即选中 → 右栏显示分类概要（可插入整目录引用）。
+ * - 行首常显三角箭头（按住拖动/点击）只管开合；点行体则选中该分类，折叠时顺带展开。
+ * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin，避免深层错位。
+ * - 分类行右侧显示条目数；展开时其子分类与条目都缩进一层，条目带文档图标。
+ * - 分类 / 条目右键 → 「添加到会话」。
  */
 
-import { useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 
-import { DisclosureRow, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
 import { fetchItems } from './api'
@@ -20,6 +20,15 @@ const NODE_LIMIT = 200
 
 const ROOT_NODE = '__library__'
 
+/** 每层缩进量（px）。 */
+const INDENT = 14
+
+/** 树左起始留白（px）。 */
+const BASE_INDENT = 8
+
+/** 行高（px）。 */
+const ROW_HEIGHT = 24
+
 interface CollectionNode {
   collection: ZoteroCollection
   children: CollectionNode[]
@@ -29,9 +38,13 @@ interface TreeCtx {
   t: Translate
   expanded: ReadonlySet<string>
   itemsByNode: Record<string, ZoteroItemSummary[]>
+  totalsByNode: Record<string, number>
   selectedItemKey: string | null
   selectedCollectionKey: string | null
-  toggle(nodeId: string, collectionKey?: string, select?: ZoteroCollection): void
+  /** 三角箭头：只开合，不动选中态。 */
+  toggle(nodeId: string, collectionKey?: string): void
+  /** 行体：选中该分类（已折叠则顺带展开并拉取条目）。 */
+  select(collection: ZoteroCollection): void
   onSelectItem(key: string): void
   onInsertItem(key: string): void
   onInsertCollection(collection: ZoteroCollection): void
@@ -67,8 +80,8 @@ function glyph(path: string): ReactNode {
   )
 }
 
-const COLLECTION_ICON = 'M3 3.5h10M3 7.5h10M3 11.5h10'
-const ITEM_ICON = 'M4 2.5h6l2.5 2.5v8.5H4zM10 2.5V5h2.5'
+const FOLDER_ICON = 'M2.5 12.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z'
+const ITEM_ICON = 'M4.5 2.5h5L12 5v8.5H4.5zM9.5 2.5V5H12'
 const LIBRARY_ICON = 'M2.5 3.5h5v9h-5zM8.5 3.5h5v9h-5z'
 
 // ---- 扁平分类列表 → 森林 ---------------------------------------------------
@@ -89,21 +102,35 @@ function buildForest(collections: ZoteroCollection[]): CollectionNode[] {
 
 // ---- 样式 -------------------------------------------------------------------
 
-const muted: React.CSSProperties = { opacity: 0.55, fontSize: 12, padding: '2px 0 2px 8px' }
-
 const rowStyle: React.CSSProperties = {
   display: 'flex',
+  width: '100%',
+  boxSizing: 'border-box',
   gap: 6,
-  alignItems: 'baseline',
-  padding: '3px 6px 3px 8px',
+  alignItems: 'center',
+  height: ROW_HEIGHT,
   fontSize: 12.5,
-  lineHeight: 1.5,
+  lineHeight: `${ROW_HEIGHT}px`,
+  paddingRight: 8,
   borderRadius: 5,
   cursor: 'pointer',
 }
 
+function rowIndent(depth: number): React.CSSProperties {
+  return { paddingLeft: BASE_INDENT + depth * INDENT }
+}
+
 function rowBackground(selected: boolean): React.CSSProperties {
   return { background: selected ? 'rgba(127,127,127,0.16)' : 'transparent' }
+}
+
+const iconBox: React.CSSProperties = {
+  width: 16,
+  height: 16,
+  flexShrink: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 const titleStyle: React.CSSProperties = {
@@ -124,9 +151,50 @@ const metaStyle: React.CSSProperties = {
   fontSize: 11.5,
 }
 
+const countStyle: React.CSSProperties = {
+  flexShrink: 0,
+  minWidth: 14,
+  textAlign: 'right',
+  fontSize: 11.5,
+  opacity: 0.5,
+}
+
+function hintStyle(depth: number): React.CSSProperties {
+  return {
+    opacity: 0.55,
+    fontSize: 12,
+    lineHeight: `${ROW_HEIGHT}px`,
+    paddingLeft: BASE_INDENT + depth * INDENT + 22,
+  }
+}
+
+// ---- 展开箭头 ---------------------------------------------------------------
+
+function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): ReactElement {
+  return (
+    <span
+      onClick={(event) => {
+        event.stopPropagation()
+        onToggle()
+      }}
+      style={{ ...iconBox, cursor: 'pointer', opacity: 0.6 }}
+    >
+      <svg
+        width={9}
+        height={9}
+        viewBox="0 0 10 10"
+        fill="currentColor"
+        style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms ease' }}
+      >
+        <path d="M3.2 1.6 7 5l-3.8 3.4z" />
+      </svg>
+    </span>
+  )
+}
+
 // ---- 条目叶子 ---------------------------------------------------------------
 
-function ItemRow({ ctx, item }: { ctx: TreeCtx; item: ZoteroItemSummary }): ReactElement {
+function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; depth: number }): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
   const meta = [item.creators, item.year].filter((part) => part !== '').join(' · ')
   return (
@@ -147,9 +215,10 @@ function ItemRow({ ctx, item }: { ctx: TreeCtx; item: ZoteroItemSummary }): Reac
             event.preventDefault()
             setMenuOpen(true)
           }}
-          style={{ ...rowStyle, ...rowBackground(ctx.selectedItemKey === item.key) }}
+          style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedItemKey === item.key) }}
         >
-          <span style={{ flexShrink: 0, display: 'flex' }}>{glyph(ITEM_ICON)}</span>
+          <span style={iconBox} />
+          <span style={iconBox}>{glyph(ITEM_ICON)}</span>
           <span style={titleStyle} title={item.title}>{item.title}</span>
           {meta !== '' && <span style={metaStyle}>{meta}</span>}
         </div>
@@ -158,73 +227,59 @@ function ItemRow({ ctx, item }: { ctx: TreeCtx; item: ZoteroItemSummary }): Reac
   )
 }
 
-function renderItems(ctx: TreeCtx, nodeId: string): ReactElement[] {
+function renderItems(ctx: TreeCtx, nodeId: string, depth: number): ReactElement[] {
   const items = ctx.itemsByNode[nodeId]
   if (items === undefined) {
-    return [<div key="loading" style={muted}>{ctx.t('status.loading')}</div>]
+    return [<div key="loading" style={hintStyle(depth)}>{ctx.t('status.loading')}</div>]
   }
   if (items.length === 0) {
-    return [<div key="empty" style={muted}>{ctx.t('tree.empty')}</div>]
+    return [<div key="empty" style={hintStyle(depth)}>{ctx.t('tree.empty')}</div>]
   }
-  return items.map((item) => <ItemRow key={item.key} ctx={ctx} item={item} />)
+  return items.map((item) => <ItemRow key={item.key} ctx={ctx} item={item} depth={depth} />)
 }
 
-// ---- 分类节点 ---------------------------------------------------------------
+// ---- 分类节点（扁平化渲染：每行自带缩进，天然成树） -------------------------
 
-function CollectionNodeRow({
-  ctx,
-  node,
-  depth,
-}: {
-  ctx: TreeCtx
-  node: CollectionNode
-  depth: number
-}): ReactElement {
+function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNode; depth: number }): ReactElement {
   const nodeId = node.collection.key
   const open = ctx.expanded.has(nodeId)
   const [menuOpen, setMenuOpen] = useState(false)
+  const count = ctx.totalsByNode[nodeId] ?? node.collection.itemCount
 
   return (
-    <Menu
-      open={menuOpen}
-      onClose={() => setMenuOpen(false)}
-      onSelect={(id) => {
-        setMenuOpen(false)
-        if (id === 'insert-collection') ctx.onInsertCollection(node.collection)
-      }}
-      align="end"
-      portal
-      items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection') }]}
-      anchor={(
-        <div
-          onContextMenu={(event) => {
-            event.preventDefault()
-            setMenuOpen(true)
-          }}
-          style={rowBackground(ctx.selectedCollectionKey === nodeId)}
-        >
-          <DisclosureRow
-            icon={glyph(COLLECTION_ICON)}
-            title={node.collection.name}
-            open={open}
-            expandable
-            onToggle={() => ctx.toggle(nodeId, node.collection.key, node.collection)}
-            titleClassName={undefined}
+    <>
+      <Menu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onSelect={(id) => {
+          setMenuOpen(false)
+          if (id === 'insert-collection') ctx.onInsertCollection(node.collection)
+        }}
+        align="end"
+        portal
+        items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection') }]}
+        anchor={(
+          <div
+            onClick={() => ctx.select(node.collection)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setMenuOpen(true)
+            }}
+            style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
           >
-            <div style={{ marginLeft: depth * 10 + 12 }}>
-              {open
-                ? [
-                    ...node.children.map((child) => (
-                      <CollectionNodeRow key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
-                    )),
-                    ...renderItems(ctx, nodeId),
-                  ]
-                : null}
-            </div>
-          </DisclosureRow>
-        </div>
-      )}
-    />
+            <Chevron open={open} onToggle={() => ctx.toggle(nodeId, node.collection.key)} />
+            <span style={iconBox}>{glyph(FOLDER_ICON)}</span>
+            <span style={titleStyle} title={node.collection.name}>{node.collection.name}</span>
+            <span style={countStyle}>{count}</span>
+          </div>
+        )}
+      />
+      {open &&
+        node.children.map((child) => (
+          <CollectionRows key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
+        ))}
+      {open && renderItems(ctx, nodeId, depth + 1)}
+    </>
   )
 }
 
@@ -242,21 +297,34 @@ export function CollectionTree(props: Props): ReactElement {
     onInsertCollection,
   } = props
 
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
+  /** 默认展开根节点，进面板就能看到顶层分类（与 Zotero 一致）。 */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([ROOT_NODE]))
   const [itemsByNode, setItemsByNode] = useState<Record<string, ZoteroItemSummary[]>>({})
+  const [totalsByNode, setTotalsByNode] = useState<Record<string, number>>({})
 
   async function load(nodeId: string, collectionKey?: string): Promise<void> {
     if (itemsByNode[nodeId] !== undefined) return
-    let items: ZoteroItemSummary[] = []
     try {
-      items = (await fetchItems({ collectionKey, limit: NODE_LIMIT })).items
+      const data = await fetchItems({ collectionKey, limit: NODE_LIMIT })
+      setItemsByNode((prev) => ({ ...prev, [nodeId]: data.items }))
+      setTotalsByNode((prev) => ({ ...prev, [nodeId]: data.total }))
     } catch {
-      items = []
+      setItemsByNode((prev) => ({ ...prev, [nodeId]: [] }))
+      setTotalsByNode((prev) => ({ ...prev, [nodeId]: 0 }))
     }
-    setItemsByNode((prev) => ({ ...prev, [nodeId]: items }))
   }
 
-  function toggle(nodeId: string, collectionKey?: string, select?: ZoteroCollection): void {
+  // 仅挂载时预取根节点条目；之后由 toggle / select 触发按需拉取。
+  useEffect(() => {
+    void load(ROOT_NODE)
+  }, [])
+
+  function open(nodeId: string, collectionKey?: string): void {
+    setExpanded((prev) => (prev.has(nodeId) ? prev : new Set(prev).add(nodeId)))
+    void load(nodeId, collectionKey)
+  }
+
+  function toggle(nodeId: string, collectionKey?: string): void {
     const willOpen = !expanded.has(nodeId)
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -264,47 +332,50 @@ export function CollectionTree(props: Props): ReactElement {
       else next.delete(nodeId)
       return next
     })
-    if (!willOpen) return
-    void load(nodeId, collectionKey)
-    if (select !== undefined) onSelectCollection(select)
+    if (willOpen) void load(nodeId, collectionKey)
+  }
+
+  function select(collection: ZoteroCollection): void {
+    onSelectCollection(collection)
+    if (!expanded.has(collection.key)) open(collection.key, collection.key)
   }
 
   const ctx: TreeCtx = {
     t,
     expanded,
     itemsByNode,
+    totalsByNode,
     selectedItemKey,
     selectedCollectionKey,
     toggle,
+    select,
     onSelectItem,
     onInsertItem,
     onInsertCollection,
   }
 
   const rootOpen = expanded.has(ROOT_NODE)
+  const rootCount = totalsByNode[ROOT_NODE]
 
   return (
-    <div style={{ padding: '8px 6px' }}>
-      <div style={rowBackground(false)}>
-        <DisclosureRow
-          icon={glyph(LIBRARY_ICON)}
-          title={t('tree.library')}
-          open={rootOpen}
-          expandable
-          onToggle={() => toggle(ROOT_NODE)}
-        >
-          <div style={{ marginLeft: 12 }}>
-            {rootOpen
-              ? [
-                  ...buildForest(collections).map((node) => (
-                    <CollectionNodeRow key={node.collection.key} ctx={ctx} node={node} depth={1} />
-                  )),
-                  ...renderItems(ctx, ROOT_NODE),
-                ]
-              : null}
-          </div>
-        </DisclosureRow>
+    <div style={{ padding: '8px 6px', display: 'flex', flexDirection: 'column' }}>
+      <div
+        onClick={() => toggle(ROOT_NODE)}
+        style={{ ...rowStyle, ...rowIndent(0) }}
+      >
+        <Chevron open={rootOpen} onToggle={() => toggle(ROOT_NODE)} />
+        <span style={iconBox}>{glyph(LIBRARY_ICON)}</span>
+        <span style={titleStyle}>{t('tree.library')}</span>
+        {rootCount !== undefined && <span style={countStyle}>{rootCount}</span>}
       </div>
+      {rootOpen && (
+        <>
+          {buildForest(collections).map((node) => (
+            <CollectionRows key={node.collection.key} ctx={ctx} node={node} depth={1} />
+          ))}
+          {renderItems(ctx, ROOT_NODE, 1)}
+        </>
+      )}
     </div>
   )
 }

@@ -1,11 +1,12 @@
 /**
  * 右侧栏面板容器：头部状态栏 + 左分类树 + 右详情。
  *
+ * 两栏之间是可拖动的分隔条（宽度存 localStorage，跨会话/重启都记住）。
  * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）；
  * 「添加到会话」通过 ui-conversation 下发的会话级标准 prop `inputActions` 完成。
  */
 
-import { useCallback, useEffect, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -22,6 +23,22 @@ import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState
 
 /** 整目录插入时拉取的条目数（与 compose 的预览上限一致）。 */
 const COLLECTION_PREVIEW_LIMIT = 50
+
+/** 左栏宽度的存储键与取值范围。 */
+const TREE_WIDTH_KEY = 'dsh-plugin-zotero.treeWidth'
+const TREE_WIDTH_DEFAULT = 260
+const TREE_WIDTH_MIN = 180
+/** 右栏至少留出的宽度。 */
+const DETAIL_WIDTH_MIN = 220
+
+function readTreeWidth(): number {
+  try {
+    const value = Number.parseInt(window.localStorage.getItem(TREE_WIDTH_KEY) ?? '', 10)
+    return Number.isFinite(value) && value >= TREE_WIDTH_MIN ? value : TREE_WIDTH_DEFAULT
+  } catch {
+    return TREE_WIDTH_DEFAULT
+  }
+}
 
 interface Props {
   t: Translate
@@ -71,6 +88,41 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
     void loadTree()
   }, [])
 
+  const [treeWidth, setTreeWidth] = useState(readTreeWidth)
+  const [splitHover, setSplitHover] = useState(false)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ x: number; width: number } | null>(null)
+
+  /** 左栏宽度夹在 [TREE_WIDTH_MIN, 容器宽 - DETAIL_WIDTH_MIN] 之间。 */
+  function clampTreeWidth(next: number): number {
+    const total = bodyRef.current?.clientWidth ?? 0
+    const max = Math.max(TREE_WIDTH_MIN, total - DETAIL_WIDTH_MIN)
+    return Math.min(Math.max(next, TREE_WIDTH_MIN), max)
+  }
+
+  function onSplitterDown(event: React.PointerEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = { x: event.clientX, width: treeWidth }
+  }
+
+  function onSplitterMove(event: React.PointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current
+    if (drag === null) return
+    setTreeWidth(clampTreeWidth(drag.width + event.clientX - drag.x))
+  }
+
+  function onSplitterUp(event: React.PointerEvent<HTMLDivElement>): void {
+    if (dragRef.current === null) return
+    dragRef.current = null
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    try {
+      window.localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth))
+    } catch {
+      // 隐私模式等禁用 localStorage 时忽略，宽度仍在本会话内生效。
+    }
+  }
+
   const report = useCallback((outcome: InsertOutcome): void => {
     if (outcome === 'inserted') showToast(t('toast.inserted'))
     else if (outcome === 'no-editor') showToast(t('error.noEditor'))
@@ -116,14 +168,13 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
         </Button>
       </header>
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <div ref={bodyRef} style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <aside
           style={{
-            width: 260,
+            width: treeWidth,
             flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
-            borderRight: '1px solid rgba(127,127,127,0.2)',
             minHeight: 0,
           }}
         >
@@ -170,6 +221,34 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
             )}
           </div>
         </aside>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onPointerDown={onSplitterDown}
+          onPointerMove={onSplitterMove}
+          onPointerUp={onSplitterUp}
+          onPointerCancel={onSplitterUp}
+          onPointerEnter={() => setSplitHover(true)}
+          onPointerLeave={() => setSplitHover(false)}
+          style={{
+            flexShrink: 0,
+            width: 5,
+            display: 'flex',
+            justifyContent: 'center',
+            cursor: 'col-resize',
+            touchAction: 'none',
+            userSelect: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: 1,
+              height: '100%',
+              background: splitHover || dragRef.current !== null ? 'rgba(80,140,255,0.75)' : 'rgba(127,127,127,0.2)',
+            }}
+          />
+        </div>
 
         <section style={{ flex: 1, minWidth: 0, overflow: 'auto', minHeight: 0 }}>
           {selectedItemKey !== null ? (

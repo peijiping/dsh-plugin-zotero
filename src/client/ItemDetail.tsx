@@ -1,6 +1,13 @@
 /**
  * 右栏：单条条目详情。
  *
+ * 版面分上下两区：上方「正文区」（元数据 / 摘要 / 附件 / 全文块），下方「参考文献区」（bib）。
+ * 两区之间是可拖动的横向分隔条，默认正文占 80%，占比存 localStorage 跨会话记住；
+ * 没有 bib 时不分区，正文独占整栏。
+ *
+ * 正文区内部再分两块：头部信息（标题 / 元数据 / 摘要 / 附件，过高时自己滚动）与
+ * 全文块（撑满剩余高度、自己滚动），所以拖高正文区时全文文本跟着变高。
+ *
  * 「添加到会话」两处入口：头部按钮（整条目元数据）、全文块里的选区浮出按钮
  * （摘录）。全文块内用鼠标选中文本后浮出小按钮，位置取选区 rect。
  */
@@ -23,6 +30,23 @@ interface Props {
   onOpenItem(key: string): void
 }
 
+/** 正文区占比的存储键与取值范围（%）。 */
+const BODY_PERCENT_KEY = 'dsh-plugin-zotero.detailBodyPercent'
+const BODY_PERCENT_DEFAULT = 80
+const BODY_PERCENT_MIN = 30
+const BODY_PERCENT_MAX = 90
+
+function readBodyPercent(): number {
+  try {
+    const value = Number.parseInt(window.localStorage.getItem(BODY_PERCENT_KEY) ?? '', 10)
+    return Number.isFinite(value) && value >= BODY_PERCENT_MIN && value <= BODY_PERCENT_MAX
+      ? value
+      : BODY_PERCENT_DEFAULT
+  } catch {
+    return BODY_PERCENT_DEFAULT
+  }
+}
+
 const labelStyle = { opacity: 0.6, marginRight: 8, flexShrink: 0 } as const
 const metaRowStyle = { display: 'flex', gap: 4, marginBottom: 4, lineHeight: 1.6 } as const
 
@@ -42,7 +66,45 @@ function MetaRow({ label, children }: { label: string; children: ReactElement | 
 
 export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenItem }: Props): ReactElement {
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
+  const [bodyPercent, setBodyPercent] = useState(readBodyPercent)
+  const [splitHover, setSplitHover] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ y: number; height: number; percent: number } | null>(null)
+
+  const bib = detail.bib
+  const fulltext = detail.fulltext
+
+  function clampBodyPercent(next: number): number {
+    return Math.min(Math.max(next, BODY_PERCENT_MIN), BODY_PERCENT_MAX)
+  }
+
+  function onSplitterDown(event: React.PointerEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = {
+      y: event.clientY,
+      height: rootRef.current?.clientHeight ?? 0,
+      percent: bodyPercent,
+    }
+  }
+
+  function onSplitterMove(event: React.PointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current
+    if (drag === null || drag.height === 0) return
+    setBodyPercent(clampBodyPercent(drag.percent + ((event.clientY - drag.y) / drag.height) * 100))
+  }
+
+  function onSplitterUp(event: React.PointerEvent<HTMLDivElement>): void {
+    if (dragRef.current === null) return
+    dragRef.current = null
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    try {
+      window.localStorage.setItem(BODY_PERCENT_KEY, String(Math.round(bodyPercent)))
+    } catch {
+      // 隐私模式等禁用 localStorage 时忽略，占比仍在本会话内生效。
+    }
+  }
 
   function handleMouseUp(): void {
     const sel = window.getSelection()
@@ -67,114 +129,179 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
   }
 
   return (
-    <div style={{ padding: '12px 14px', lineHeight: 1.6 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
-        <h2 style={{ flex: 1, margin: 0, fontSize: 15, lineHeight: 1.45 }}>{detail.title}</h2>
-        <Button variant="outline" size="sm" onClick={onInsertItem}>
-          {t('action.insertItem')}
-        </Button>
+    <div
+      ref={rootRef}
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+    >
+      <div
+        style={{
+          flex: bib !== null ? `0 0 ${bodyPercent}%` : '1 1 auto',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        {/* 头部信息：内容不足时不抢空间，超高时自己滚动 */}
+        <div
+          style={{
+            flex: fulltext !== null ? '0 1 auto' : '1 1 auto',
+            minHeight: 44,
+            overflow: 'auto',
+            padding: '12px 14px 0',
+            lineHeight: 1.6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+            <h2 style={{ flex: 1, margin: 0, fontSize: 15, lineHeight: 1.45 }}>{detail.title}</h2>
+            <Button variant="outline" size="sm" onClick={onInsertItem}>
+              {t('action.insertItem')}
+            </Button>
+          </div>
+
+          {detail.creators.length > 0 && <MetaRow label={t('detail.creators')}>{detail.creators.join('、')}</MetaRow>}
+          {detail.year !== '' && <MetaRow label={t('detail.year')}>{detail.year}</MetaRow>}
+          {detail.publicationTitle !== '' && <MetaRow label={t('detail.source')}>{detail.publicationTitle}</MetaRow>}
+          {detail.doi !== '' && <MetaRow label={t('detail.doi')}>{detail.doi}</MetaRow>}
+          {detail.url !== '' && <MetaRow label={t('detail.url')}>{detail.url}</MetaRow>}
+          {detail.tags.length > 0 && <MetaRow label={t('detail.tags')}>{detail.tags.join('、')}</MetaRow>}
+
+          {detail.abstract !== '' && (
+            <section style={{ marginTop: 12 }}>
+              <h3 style={sectionTitle}>{t('detail.abstract')}</h3>
+              <p style={{ margin: 0, opacity: 0.85 }}>{detail.abstract}</p>
+            </section>
+          )}
+
+          {detail.attachments.length > 0 && (
+            <section style={{ marginTop: 14, paddingBottom: 14 }}>
+              <h3 style={sectionTitle}>{t('detail.attachments')}</h3>
+              {detail.attachments.map((attachment) => (
+                <button
+                  key={attachment.key}
+                  type="button"
+                  onClick={() => onOpenItem(attachment.key)}
+                  style={linkRowStyle}
+                >
+                  <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{attachment.title}</span>
+                  <span style={{ opacity: 0.55, flexShrink: 0 }}>
+                    {attachment.contentType}
+                    {attachment.size > 0 ? ` · ${Math.round(attachment.size / 1024)} KB` : ''}
+                  </span>
+                </button>
+              ))}
+            </section>
+          )}
+        </div>
+
+        {/* 全文块：撑满正文区剩余高度，文本随之变高 */}
+        <section
+          style={{
+            flex: fulltext !== null ? '1 1 0' : '0 0 auto',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '2px 14px 14px',
+          }}
+        >
+          <h3 style={sectionTitle}>
+            {t('detail.fulltext')}
+            {fulltext !== null && (
+              <span style={{ opacity: 0.55, fontWeight: 400, marginLeft: 8 }}>{fulltext.attachmentKey}</span>
+            )}
+          </h3>
+          {fulltext === null ? (
+            <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noFulltext')}</p>
+          ) : (
+            <div
+              ref={boxRef}
+              onMouseUp={handleMouseUp}
+              style={{
+                position: 'relative',
+                flex: 1,
+                minHeight: 60,
+                overflow: 'auto',
+                padding: '8px 10px',
+                border: '1px solid rgba(127,127,127,0.25)',
+                borderRadius: 6,
+                whiteSpace: 'pre-wrap',
+                fontSize: 12.5,
+                lineHeight: 1.7,
+                opacity: 0.9,
+              }}
+            >
+              {fulltext.content}
+              {fulltext.truncated && (
+                <div style={{ marginTop: 6, opacity: 0.6 }}>{t('detail.fulltextTruncated')}</div>
+              )}
+              {selection !== null && (
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    onInsertExcerpt(selection.text)
+                    window.getSelection()?.removeAllRanges()
+                    setSelection(null)
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: selection.x,
+                    top: selection.y,
+                    transform: 'translate(-50%, -130%)',
+                    padding: '3px 8px',
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: '1px solid rgba(127,127,127,0.35)',
+                    background: 'rgba(40,40,40,0.92)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    zIndex: 5,
+                  }}
+                >
+                  {t('action.insertExcerpt')}
+                </button>
+              )}
+            </div>
+          )}
+        </section>
       </div>
 
-      {detail.creators.length > 0 && <MetaRow label={t('detail.creators')}>{detail.creators.join('、')}</MetaRow>}
-      {detail.year !== '' && <MetaRow label={t('detail.year')}>{detail.year}</MetaRow>}
-      {detail.publicationTitle !== '' && <MetaRow label={t('detail.source')}>{detail.publicationTitle}</MetaRow>}
-      {detail.doi !== '' && <MetaRow label={t('detail.doi')}>{detail.doi}</MetaRow>}
-      {detail.url !== '' && <MetaRow label={t('detail.url')}>{detail.url}</MetaRow>}
-      {detail.tags.length > 0 && <MetaRow label={t('detail.tags')}>{detail.tags.join('、')}</MetaRow>}
-
-      {detail.abstract !== '' && (
-        <section style={{ marginTop: 12 }}>
-          <h3 style={sectionTitle}>{t('detail.abstract')}</h3>
-          <p style={{ margin: 0, opacity: 0.85 }}>{detail.abstract}</p>
-        </section>
-      )}
-
-      {detail.attachments.length > 0 && (
-        <section style={{ marginTop: 14 }}>
-          <h3 style={sectionTitle}>{t('detail.attachments')}</h3>
-          {detail.attachments.map((attachment) => (
-            <button
-              key={attachment.key}
-              type="button"
-              onClick={() => onOpenItem(attachment.key)}
-              style={linkRowStyle}
-            >
-              <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{attachment.title}</span>
-              <span style={{ opacity: 0.55, flexShrink: 0 }}>
-                {attachment.contentType}
-                {attachment.size > 0 ? ` · ${Math.round(attachment.size / 1024)} KB` : ''}
-              </span>
-            </button>
-          ))}
-        </section>
-      )}
-
-      <section style={{ marginTop: 14 }}>
-        <h3 style={sectionTitle}>
-          {t('detail.fulltext')}
-          {detail.fulltext !== null && (
-            <span style={{ opacity: 0.55, fontWeight: 400, marginLeft: 8 }}>{detail.fulltext.attachmentKey}</span>
-          )}
-        </h3>
-        {detail.fulltext === null ? (
-          <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noFulltext')}</p>
-        ) : (
-          <div
-            ref={boxRef}
-            onMouseUp={handleMouseUp}
+      {bib !== null && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          onPointerDown={onSplitterDown}
+          onPointerMove={onSplitterMove}
+          onPointerUp={onSplitterUp}
+          onPointerCancel={onSplitterUp}
+          onPointerEnter={() => setSplitHover(true)}
+          onPointerLeave={() => setSplitHover(false)}
+          style={{
+            flexShrink: 0,
+            height: 5,
+            display: 'flex',
+            alignItems: 'center',
+            cursor: 'row-resize',
+            touchAction: 'none',
+            userSelect: 'none',
+          }}
+        >
+          <span
             style={{
-              position: 'relative',
-              maxHeight: 320,
-              overflow: 'auto',
-              padding: '8px 10px',
-              border: '1px solid rgba(127,127,127,0.25)',
-              borderRadius: 6,
-              whiteSpace: 'pre-wrap',
-              fontSize: 12.5,
-              lineHeight: 1.7,
-              opacity: 0.9,
+              width: '100%',
+              height: 1,
+              background:
+                splitHover || dragRef.current !== null ? 'rgba(80,140,255,0.75)' : 'rgba(127,127,127,0.2)',
             }}
-          >
-            {detail.fulltext.content}
-            {detail.fulltext.truncated && (
-              <div style={{ marginTop: 6, opacity: 0.6 }}>{t('detail.fulltextTruncated')}</div>
-            )}
-            {selection !== null && (
-              <button
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onInsertExcerpt(selection.text)
-                  window.getSelection()?.removeAllRanges()
-                  setSelection(null)
-                }}
-                style={{
-                  position: 'absolute',
-                  left: selection.x,
-                  top: selection.y,
-                  transform: 'translate(-50%, -130%)',
-                  padding: '3px 8px',
-                  fontSize: 12,
-                  borderRadius: 6,
-                  border: '1px solid rgba(127,127,127,0.35)',
-                  background: 'rgba(40,40,40,0.92)',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  zIndex: 5,
-                }}
-              >
-                {t('action.insertExcerpt')}
-              </button>
-            )}
-          </div>
-        )}
-      </section>
+          />
+        </div>
+      )}
 
-      {detail.bib !== null && (
-        <section style={{ marginTop: 14 }}>
+      {bib !== null && (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px 12px' }}>
           <h3 style={sectionTitle}>{t('detail.bibTitle')}</h3>
-          <p style={{ margin: 0, opacity: 0.85, fontSize: 12.5 }}>{stripTags(detail.bib)}</p>
-        </section>
+          <p style={{ margin: 0, opacity: 0.85, fontSize: 12.5, whiteSpace: 'pre-wrap' }}>{stripTags(bib)}</p>
+        </div>
       )}
     </div>
   )
