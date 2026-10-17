@@ -17,5 +17,6 @@ local/
 # 系统文件
 .DS_Store
 
-./trae/
-./workbuddy/
+# 本地工具目录（不纳入版本控制）
+.trae/
+.workbuddy/
