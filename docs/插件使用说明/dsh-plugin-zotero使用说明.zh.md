@@ -111,17 +111,7 @@ curl -i http://127.0.0.1:23119/api/users/0/collections | head -1
 
 ## 5. MCP 集成：权限边界与写操作提醒
 
-配置在 [cordis.patch.yml](../../cordis.patch.yml) 的 `insert` 里，由插件 bundle 顺带插入一行：
-
-```yaml
-- id: mcp-zotero
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: zotero                      # 工具名因此是 mcp__zotero__<rawName>
-    transport: streamable-http
-    url: http://127.0.0.1:23120/mcp
-    toolCallTimeoutMs: 120000
-```
+模型侧工具由**插件自己**桥接（`src/host/mcp-bridge.ts`）：直连本机 Zotero 集成 MCP（地址取自配置字段 `mcpUrl`，默认 `http://127.0.0.1:23120/mcp`），按配置里的 `disabledMcpTools` 过滤后，以 `mcp__zotero__<原始名>` 注册给模型。[cordis.patch.yml](../../cordis.patch.yml) **不再**插入 `@deepseek-ai/dsh-mcp-client` —— 官方 MCP 客户端不支持按工具开关，且同 `serverName` 会与自注册工具重名冲突。
 
 服务端细节见 [Zotero集成MCP服务参考.md](../Zotero文档/Zotero集成MCP服务参考.md)。本机实测为 `zotero-integrated-mcp v1.1.0`，暴露 **20 个工具**。
 
@@ -142,10 +132,40 @@ curl -i http://127.0.0.1:23119/api/users/0/collections | head -1
 建议：
 
 - 默认全开可以接受——多数调用是读工具，写工具偶尔很有用（比如「把刚找的文献收进 DRG 分类」）。
-- 想收紧成纯只读：把 profile patch 里 `mcp-zotero` 那一行**移除或注释掉**，面板功能完全不受影响。
+- 想收紧成纯只读：在插件页配置卡的 **「MCP 工具」** 区把 5 个写工具的开关关掉并「保存」，模型侧立刻不再注册这些工具；面板功能不受影响。
 - 涉及 `delete_collection` 的请求，建议先让模型列出分类再确认，不要一句话让它删。
 
-## 6. 常见错误对照表
+## 6. 插件页配置项
+
+在 dsh 顶部导航的 **「插件」** 面板里（副标题「安装、启用和配置插件」），展开 `dsh-plugin-zotero`，点组件行上的 **「配置 dsh-plugin-zotero」**。表单分两组。
+
+**API 设置**
+
+| 字段 | 默认 | 生效点 |
+|---|---|---|
+| Zotero 地址 | `http://127.0.0.1:23119` | 本地 API 探活与全部请求 |
+| 请求超时（毫秒） | `5000` | 单次本地 API 请求超时 |
+| 全文上限（字节） | `204800` | 附件全文返回上限（超出截断） |
+| 默认条目数 | `50` | 面板条目列表默认拉取条数 |
+
+**MCP 设置**
+
+| 字段 | 默认 | 生效点 |
+|---|---|---|
+| 集成 MCP 地址 | `http://127.0.0.1:23120/mcp` | 集成 MCP 探活、工具列表与工具调用 |
+| MCP 探活超时（毫秒） | `800` | TCP 探活集成 MCP 端口超时 |
+
+MCP 组下方是 **「MCP 工具」** 区：现场列出集成 MCP 的全部工具（`mcp__zotero__<原始名>` + 描述），每行右侧一个开关。关掉某个工具并「保存」后，模型侧就不再注册它（等价于把它从模型的工具表里摘掉）；「重新读取」按钮可重新拉一次清单。
+
+保存与重置：
+
+- 点「保存」把新值写进 profile 的 patch 层 `~/.dsh/profiles/<profile>/cordis.patch.yml`，**无需重启**即时生效——字段标了 Schemastery `.volatile()`，只提交新值并唤醒引用，条目本身不重挂。
+- 工具开关同样写进 `disabledMcpTools` 字段（工具原始名数组）；面板打开配置卡或保存后会各同步一次工具注册。
+- 字段旁出现「已覆盖」表示该值来自 patch 层而非默认值；点「恢复默认」可清掉覆盖。
+- 若该值被更高优先级的 patch 层（如 home patch）覆盖，保存会报错，提示该值已被覆盖。
+- 「设置 → 内置插件」是**只读**清单（只看列表与运行状态），没有编辑入口；配置入口只在「插件」面板。
+
+## 7. 常见错误对照表
 
 | 现象 / 错误码 | 原因 | 处理 |
 |---|---|---|

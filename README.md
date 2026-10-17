@@ -14,7 +14,37 @@
 - **右侧栏面板「Zotero 文献库」**：顶部状态栏（Zotero / 模型工具探活）+ 左侧分类树（按需拉取、标题摘要搜索）+ 右侧条目详情或分类概要。
 - **三种插入方式**：单条目引用、全文划词摘录、整目录引用，均只写进会话草稿（不自动发送、不抢焦点），文本携带 `itemKey` / `collectionKey` 供模型接续操作。
 - **面板严格只读**：不提供任何新建 / 改名 / 删除分类的按钮。
-- **模型侧工具**：由 `cordis.patch.yml` 顺带插入 `@deepseek-ai/dsh-mcp-client`，指向 `http://127.0.0.1:23120/mcp`。
+- **模型侧工具**：插件**自持**连接本机 Zotero 集成 MCP（`http://127.0.0.1:23120/mcp`），把工具以 `mcp__zotero__*` 注册进 dsh，可在插件页逐个开关。
+
+## 插件页配置项
+
+在 dsh 顶部的「插件」面板展开 `dsh-plugin-zotero`，点组件行上的「配置 dsh-plugin-zotero」，即可调整连接参数。表单分两组：
+
+**API 设置**
+
+| 字段 | 默认 | 生效点 |
+|---|---|---|
+| `zoteroBaseUrl` | `http://127.0.0.1:23119` | Zotero 本地 API 探活与全部请求 |
+| `requestTimeoutMs` | `5000` | 单次本地 API 请求超时 |
+| `fulltextMaxBytes` | `204800` | 附件全文返回上限（超出截断） |
+| `defaultLimit` | `50` | 面板条目列表默认拉取条数 |
+
+**MCP 设置**
+
+| 字段 | 默认 | 生效点 |
+|---|---|---|
+| `mcpUrl` | `http://127.0.0.1:23120/mcp` | 集成 MCP 探活 + 工具列表 / 工具调用 |
+| `mcpProbeTimeoutMs` | `800` | TCP 探活集成 MCP 端口超时 |
+| `disabledMcpTools` | `[]` | 被停用的 MCP 工具**原始名**；模型侧据此过滤注册 |
+
+MCP 组下方还会现场列出集成 MCP 的全部工具（名字 + 描述），每个工具右侧一个开关；关掉并保存后，该工具不再注册给模型（面板打开/保存配置时各同步一次注册）。
+
+- 保存写入 profile 的 `cordis.patch.yml`（`~/.dsh/profiles/<profile>/cordis.patch.yml`）。
+- 普通字段走 Schemastery `.volatile()`，只提交新值并唤醒引用，**无需重启**即时生效；工具开关同理，保存后由 Host 侧重新注册工具集。
+- 「恢复默认」= 清掉该项覆盖；若该值被更高优先级的 patch 层覆盖，保存会报「被覆盖」错误。
+- 「设置 → 内置插件」是只读清单，不提供编辑入口。
+
+实现：Host 半在 `src/index.ts` 导出 `Config` schema、注入读取器（`src/zotero/config.ts` 的 `setSettingsReader`）并驱动 `src/host/mcp-bridge.ts`；Client 半在 `src/client/ZoteroCard.tsx` 渲染配置卡。
 
 ## 架构
 
@@ -39,13 +69,15 @@
 src/
 ├── index.ts            # 插件入口（Host 半）
 ├── host/
-│   └── router.ts       # 只读 HTTP 路由 GET /dsh-zotero/api/<action>
+│   ├── router.ts       # 只读 HTTP 路由 GET /dsh-zotero/api/<action>
+│   └── mcp-bridge.ts   # 自持集成 MCP 连接 + 按开关过滤注册模型工具
 ├── zotero/
-│   ├── client.ts       # Zotero 本地 API 客户端（只读）
+│   ├── client.ts       # Zotero 本地 API 客户端（只读）+ 集成 MCP JSON-RPC
 │   ├── config.ts       # 端点、超时、截断阈值等常量
 │   └── types.ts        # Host ↔ Client 数据契约
 └── client/             # 客户端（web）代码
-    ├── index.ts        # 注册右侧栏 tab 与面板正文
+    ├── index.ts        # 注册右侧栏 tab、面板正文与插件页配置卡席位
+    ├── ZoteroCard.tsx  # 插件页配置卡（plugins.row.config 席位）
     ├── ZoteroPane.tsx  # 面板容器：状态栏 + 分类树 + 详情
     ├── CollectionTree.tsx / ItemDetail.tsx
     ├── paneStore.ts    # 跨会话共享的面板状态
@@ -56,7 +88,7 @@ src/
 
 client/client.js        # tsdown 产物（勿手改）
 lib/                    # tsc 产物（勿手改）
-cordis.patch.yml        # bundle patch 层：插入本插件与 MCP 桥接行
+cordis.patch.yml        # bundle patch 层：插入本插件（模型侧工具由插件自持注册）
 ```
 
 ## 环境要求
@@ -82,7 +114,7 @@ pnpm typecheck:client  # tsc --noEmit 校验客户端源码
 
 ```sh
 dsh plugin --profile demo add ./
-dsh --profile demo --dump-config   # 应能看到 dsh-plugin-zotero 与 mcp-zotero 两行
+dsh --profile demo --dump-config   # 应能看到 dsh-plugin-zotero 一行
 dsh --profile demo
 ```
 
@@ -110,9 +142,9 @@ curl http://127.0.0.1:23119/api/   # 期望输出：Zotero is running
 
 ### 模型侧 MCP 与权限边界
 
-`cordis.patch.yml` 的 `insert` 里插入 `mcp-zotero`（`@deepseek-ai/dsh-mcp-client`），服务端为本机 Zotero 集成 MCP（本机实测 `zotero-integrated-mcp v1.1.0`，暴露 20 个工具）。
+模型侧工具由**插件自己**桥接：`src/host/mcp-bridge.ts` 直连本机 Zotero 集成 MCP（本机实测 `zotero-integrated-mcp v1.1.0`，暴露 20 个工具），按配置里的 `disabledMcpTools` 过滤后以 `mcp__zotero__*` 注册给模型。`cordis.patch.yml` **不再**插入 `@deepseek-ai/dsh-mcp-client` —— 它不支持按工具开关，且同 `serverName` 会与自注册工具重名冲突。
 
-⚠️ 面板只读，**但桥接的模型工具不是**：20 个工具中含 5 个改变文库结构的写工具（`create_collection` / `update_collection` / `delete_collection` / `add_items_to_collection` / `remove_items_from_collection`）。想收紧为纯只读，把 profile patch 里 `mcp-zotero` 那一行移除或注释掉即可，面板功能不受影响。
+⚠️ 面板只读，**但模型侧工具不是**：20 个工具中含 5 个改变文库结构的写工具（`create_collection` / `update_collection` / `delete_collection` / `add_items_to_collection` / `remove_items_from_collection`）。想收紧为纯只读，直接在插件页配置卡的「MCP 工具」里关掉它们并保存即可；面板功能不受影响。
 
 ## 相关文档
 

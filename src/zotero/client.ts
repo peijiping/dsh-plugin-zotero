@@ -16,13 +16,10 @@
 import { connect } from 'node:net'
 
 import {
-  FULLTEXT_MAX_BYTES,
-  LIBRARY_PREFIX,
-  MCP_PROBE_TIMEOUT_MS,
-  MCP_URL,
-  REQUEST_TIMEOUT_MS,
-  ZOTERO_BASE,
-  ZOTERO_PROBE_URL,
+  getSettings,
+  libraryBase,
+  MCP_CALL_TIMEOUT_MS,
+  zoteroProbeUrl,
 } from './config.js'
 import type {
   ApiErrorCode,
@@ -97,9 +94,6 @@ interface RawItem {
 
 // ---- 底层请求 ---------------------------------------------------------------
 
-/** 文库端点的绝对前缀（Node 的 fetch 需要绝对 URL，不接受相对路径）。 */
-const LIB = `${ZOTERO_BASE}${LIBRARY_PREFIX}`
-
 function shortMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -107,11 +101,11 @@ function shortMessage(error: unknown): string {
 async function request(url: string): Promise<Response> {
   let res: Response
   try {
-    res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+    res = await fetch(url, { signal: AbortSignal.timeout(getSettings().requestTimeoutMs) })
   } catch (error) {
     throw new ZoteroError(
       'zotero_unreachable',
-      `无法连接 Zotero 本地 API（${ZOTERO_BASE}）：${shortMessage(error)}`,
+      `无法连接 Zotero 本地 API（${getSettings().zoteroBaseUrl}）：${shortMessage(error)}`,
     )
   }
   if (res.status === 403) {
@@ -207,7 +201,7 @@ function libraryNameOf(raw: RawItem[]): string {
 /** 探活 Zotero 本地 API，返回版本信息；不可达时 running=false。 */
 export async function probe(): Promise<ZoteroHealth['zotero']> {
   try {
-    const res = await fetch(ZOTERO_PROBE_URL, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+    const res = await fetch(zoteroProbeUrl(), { signal: AbortSignal.timeout(getSettings().requestTimeoutMs) })
     return {
       running: res.ok,
       apiVersion: res.headers.get('zotero-api-version'),
@@ -221,7 +215,7 @@ export async function probe(): Promise<ZoteroHealth['zotero']> {
 
 /** 用 TCP 连接探活 Zotero 集成 MCP 端口（轻量、不建会话）。 */
 export function probeMcp(): Promise<boolean> {
-  const url = new URL(MCP_URL)
+  const url = new URL(getSettings().mcpUrl)
   const port = Number.parseInt(url.port, 10)
   return new Promise<boolean>((resolve) => {
     const socket = connect({ host: url.hostname, port })
@@ -229,24 +223,132 @@ export function probeMcp(): Promise<boolean> {
       socket.destroy()
       resolve(running)
     }
-    socket.setTimeout(MCP_PROBE_TIMEOUT_MS)
+    socket.setTimeout(getSettings().mcpProbeTimeoutMs)
     socket.once('connect', () => finish(true))
     socket.once('timeout', () => finish(false))
     socket.once('error', () => finish(false))
   })
 }
 
+// ---- 集成 MCP（只读 + 工具桥接） --------------------------------------------
+
+/** 集成 MCP 暴露的一个工具。 */
+export interface McpToolInfo {
+  name: string
+  description: string
+  /** 上游 JSON Schema，直接作为 dsh 工具的参数声明。 */
+  parameters: unknown
+}
+
+/** 集成 MCP 一次工具调用的结果。 */
+export interface McpCallResult {
+  content: unknown[]
+  isError: boolean
+}
+
+interface RawMcpTool {
+  name?: string
+  description?: string
+  inputSchema?: unknown
+}
+
+/**
+ * 兼容 JSON 与 SSE 两种响应的 JSON-RPC 解析。
+ *
+ * 实测 Zotero 集成 MCP 对每个请求都直接回 `application/json`，但
+ * Streamable HTTP 规范允许用 `text/event-stream` 逐帧下发，故两种都接。
+ */
+function parseMcpPayload(contentType: string, text: string): unknown {
+  if (!contentType.includes('text/event-stream')) return JSON.parse(text) as unknown
+  const line = text.split('\n').find((candidate) => candidate.startsWith('data:'))
+  if (line === undefined) throw new Error('集成 MCP 返回了空的 SSE 响应')
+  return JSON.parse(line.slice('data:'.length).trim()) as unknown
+}
+
+/**
+ * 发一帧 JSON-RPC。
+ *
+ * 本机实测该服务**完全无状态**：`tools/list` 与 `tools/call` 都不要求先
+ * `initialize`、也不校验 `Mcp-Session-Id`，因此无需维护会话，直接 POST 即可。
+ */
+async function mcpRpc(
+  method: string,
+  params: unknown,
+  options: { timeoutMs: number; signal?: AbortSignal },
+): Promise<Record<string, unknown>> {
+  const url = getSettings().mcpUrl
+  const timeout = AbortSignal.timeout(options.timeoutMs)
+  const signal = options.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal])
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal,
+    })
+  } catch (error) {
+    throw new ZoteroError('zotero_unreachable', `无法连接集成 MCP（${url}）：${shortMessage(error)}`)
+  }
+  if (!res.ok) {
+    throw new ZoteroError('bad_request', `集成 MCP 返回 ${res.status} ${res.statusText}`)
+  }
+  const payload = parseMcpPayload(res.headers.get('content-type') ?? '', await res.text()) as {
+    result?: Record<string, unknown>
+    error?: { message?: string }
+  }
+  if (payload.error) {
+    throw new ZoteroError('bad_request', `集成 MCP 返回错误：${payload.error.message ?? '未知'}`)
+  }
+  return payload.result ?? {}
+}
+
+/** 拉取集成 MCP 的工具清单。 */
+export async function listMcpTools(): Promise<McpToolInfo[]> {
+  const result = await mcpRpc('tools/list', {}, { timeoutMs: getSettings().requestTimeoutMs })
+  const tools = Array.isArray(result.tools) ? (result.tools as RawMcpTool[]) : []
+  return tools
+    .map((tool) => ({
+      name: tool.name ?? '',
+      description: tool.description ?? '',
+      parameters: tool.inputSchema ?? { type: 'object', properties: {} },
+    }))
+    .filter((tool) => tool.name !== '')
+}
+
+/** 调用一个集成 MCP 工具（原始名，非 `mcp__zotero__*` 公开名）。 */
+export async function callMcpTool(
+  name: string,
+  args: unknown,
+  signal?: AbortSignal,
+): Promise<McpCallResult> {
+  const result = await mcpRpc(
+    'tools/call',
+    { name, arguments: args ?? {} },
+    signal === undefined
+      ? { timeoutMs: MCP_CALL_TIMEOUT_MS }
+      : { timeoutMs: MCP_CALL_TIMEOUT_MS, signal },
+  )
+  return {
+    content: Array.isArray(result.content) ? result.content : [],
+    isError: result.isError === true,
+  }
+}
+
 // ---- 文库 -------------------------------------------------------------------
 
 /** 探测文库名（取一条分类或条目上的 `library.name`）。 */
 export async function getLibraryName(): Promise<string> {
-  const { body } = await requestJson<RawItem[]>(`${LIB}/collections?limit=1`)
+  const { body } = await requestJson<RawItem[]>(`${libraryBase()}/collections?limit=1`)
   return Array.isArray(body) && body.length > 0 ? libraryNameOf(body) : '我的文库'
 }
 
 /** 全量分类（扁平，含 parentCollection 与 numItems）。 */
 export async function listCollections(): Promise<ZoteroCollection[]> {
-  const { body } = await requestJson<RawItem[]>(`${LIB}/collections?limit=1000`)
+  const { body } = await requestJson<RawItem[]>(`${libraryBase()}/collections?limit=1000`)
   if (!Array.isArray(body)) return []
   return body.map((raw) => {
     const data = (raw.data ?? {}) as RawItemData & { parentCollection?: string | false } & { name?: string }
@@ -273,8 +375,8 @@ export async function listItems(
   options: ListItemsOptions,
 ): Promise<{ total: number; items: ZoteroItemSummary[] }> {
   const base = options.collectionKey
-    ? `${LIB}/collections/${encode(options.collectionKey)}/items/top`
-    : `${LIB}/items/top`
+    ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items/top`
+    : `${libraryBase()}/items/top`
   const params = new URLSearchParams({
     limit: String(options.limit),
     start: String(options.offset),
@@ -288,7 +390,7 @@ export async function listItems(
 
 /** 子条目（附件 / 笔记）。 */
 export async function getItemChildren(key: string): Promise<RawItem[]> {
-  const { body } = await requestJson<RawItem[]>(`${LIB}/items/${encode(key)}/children`)
+  const { body } = await requestJson<RawItem[]>(`${libraryBase()}/items/${encode(key)}/children`)
   return Array.isArray(body) ? body : []
 }
 
@@ -297,7 +399,7 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
   let body: { content?: string } | null
   try {
     body = (await requestJson<{ content?: string }>(
-      `${LIB}/items/${encode(attachmentKey)}/fulltext`,
+      `${libraryBase()}/items/${encode(attachmentKey)}/fulltext`,
     )).body
   } catch (error) {
     // 该附件未索引 / 无全文时返回 404：视为「无全文」而不是错误。
@@ -306,10 +408,11 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
   }
   const content = body?.content ?? ''
   if (content === '') return null
-  const truncated = content.length > FULLTEXT_MAX_BYTES
+  const maxBytes = getSettings().fulltextMaxBytes
+  const truncated = content.length > maxBytes
   return {
     attachmentKey,
-    content: truncated ? content.slice(0, FULLTEXT_MAX_BYTES) : content,
+    content: truncated ? content.slice(0, maxBytes) : content,
     truncated,
   }
 }
@@ -318,7 +421,7 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
 export async function getItemBib(key: string, style: string): Promise<string | null> {
   try {
     const { body } = await requestText(
-      `${LIB}/items/${encode(key)}?format=bib&style=${encode(style)}`,
+      `${libraryBase()}/items/${encode(key)}?format=bib&style=${encode(style)}`,
     )
     return body.trim() === '' ? null : body
   } catch {
@@ -328,7 +431,7 @@ export async function getItemBib(key: string, style: string): Promise<string | n
 
 /** 条目详情：元数据 + 附件 + 首个可读附件全文 + CSL。 */
 export async function getItemDetail(key: string, style: string): Promise<ZoteroItemDetail> {
-  const { body: raw } = await requestJson<RawItem>(`${LIB}/items/${encode(key)}`)
+  const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
   const data = raw.data ?? {}
   const itemType = data.itemType ?? ''
 
@@ -399,7 +502,7 @@ export async function getCollectionBib(
 
   while (keys.length < BIB_MAX_ITEMS) {
     const { body } = await requestJson<RawItem[]>(
-      `${LIB}/collections/${encode(collectionKey)}/items/top?limit=100&start=${offset}`,
+      `${libraryBase()}/collections/${encode(collectionKey)}/items/top?limit=100&start=${offset}`,
     )
     if (!Array.isArray(body) || body.length === 0) break
     for (const raw of body) keys.push(raw.key)
@@ -411,7 +514,7 @@ export async function getCollectionBib(
   for (let i = 0; i < keys.length; i += BIB_BATCH) {
     const batch = keys.slice(i, i + BIB_BATCH)
     const { body } = await requestText(
-      `${LIB}/items?itemKey=${batch.map(encode).join(',')}&format=bib&style=${encode(style)}`,
+      `${libraryBase()}/items?itemKey=${batch.map(encode).join(',')}&format=bib&style=${encode(style)}`,
     )
     const inner = stripBibWrapper(body)
     if (inner !== '') parts.push(inner)

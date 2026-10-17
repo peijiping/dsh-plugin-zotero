@@ -20,9 +20,9 @@
 |---|---|---|
 | Host 半（Node） | DSH 宿主进程 | 把 Zotero 本地 API 包装成只读 HTTP 端点，挂在 DSH 自己的 web server 上：`/dsh-zotero/api/*` |
 | Client 半（浏览器） | DSH Web UI 页面 | 在**右侧栏**注册 tab 类型与面板：左侧分类树、右侧条目详情与全文，右键/选区「添加到会话」 |
-| MCP 集成行（配置） | DSH 组合树的补丁层 | 在 `cordis.patch.yml` 里插入 `@deepseek-ai/dsh-mcp-client`，指向 `127.0.0.1:23120/mcp`，把 20 个 Zotero 工具以 `mcp__zotero__*` 暴露给模型 |
+| MCP 工具桥接（Host） | DSH 宿主进程 | `src/host/mcp-bridge.ts` 自持连接 `127.0.0.1:23120/mcp`，把 20 个 Zotero 工具按 `disabledMcpTools` 过滤后以 `mcp__zotero__*` 注册进 `ctx.tools` |
 
-前两块通过同源 HTTP 通信（Host 注册路由、Client `fetch`），不引入新的 RPC 层。第三块不写代码，只是一条配置——但它是「装了这个插件，模型就会用 Zotero」的关键。
+前两块通过同源 HTTP 通信（Host 注册路由、Client `fetch`），不引入新的 RPC 层。第三块是插件自己的 Host 代码（约 100 行）——它是「装了这个插件，模型就会用 Zotero」的关键，也是「按工具开关」得以实现的唯一途径（官方 `dsh-mcp-client` 不支持逐个工具的启用/禁用）。
 
 ---
 
@@ -73,12 +73,10 @@
 │ src/host/router.ts    /dsh-zotero/api/* 前缀路由 + 信任栅栏          │
 │ src/zotero/client.ts  Local API 客户端（fetch, 无鉴权, 只读）        │
 │                                                                     │
-│ 模型侧工具通道（无自研代码，一条组合树配置）                          │
-│ cordis.patch.yml ──► @deepseek-ai/dsh-mcp-client                    │
-│                       serverName: zotero                            │
-│                       transport : streamable-http                   │
-│                       url       : http://127.0.0.1:23120/mcp        │
-│                     ⇒ ctx.tools 中出现 mcp__zotero__*（20 个工具）   │
+│ 模型侧工具通道（插件自持，非配置行）                                  │
+│ src/host/mcp-bridge.ts  自持 MCP 连接 + 按 disabledMcpTools 过滤注册  │
+│                         ⇒ ctx.tools 中出现 mcp__zotero__*（默认 20 个）│
+│                         直连 http://127.0.0.1:23120/mcp               │
 └───────────────────────────┬─────────────────────────────────────────┘
                             │ 同源 HTTP（JSON）
 ┌───────────────────────────┴──── DSH Web UI (浏览器) ───────────────┐
@@ -105,46 +103,48 @@
 |---|---|---|
 | 人侧数据源 | Zotero 本地 API（23119），只读 | 浏览器直接跨端口调 23119 会撞 CORS；Host 代理后同源、无鉴权、无速率限制 |
 | 模型侧能力 | **桥接 Zotero 集成 MCP，不自建工具** | 用户要求；MCP 已内置相关性评分、内容裁剪档位、全文缓存库，自建只会更差且更难维护 |
-| MCP 挂载方式 | bundle patch 里插入 `@deepseek-ai/dsh-mcp-client` 一行 | 「自然集成」：装了本插件即有；卸载即随之消失；无需用户手动配置 |
+| MCP 挂载方式 | 插件**自持** MCP 连接（`src/host/mcp-bridge.ts`），**不再**插入 `@deepseek-ai/dsh-mcp-client` | 官方 MCP 客户端**不支持按工具启用/禁用**，而同 `serverName` 又无法与自注册工具共存（重名即报错）。自持后工具完全受插件配置控制，「MCP 工具」开关才可能真正生效 |
+| 工具开关 | `disabledMcpTools`（volatile 字符串数组）存原始工具名；注册时过滤，配置卡打开/保存时各重建一次注册 | 官方无 per-tool gating；以「拆旧代 → 建新代」整体换新，建新失败即回滚 |
 | 面板位置 | 右侧栏 `sidebar.right.pane.tab` | 用户明确要求；平台原生席位，不侵入对话区 |
 | tab 类型 | 页类型（不给 `patterns`），走 `guide` 入口 | 面板是「浏览整个文库」的页，不为每个条目开 tab |
 | Host↔Client | `webServer` 前缀路由 + 同源 `fetch` | dshmarket 已验证；Typert RPC 需代码生成，过重 |
 | 「添加到会话」 | `inputActions.captureInsertion()` + `insertText(text, span)` | 平台公开 API；插入草稿不自动发送，符合用户选择 |
 | 客户端构建 | tsdown 打 CJS + 小脚本包 `__ModuleLoader__.load` 外壳 | 与宿主模块协议一致，不依赖未安装的 `dsh-client-runtime` |
 | 类型声明 | 自写 `src/client/dsh-client.d.ts` | 与 dshmarket 的 `primitives.d.ts` 同法，不引入内部包依赖 |
-| 插件配置 | v1 不引入 Schemastery 配置 | 遵循「避免过度工程化」；等有真实需求再加 |
+| 插件配置 | 导出 Schemastery `Config`（**逐字段 `.volatile()`**）+ 客户端注册 `plugins.row.config` 席位 | 用户要求可在 UI 里改连接参数；volatile 是 dsh 配置表单的硬前提（无 volatile 字段的条目不出现在 `settings.describe`），且只提交新值、保存即生效无需重启 |
 
 ---
 
 ## 5. MCP 集成（模型侧）
 
-### 5.1 配置形态
+### 5.1 挂载形态（现状）
 
-`cordis.patch.yml` 增补一行（补丁层是**有序的 patch 条目数组**，可一次 insert 多行）：
+`cordis.patch.yml` **只**插入插件本行：
 
 ```yaml
 - insert:
     - id: dsh-plugin-zotero
       name: dsh-plugin-zotero
-    - id: mcp-zotero
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: zotero
-        transport: streamable-http
-        url: http://127.0.0.1:23120/mcp
-        toolCallTimeoutMs: 120000
 ```
 
-字段取舍：
+模型侧由 `src/host/mcp-bridge.ts` 承担：`ctx.inject(['tools'])` 后
 
-| 字段 | 取值 | 说明 |
+1. 直连 `mcpUrl`（默认 `http://127.0.0.1:23120/mcp`）发 `tools/list`（本机实测该服务**完全无状态**：`tools/list` 与 `tools/call` 都不要求先 `initialize`、也不校验 `Mcp-Session-Id`，故用一帧 JSON-RPC 的极简客户端即可，无需引入 SDK）；
+2. 过滤掉 `disabledMcpTools` 里的原始名；
+3. 其余逐个 `ctx.tools.register(definition)`，公开名 `mcp__zotero__<原名>`，参数直接沿用上游 `inputSchema`，执行经 `tools/call`；
+4. 换新时**先拆旧代再建新代**（顺序反了会命中 dsh 的「already registered」保护），建新失败则回滚本次已注册的部分。
+
+原设计（已被取代）是把 `@deepseek-ai/dsh-mcp-client` 插进补丁层。该方案**不支持按工具开关**，且同 `serverName` 会与自注册工具重名冲突，故放弃。
+
+字段取舍（原方案配置项，现由插件字段等价承接）：
+
+| 原字段 | 现在的对应物 | 说明 |
 |---|---|---|
-| `serverName` | `zotero` | 决定工具前缀，最终呈 `mcp__zotero__search_library` |
-| `transport` | `streamable-http` | MCP 文档实测该服务即 Streamable HTTP 单端点模式 |
-| `url` | `http://127.0.0.1:23120/mcp` | 仅回环，安全边界与限制同源 |
-| `toolCallTimeoutMs` | `120000` | 默认 60 s 偏紧：`search_fulltext` + 大 `contextLength`、`get_content` 大文档可能超时 |
-| `failOnStartupError` | 不设（默认 `false`） | 服务没跑时 harness 照常启动，人侧面板不受影响；若设为 `true` 会让整个 harness 拒绝激活 |
-| `reconnect` | 用默认 | 默认开、500 ms 起翻倍至 30 s、连续 10 次失败后移除该服务器工具 |
+| `serverName` | 常量 `zotero` | 决定工具前缀，最终呈 `mcp__zotero__search_library` |
+| `url` | 插件字段 `mcpUrl` | 仅回环，安全边界与限制同源；面板打开配置卡即可改 |
+| `toolCallTimeoutMs` | 常量 `MCP_CALL_TIMEOUT_MS`（120 s） | 默认 60 s 偏紧：`search_fulltext` + 大 `contextLength`、`get_content` 大文档可能超时 |
+| `failOnStartupError=false` | 同效 | 服务没跑时 harness 照常启动（只记一条 warn），人侧面板不受影响 |
+| `reconnect` | 无自动重连 | 简化取舍：清单拉取失败保留上一代工具；恢复连接后在卡片「重新读取」或保存配置时重建注册 |
 
 ### 5.2 模型实际拿到什么
 

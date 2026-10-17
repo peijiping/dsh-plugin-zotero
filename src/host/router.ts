@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import * as zotero from '../zotero/client.js'
 import { ZoteroError } from '../zotero/client.js'
-import { DEFAULT_LIMIT, ROUTE_PREFIX } from '../zotero/config.js'
+import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX } from '../zotero/config.js'
 import type {
   ApiEnvelope,
   ApiError,
@@ -29,6 +29,15 @@ export interface WebServerLike {
     path: string
     handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
   }): () => void
+}
+
+/** 路由可注入的钩子。 */
+export interface HandlerDeps {
+  /**
+   * 读取工具清单时顺带重建注册（卡片打开/保存后调用），返回同一份清单。
+   * 缺省时只读清单、不动注册。
+   */
+  syncTools?: () => Promise<zotero.McpToolInfo[]>
 }
 
 /** 单条条目列表的条数上限，防止 Client 拉爆宿主。 */
@@ -75,8 +84,9 @@ function toApiError(error: unknown): { status: number; error: ApiError } {
 }
 
 function clampLimit(raw: string | null): number {
-  const parsed = raw === null ? DEFAULT_LIMIT : Number.parseInt(raw, 10)
-  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_LIMIT
+  const fallback = Math.floor(getSettings().defaultLimit) || DEFAULT_LIMIT
+  const parsed = raw === null ? fallback : Number.parseInt(raw, 10)
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback
   return Math.min(parsed, MAX_LIMIT)
 }
 
@@ -97,6 +107,15 @@ async function handleHealth(res: ServerResponse): Promise<void> {
     mcp: { running: mcpRunning },
   }
   ok(res, data)
+}
+
+/**
+ * 集成 MCP 的工具清单（供插件页「MCP 设置」组渲染开关）。
+ * 有 `syncTools` 时顺带按最新 `disabledMcpTools` 重建工具注册。
+ */
+async function handleMcpTools(res: ServerResponse, deps: HandlerDeps): Promise<void> {
+  const tools = deps.syncTools ? await deps.syncTools() : await zotero.listMcpTools()
+  ok(res, { tools })
 }
 
 async function handleTree(res: ServerResponse): Promise<void> {
@@ -141,7 +160,9 @@ async function handleCollectionBib(res: ServerResponse, params: URLSearchParams)
 }
 
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
-export function createHandler(): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+export function createHandler(
+  deps: HandlerDeps = {},
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     if (req.method !== 'GET') {
       fail(res, 405, 'bad_request', `仅支持 GET，收到 ${req.method ?? '未知'}`)
@@ -175,6 +196,9 @@ export function createHandler(): (req: IncomingMessage, res: ServerResponse) => 
           return
         case 'collection-bib':
           await handleCollectionBib(res, url.searchParams)
+          return
+        case 'mcp-tools':
+          await handleMcpTools(res, deps)
           return
         default:
           fail(res, 404, 'bad_request', `未知 action ${action}`)

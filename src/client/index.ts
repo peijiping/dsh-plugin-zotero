@@ -14,6 +14,7 @@ import { createElement, type ComponentType, type ReactElement } from 'react'
 import type { InputActions } from './inline'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
+import { ZoteroCard, ZoteroCardController, ROW_CONFIG_KEY, ROW_ID } from './ZoteroCard'
 import { ZoteroPane } from './ZoteroPane'
 
 /** locale 服务中本插件用到的那部分。 */
@@ -46,8 +47,19 @@ interface SidebarRightTabsService {
 /** slots 服务。 */
 interface SlotsService {
   register(meta: Record<string, unknown>, component: ComponentType<never>): unknown
-  /** 声明感知注册：席位尚未声明时先等，声明后（含重新声明）再注册。 */
-  inject(key: string, callback: () => unknown): unknown
+  /** 声明感知注册：席位尚未声明时先等，声明后（含重新声明）再注册；返回解除器。 */
+  inject(key: string, callback: () => unknown): () => void
+}
+
+/** 配置表单服务（由 `@deepseek-ai/dsh-client-ui-settings` 提供）。 */
+interface ConfigFormsService {
+  /** 某 Host 插件条目的共享配置表单（`scope` 交给 `SettingsFormModel`）。 */
+  get(entryId: string): unknown
+  /** Host 服务其中任一命名空间时才注册；返回的 disposer 交给 `ctx.effect`。 */
+  whileServed(
+    namespaces: string[],
+    register: (served: Set<string>) => () => void,
+  ): () => void
 }
 
 interface ClientContext {
@@ -55,13 +67,14 @@ interface ClientContext {
   locale: LocaleService
   slots: SlotsService
   sidebarRightTabs: SidebarRightTabsService
+  configForms: ConfigFormsService
 }
 
 /** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
 const TAB_ID = 'zotero'
 
 export const name = 'dsh-plugin-zotero'
-export const inject = ['slots', 'locale', 'sidebarRightTabs']
+export const inject = ['slots', 'locale', 'sidebarRightTabs', 'configForms']
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-zotero: dictionaries')
@@ -97,4 +110,24 @@ export function apply(ctx: ClientContext): void {
 
   // 共享面板状态是模块级单例，插件卸载时清空。
   ctx.effect(() => () => resetPaneStore(), 'dsh-plugin-zotero: pane state')
+
+  // 插件页「配置」入口：行级配置页渲染在 `plugins.row.config` 席位，
+  // 仅当 Host 服务本插件的 settings 命名空间时才注册（key = 包名#行 id）。
+  const controller = new ZoteroCardController(ctx.configForms.get(ROW_ID))
+  ctx.effect(() => () => controller.dispose(), 'dsh-plugin-zotero: card form')
+  ctx.effect(
+    () => ctx.configForms.whileServed([ROW_ID], () => ctx.slots.inject(
+      'plugins.row.config',
+      () => ctx.slots.register(
+        {
+          name: 'plugins.row.config',
+          key: ROW_CONFIG_KEY,
+          locale: NS,
+          inject: () => controller.inject(),
+        },
+        ZoteroCard as ComponentType<never>,
+      ),
+    )),
+    'dsh-plugin-zotero: row config card',
+  )
 }

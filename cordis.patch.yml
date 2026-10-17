@@ -1,16 +1,12 @@
-# dsh bundle patch：把本插件与 Zotero 集成 MCP 桥接行一并插入 profile 层栈。
+# dsh bundle patch：把本插件插入 profile 层栈。
 #
 # 说明：
 # - 人侧数据通道由 dsh-plugin-zotero 自己在宿主 web server 上注册路由。
-# - 模型侧能力直接桥接本地 Zotero 集成 MCP（http://127.0.0.1:23120/mcp），
-#   工具以 mcp__zotero__* 暴露，不在此处自研 zotero_* 工具。
+# - 模型侧工具由本插件**自持**：它直连本地 Zotero 集成 MCP
+#   （http://127.0.0.1:23120/mcp，由插件配置字段 `mcpUrl` 决定），
+#   按 `disabledMcpTools` 过滤后以 mcp__zotero__* 注册。
+# - 因此这里**不再**插入 `@deepseek-ai/dsh-mcp-client`（它不支持按工具开关，
+#   且同 serverName 会与自注册工具重名冲突）。
 - insert:
     - id: dsh-plugin-zotero
       name: dsh-plugin-zotero
-    - id: mcp-zotero
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: zotero
-        transport: streamable-http
-        url: http://127.0.0.1:23120/mcp
-        toolCallTimeoutMs: 120000
