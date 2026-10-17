@@ -1,6 +1,22 @@
 {
   "name": "dsh-plugin-zotero",
   "version": "0.1.0",
+  "description": "Bring your local Zotero library into DeepSeek Harness: a read-only sidebar panel for browsing, searching and inserting citations into conversation drafts, plus a self-hosted integration-MCP bridge that registers Zotero tools to the model with per-tool toggles.",
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "harness",
+    "dsh-plugin",
+    "zotero",
+    "cordis",
+    "mcp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/peijiping/dsh-plugin-zotero.git"
+  },
+  "homepage": "https://github.com/peijiping/dsh-plugin-zotero#readme",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -16,7 +32,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:client": "tsdown",
-    "typecheck:client": "tsc -p tsconfig.client.json --noEmit"
+    "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
+    "prepack": "pnpm build && pnpm build:client"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

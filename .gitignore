@@ -5,6 +5,7 @@ node_modules/
 /lib/
 /client/
 *.tsbuildinfo
+/*.tgz
 
 # 测试沙盒
 tstest/node_modules/
