@@ -8,6 +8,7 @@ import type {
   ZoteroCollectionBib,
   ZoteroHealth,
   ZoteroItemDetail,
+  ZoteroItemScope,
   ZoteroItems,
   ZoteroTree,
 } from '../zotero/types'
@@ -62,7 +63,13 @@ export function fetchTree(): Promise<ZoteroTree> {
 }
 
 export function fetchItems(
-  query: { collectionKey?: string; q?: string; limit?: number; offset?: number } = {},
+  query: {
+    scope?: ZoteroItemScope
+    collectionKey?: string
+    q?: string
+    limit?: number
+    offset?: number
+  } = {},
 ): Promise<ZoteroItems> {
   return get<ZoteroItems>('items', query)
 }

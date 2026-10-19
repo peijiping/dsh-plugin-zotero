@@ -28,6 +28,7 @@ import type {
   ZoteroFulltext,
   ZoteroHealth,
   ZoteroItemDetail,
+  ZoteroItemScope,
   ZoteroItemSummary,
 } from './types.js'
 
@@ -364,25 +365,67 @@ export async function listCollections(): Promise<ZoteroCollection[]> {
 // ---- 条目 -------------------------------------------------------------------
 
 export interface ListItemsOptions {
+  /** 虚拟分类范围；缺省或 `library` 走真实分类/全库。 */
+  scope?: ZoteroItemScope
   collectionKey?: string
   q?: string
   limit: number
   offset: number
 }
 
-/** 顶层条目列表（按分类、或全库、或关键字搜索）。 */
-export async function listItems(
-  options: ListItemsOptions,
-): Promise<{ total: number; items: ZoteroItemSummary[] }> {
-  const base = options.collectionKey
-    ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items/top`
-    : `${libraryBase()}/items/top`
+/** 「未分类条目」推导时最多扫描的顶层条目数（避免超大口库长时间扫描）。 */
+const UNFILED_SCAN_MAX = 1000
+
+/** 一页扫描条数（本地 API 上限 100）。 */
+const PAGE_SIZE = 100
+
+/** 把 options 折成「顶层条目」端点基址 + 查询参数。 */
+function itemListQuery(options: ListItemsOptions): { base: string; params: URLSearchParams } {
+  const base =
+    options.scope === 'publications'
+      ? `${libraryBase()}/publications/items`
+      : options.scope === 'trash'
+        ? `${libraryBase()}/items/trash`
+        : options.collectionKey
+          ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items/top`
+          : `${libraryBase()}/items/top`
   const params = new URLSearchParams({
     limit: String(options.limit),
     start: String(options.offset),
   })
   if (options.q && options.q.trim() !== '') params.set('q', options.q.trim())
+  return { base, params }
+}
 
+/**
+ * 「未分类条目」：本地 API 没有专用端点，改为取顶层条目后筛掉已归类的
+ * （`data.collections` 非空即已归类），分页在筛完后作用于结果集。
+ */
+async function listUnfiled(
+  offset: number,
+  limit: number,
+): Promise<{ total: number; items: ZoteroItemSummary[] }> {
+  const all: ZoteroItemSummary[] = []
+  for (let start = 0; start < UNFILED_SCAN_MAX; start += PAGE_SIZE) {
+    const { body } = await requestJson<RawItem[]>(
+      `${libraryBase()}/items/top?limit=${PAGE_SIZE}&start=${start}`,
+    )
+    if (!Array.isArray(body) || body.length === 0) break
+    for (const raw of body) {
+      if ((raw.data?.collections ?? []).length === 0) all.push(toSummary(raw))
+    }
+    if (body.length < PAGE_SIZE) break
+  }
+  return { total: all.length, items: all.slice(offset, offset + limit) }
+}
+
+/** 顶层条目列表（按虚拟分类、真实分类、或全库，或关键字搜索）。 */
+export async function listItems(
+  options: ListItemsOptions,
+): Promise<{ total: number; items: ZoteroItemSummary[] }> {
+  if (options.scope === 'unfiled') return listUnfiled(options.offset, options.limit)
+
+  const { base, params } = itemListQuery(options)
   const { body, total } = await requestJson<RawItem[]>(`${base}?${params.toString()}`)
   const items = Array.isArray(body) ? body.map(toSummary) : []
   return { total: total ?? items.length, items }

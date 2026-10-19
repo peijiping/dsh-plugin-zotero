@@ -161,8 +161,17 @@ export function openItem(key: string): void {
     .finally(() => patch({ detailLoading: false }))
 }
 
-/** 选中分类并拉取该目录的引用（APA）。 */
+/** 选中分类并拉取该目录的引用（APA）；虚拟分类（出版物/未分类/回收站）不导出引用。 */
 export function selectCollection(collection: ZoteroCollection): void {
+  if (collection.scope !== undefined) {
+    patch({
+      selectedItemKey: null,
+      detail: null,
+      selectedCollection: collection,
+      collectionBib: '',
+    })
+    return
+  }
   patch({
     selectedItemKey: null,
     detail: null,

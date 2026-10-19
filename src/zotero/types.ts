@@ -4,13 +4,24 @@
  * Host 只回原始数据，文案拼接留给 Client。
  */
 
+/**
+ * 条目列表范围。
+ *
+ * `library` 为真实分类/全库（默认），其余三项是 Zotero 左侧栏的「虚拟分类」
+ * （我的出版物 / 未分类条目 / 回收站），由对应端点直接支撑或推导得出。
+ */
+export type ZoteroItemScope = 'library' | 'publications' | 'unfiled' | 'trash'
+
 /** 分类节点（扁平，Client 依 parentKey 建树）。 */
 export interface ZoteroCollection {
   key: string
   name: string
   /** `false` 表示顶层分类。 */
   parentKey: string | false
-  itemCount: number
+  /** 条目数；虚拟分类在展开前未知，故可选。 */
+  itemCount?: number
+  /** 虚拟分类的范围；真实分类为空。 */
+  scope?: ZoteroItemScope
 }
 
 /** 列表行用的条目摘要。 */

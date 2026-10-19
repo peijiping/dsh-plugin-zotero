@@ -34,6 +34,9 @@ const zh: Record<string, string> = {
   'status.loading': '加载中…',
 
   'tree.library': '我的文库',
+  'tree.publications': '我的出版物',
+  'tree.unfiled': '未分类条目',
+  'tree.trash': '回收站',
   'tree.searchPlaceholder': '搜索标题 / 摘要',
   'tree.count': '{n} 条',
   'tree.empty': '这个分类下没有条目',
@@ -128,6 +131,9 @@ const en: Record<string, string> = {
   'status.loading': 'Loading…',
 
   'tree.library': 'My Library',
+  'tree.publications': 'My Publications',
+  'tree.unfiled': 'Unfiled Items',
+  'tree.trash': 'Trash',
   'tree.searchPlaceholder': 'Search title / abstract',
   'tree.count': '{n} items',
   'tree.empty': 'No items in this collection',

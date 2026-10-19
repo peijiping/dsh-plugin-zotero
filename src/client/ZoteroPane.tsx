@@ -142,8 +142,12 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
 
   const insertCollection = useCallback(async (collection: ZoteroCollection): Promise<void> => {
     report(await insertBuilt(inputActions, async () => {
-      const data = await fetchItems({ collectionKey: collection.key, limit: COLLECTION_PREVIEW_LIMIT })
-      return collectionText(t, collection, data.items, collection.itemCount)
+      const data = await fetchItems({
+        scope: collection.scope,
+        collectionKey: collection.scope === undefined ? collection.key : undefined,
+        limit: COLLECTION_PREVIEW_LIMIT,
+      })
+      return collectionText(t, collection, data.items, data.total)
     }))
   }, [inputActions, report, t])
 
@@ -266,21 +270,27 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
           ) : selectedCollection !== null ? (
             <div style={{ padding: '12px 14px' }}>
               <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>{selectedCollection.name}</h2>
-              <p style={{ margin: '0 0 10px', opacity: 0.75 }}>
-                {tpl(t('detail.collectionCount'), { n: selectedCollection.itemCount })}
-              </p>
+              {selectedCollection.itemCount !== undefined && (
+                <p style={{ margin: '0 0 10px', opacity: 0.75 }}>
+                  {tpl(t('detail.collectionCount'), { n: selectedCollection.itemCount })}
+                </p>
+              )}
               <Button variant="outline" size="sm" onClick={() => void insertCollection(selectedCollection)}>
                 {t('action.insertCollection')}
               </Button>
-              <h3 style={{ margin: '16px 0 6px', fontSize: 12.5, fontWeight: 600, opacity: 0.75 }}>
-                {t('detail.bibTitle')}
-              </h3>
-              {collectionBib === null ? (
-                <p style={{ margin: 0, opacity: 0.6 }}>{t('status.loading')}</p>
-              ) : collectionBib === '' ? (
-                <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noBib')}</p>
-              ) : (
-                <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.7, opacity: 0.85 }}>{stripTags(collectionBib)}</p>
+              {selectedCollection.scope === undefined && (
+                <>
+                  <h3 style={{ margin: '16px 0 6px', fontSize: 12.5, fontWeight: 600, opacity: 0.75 }}>
+                    {t('detail.bibTitle')}
+                  </h3>
+                  {collectionBib === null ? (
+                    <p style={{ margin: 0, opacity: 0.6 }}>{t('status.loading')}</p>
+                  ) : collectionBib === '' ? (
+                    <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noBib')}</p>
+                  ) : (
+                    <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.7, opacity: 0.85 }}>{stripTags(collectionBib)}</p>
+                  )}
+                </>
               )}
             </div>
           ) : (

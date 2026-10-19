@@ -18,6 +18,7 @@ import type {
   ZoteroCollectionBib,
   ZoteroHealth,
   ZoteroItemDetail,
+  ZoteroItemScope,
   ZoteroItems,
   ZoteroTree,
 } from '../zotero/types.js'
@@ -127,12 +128,30 @@ async function handleTree(res: ServerResponse): Promise<void> {
   ok(res, data)
 }
 
+/** 合法的条目列表范围（虚拟分类）。 */
+const SCOPES = ['library', 'publications', 'unfiled', 'trash'] as const
+
+function isScope(value: string): value is ZoteroItemScope {
+  return (SCOPES as readonly string[]).includes(value)
+}
+
 async function handleItems(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const scopeParam = params.get('scope')
+  if (scopeParam !== null && !isScope(scopeParam)) {
+    fail(res, 400, 'bad_request', `未知 scope ${scopeParam}`)
+    return
+  }
   const collectionKey = params.get('collectionKey') ?? undefined
   const q = params.get('q') ?? undefined
   const limit = clampLimit(params.get('limit'))
   const offset = parseOffset(params.get('offset'))
-  const result = await zotero.listItems({ collectionKey, q, limit, offset })
+  const result = await zotero.listItems({
+    scope: scopeParam === null ? undefined : scopeParam,
+    collectionKey,
+    q,
+    limit,
+    offset,
+  })
   const data: ZoteroItems = { total: result.total, items: result.items }
   ok(res, data)
 }

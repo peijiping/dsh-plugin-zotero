@@ -4,14 +4,16 @@
  * - 行首常显三角箭头（按住拖动/点击）只管开合；点行体则选中该分类，折叠时顺带展开。
  * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin，避免深层错位。
  * - 分类行右侧显示条目数；展开时其子分类与条目都缩进一层，条目带文档图标。
+ * - 「我的文库」根节点**不再平铺全库条目**（这些条目本就挂在各分类下，平铺会造成重复）；
+ *   其下额外挂三个虚拟分类：我的出版物 / 未分类条目 / 回收站，与 Zotero 左侧栏一致。
  * - 分类 / 条目右键 → 「添加到会话」。
  */
 
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { useState, type ReactElement, type ReactNode } from 'react'
 
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
+import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zotero/types'
 import { fetchItems } from './api'
 import type { Translate } from './locales'
 
@@ -29,6 +31,26 @@ const BASE_INDENT = 8
 /** 行高（px）。 */
 const ROW_HEIGHT = 24
 
+/** 一次加载节点条目所需的定位信息。 */
+interface LoadOpts {
+  collectionKey?: string
+  scope?: ZoteroItemScope
+}
+
+/** 虚拟分类定义（顺序与 Zotero 左侧栏一致，排在真实分类之后）。 */
+interface VirtualNode {
+  key: string
+  scope: ZoteroItemScope
+  labelKey: string
+  icon: string
+}
+
+const VIRTUAL_NODES: readonly VirtualNode[] = [
+  { key: '@publications', scope: 'publications', labelKey: 'tree.publications', icon: 'BOOK' },
+  { key: '@unfiled', scope: 'unfiled', labelKey: 'tree.unfiled', icon: 'UNFILED' },
+  { key: '@trash', scope: 'trash', labelKey: 'tree.trash', icon: 'TRASH' },
+]
+
 interface CollectionNode {
   collection: ZoteroCollection
   children: CollectionNode[]
@@ -42,7 +64,7 @@ interface TreeCtx {
   selectedItemKey: string | null
   selectedCollectionKey: string | null
   /** 三角箭头：只开合，不动选中态。 */
-  toggle(nodeId: string, collectionKey?: string): void
+  toggle(nodeId: string, collection?: ZoteroCollection): void
   /** 行体：选中该分类（已折叠则顺带展开并拉取条目）。 */
   select(collection: ZoteroCollection): void
   onSelectItem(key: string): void
@@ -84,6 +106,17 @@ const FOLDER_ICON = 'M2.5 12.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v6.5a1 1
 const ITEM_ICON = 'M4.5 2.5h5L12 5v8.5H4.5zM9.5 2.5V5H12'
 const LIBRARY_ICON = 'M2.5 3.5h5v9h-5zM8.5 3.5h5v9h-5z'
 
+/** 虚拟分类图标：我的出版物（书）/ 未分类条目（文件夹）/ 回收站（垃圾桶）。 */
+const BOOK_ICON = 'M3 2.8 8 2l5 0.8v10.4L8 14l-5-0.8zM8 2v12'
+const TRASH_ICON = 'M3.2 4.5h9.6M6.3 4.5V3h3.4v1.5M4.6 4.5l0.6 9.2h5.6l0.6-9.2M6.8 7v4.4M9.2 7v4.4'
+
+/** 虚拟分类的图标 path（键与 {@link VIRTUAL_NODES.icon} 对应）。 */
+const VIRTUAL_ICON: Record<string, string> = {
+  BOOK: BOOK_ICON,
+  UNFILED: FOLDER_ICON,
+  TRASH: TRASH_ICON,
+}
+
 // ---- 扁平分类列表 → 森林 ---------------------------------------------------
 
 function buildForest(collections: ZoteroCollection[]): CollectionNode[] {
@@ -98,6 +131,11 @@ function buildForest(collections: ZoteroCollection[]): CollectionNode[] {
     else parent.children.push(node)
   }
   return roots
+}
+
+/** 由分类对象推出加载用的定位信息：虚拟分类走 scope，真实分类走 collectionKey。 */
+function loadOpts(collection: ZoteroCollection): LoadOpts {
+  return collection.scope === undefined ? { collectionKey: collection.key } : { scope: collection.scope }
 }
 
 // ---- 样式 -------------------------------------------------------------------
@@ -267,10 +305,10 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
             }}
             style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
           >
-            <Chevron open={open} onToggle={() => ctx.toggle(nodeId, node.collection.key)} />
+            <Chevron open={open} onToggle={() => ctx.toggle(nodeId, node.collection)} />
             <span style={iconBox}>{glyph(FOLDER_ICON)}</span>
             <span style={titleStyle} title={node.collection.name}>{node.collection.name}</span>
-            <span style={countStyle}>{count}</span>
+            {count !== undefined && <span style={countStyle}>{count}</span>}
           </div>
         )}
       />
@@ -278,6 +316,53 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
         node.children.map((child) => (
           <CollectionRows key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
         ))}
+      {open && renderItems(ctx, nodeId, depth + 1)}
+    </>
+  )
+}
+
+// ---- 虚拟分类（我的出版物 / 未分类条目 / 回收站） ---------------------------
+
+function virtualCollection(node: VirtualNode, t: Translate): ZoteroCollection {
+  return { key: node.key, name: t(node.labelKey), parentKey: false, scope: node.scope }
+}
+
+function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; depth: number }): ReactElement {
+  const collection = virtualCollection(node, ctx.t)
+  const nodeId = collection.key
+  const open = ctx.expanded.has(nodeId)
+  const [menuOpen, setMenuOpen] = useState(false)
+  // 虚拟分类的条目数只有展开（拉取过）后才知道，未拉取时不显示。
+  const count = ctx.totalsByNode[nodeId]
+
+  return (
+    <>
+      <Menu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onSelect={(id) => {
+          setMenuOpen(false)
+          if (id === 'insert-collection') ctx.onInsertCollection(collection)
+        }}
+        align="end"
+        portal
+        items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection') }]}
+        anchor={(
+          <div
+            onClick={() => ctx.select(collection)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setMenuOpen(true)
+            }}
+            style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
+          >
+            <Chevron open={open} onToggle={() => ctx.toggle(nodeId, collection)} />
+            <span style={iconBox}>{glyph(VIRTUAL_ICON[node.icon] ?? FOLDER_ICON)}</span>
+            <span style={titleStyle} title={collection.name}>{collection.name}</span>
+            {count !== undefined && <span style={countStyle}>{count}</span>}
+          </div>
+        )}
+      />
       {open && renderItems(ctx, nodeId, depth + 1)}
     </>
   )
@@ -302,10 +387,10 @@ export function CollectionTree(props: Props): ReactElement {
   const [itemsByNode, setItemsByNode] = useState<Record<string, ZoteroItemSummary[]>>({})
   const [totalsByNode, setTotalsByNode] = useState<Record<string, number>>({})
 
-  async function load(nodeId: string, collectionKey?: string): Promise<void> {
+  async function load(nodeId: string, opts: LoadOpts = {}): Promise<void> {
     if (itemsByNode[nodeId] !== undefined) return
     try {
-      const data = await fetchItems({ collectionKey, limit: NODE_LIMIT })
+      const data = await fetchItems({ ...opts, limit: NODE_LIMIT })
       setItemsByNode((prev) => ({ ...prev, [nodeId]: data.items }))
       setTotalsByNode((prev) => ({ ...prev, [nodeId]: data.total }))
     } catch {
@@ -314,17 +399,13 @@ export function CollectionTree(props: Props): ReactElement {
     }
   }
 
-  // 仅挂载时预取根节点条目；之后由 toggle / select 触发按需拉取。
-  useEffect(() => {
-    void load(ROOT_NODE)
-  }, [])
-
-  function open(nodeId: string, collectionKey?: string): void {
+  /** 按需拉取：条目一律由 toggle / select 触发，根节点不再预取全库条目。 */
+  function open(nodeId: string, collection: ZoteroCollection): void {
     setExpanded((prev) => (prev.has(nodeId) ? prev : new Set(prev).add(nodeId)))
-    void load(nodeId, collectionKey)
+    void load(nodeId, loadOpts(collection))
   }
 
-  function toggle(nodeId: string, collectionKey?: string): void {
+  function toggle(nodeId: string, collection?: ZoteroCollection): void {
     const willOpen = !expanded.has(nodeId)
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -332,12 +413,12 @@ export function CollectionTree(props: Props): ReactElement {
       else next.delete(nodeId)
       return next
     })
-    if (willOpen) void load(nodeId, collectionKey)
+    if (willOpen && collection !== undefined) void load(nodeId, loadOpts(collection))
   }
 
   function select(collection: ZoteroCollection): void {
     onSelectCollection(collection)
-    if (!expanded.has(collection.key)) open(collection.key, collection.key)
+    if (!expanded.has(collection.key)) open(collection.key, collection)
   }
 
   const ctx: TreeCtx = {
@@ -355,7 +436,6 @@ export function CollectionTree(props: Props): ReactElement {
   }
 
   const rootOpen = expanded.has(ROOT_NODE)
-  const rootCount = totalsByNode[ROOT_NODE]
 
   return (
     <div style={{ padding: '8px 6px', display: 'flex', flexDirection: 'column' }}>
@@ -366,14 +446,15 @@ export function CollectionTree(props: Props): ReactElement {
         <Chevron open={rootOpen} onToggle={() => toggle(ROOT_NODE)} />
         <span style={iconBox}>{glyph(LIBRARY_ICON)}</span>
         <span style={titleStyle}>{t('tree.library')}</span>
-        {rootCount !== undefined && <span style={countStyle}>{rootCount}</span>}
       </div>
       {rootOpen && (
         <>
           {buildForest(collections).map((node) => (
             <CollectionRows key={node.collection.key} ctx={ctx} node={node} depth={1} />
           ))}
-          {renderItems(ctx, ROOT_NODE, 1)}
+          {VIRTUAL_NODES.map((node) => (
+            <VirtualRows key={node.key} ctx={ctx} node={node} depth={1} />
+          ))}
         </>
       )}
     </div>

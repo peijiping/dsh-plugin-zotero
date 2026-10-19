@@ -121,15 +121,19 @@ pnpm build:client     # tsdown：src/client/ -> client/client.js（Client 半边
 pnpm typecheck:client # tsc --noEmit 校验客户端源码
 ```
 
-## 安装进 profile
+## 本地测试启动
 
 本地路径 link 的完整操作见 [方案一：本地路径安装](docs/插件发布/方案一本地路径安装.zh.md)，核心三步：
 
 ```sh
 dsh plugin --profile demo add ./
 dsh --profile demo --dump-config   # 应能看到 dsh-plugin-zotero 一行
-dsh --profile demo
+dsh --profile demo                 # 启动
 ```
+
+- **访问地址**：启动后终端会打印 URL（web server 配置 `printUrl: true`），浏览器打开 **http://127.0.0.1:3080**。该地址来自 profile 组合配置里的 web server（`host` 默认 `127.0.0.1`、`port` 默认 `3080`），不是固定端口之外另开的服务。
+- **命令来源**：`dsh` 是桌面 App 自带的 CLI（如 `/usr/local/bin/dsh`）；仓库里也装了同一 CLI 的 devDependency，等价写法是 `pnpm dsh --profile demo`，两者读同一个 `~/.dsh/profiles/demo`。
+- **启动前**：Host 半边与 Client 半边加载的都是构建产物（`lib/`、`client/client.js`），改完 `src/` 要先按上一节构建，再重启 dsh（见「日常迭代」）。
 
 ## 日常迭代
 
