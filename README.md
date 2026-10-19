@@ -11,6 +11,20 @@ MCP 没起，面板照常可用；Zotero 没开，模型工具自然也不可用
 
 > 面向使用者的完整说明（入口、交互、toast 与错误对照表）见 [插件使用说明](docs/插件使用说明/dsh-plugin-zotero使用说明.zh.md)。
 
+## 安装
+
+要求 dsh ≥ 0.2.0-rc.2（`package.json` 的 `engines.dsh` 为 `>=0.2.0-rc.2 <0.3.0-0`）。
+
+```sh
+# 从 npm（推荐）
+dsh plugin --profile <profile> add dsh-plugin-zotero
+
+# 或从插件市场安装：dsh 插件页 → 发现 → 添加索引源
+#   https://awesome-dsh-plugin.com/index.json
+```
+
+包内是预构建产物（`lib/` + `client/client.js`），安装时**不运行构建脚本**，无需 `allowBuilds` 授权。本地源码开发见[方案一：本地路径安装](docs/插件发布/方案一本地路径安装.zh.md)。
+
 ## 特性
 
 - **右侧栏面板「Zotero 文献库」**：顶部状态栏（Zotero / 模型工具探活）+ 左侧分类树（按需拉取、标题摘要搜索）+ 右侧条目详情或分类概要。
