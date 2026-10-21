@@ -2,6 +2,18 @@
 
 基于 [cordis](https://github.com/deepseek-ai/cordis) 的 DSH 插件，把本机 Zotero 文献库接进 DSH。分两半，职责不重叠、互不依赖：
 
+## 截图
+
+[![DSH 右侧栏中的 Zotero 文献库面板](docs/images/zotero-pane.png)](docs/images/zotero-pane.png)
+
+<sub>上图为 DSH 会话与右侧「Zotero 文献库」面板，点击图片可查看原图。</sub>
+
+面板分三块：
+
+- **顶部状态栏**：显示 Zotero 是否已连接、模型工具是否可用，并提供刷新。
+- **左侧分类树**：按 Zotero 分类逐级浏览，支持按标题 / 摘要搜索。
+- **右侧详情**：展示条目元数据、附件与全文；「添加条目引用」把引用写入当前会话草稿。
+
 | 半边 | 能力 | 通道 |
 |---|---|---|
 | **人侧面板** | 在 DSH 右侧栏只读浏览 Zotero 文库（分类树 / 搜索 / 条目详情 / PDF 全文），把条目、摘录或整目录引用写进会话草稿 | 插件在宿主 web server 自注册的 `/dsh-zotero/api/*` 路由 |
@@ -10,12 +22,6 @@
 MCP 没起，面板照常可用；Zotero 没开，模型工具自然也不可用。
 
 > 面向使用者的完整说明（入口、交互、toast 与错误对照表）见 [插件使用说明](docs/插件使用说明/dsh-plugin-zotero使用说明.zh.md)。
-
-## 截图
-
-![DSH 右侧栏的 Zotero 文献库面板：左侧分类树，右侧条目详情与全文摘录](docs/images/zotero-pane.png)
-
-右侧栏面板展示「我的文库」分类树、条目元数据、附件与全文目录，可把条目引用或划词摘录插入会话草稿。
 
 ## 安装
 
