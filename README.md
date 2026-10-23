@@ -135,7 +135,7 @@ plugin_helloword/         # 官方插件示例（学习用，勿放正式代码�
 - Node + **pnpm**（主包与 `tstest/` 统一用 pnpm，勿与 npm / yarn 混用）。
 - **TypeScript ^5.9**：`tsdown@0.22.0` 的 peer 依赖不支持 TypeScript 7.x。
 - Zotero 桌面版已运行，且已开启本地 API（见「配置」）。
-- （模型侧可选）本机 Zotero 集成 MCP 服务监听 23120。
+- **模型侧必需**：Zotero 已安装集成 MCP 插件（`zotero-integrated-mcp`），监听 23120，并在插件设置中**开启「允许写操作」**。只装插件不开写操作时，模型侧读类工具照常，但让模型新建 / 修改分类会直接报错（插件返回「写操作已禁用」）。详见[模型侧 MCP 与权限边界](#模型侧-mcp-与权限边界)。
 - `dsh` CLI 可用。
 
 ## 构建
