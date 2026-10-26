@@ -221,7 +221,62 @@ API Key 也可用查询参数 `?key=<key>` 传递（不推荐）。
 ]
 ```
 
-### 4.4 搜索 Searches
+### 4.4 笔记 Notes
+
+> Zotero 没有独立的「笔记端点」：**笔记就是 `itemType: "note"` 的条目**，正文放在
+> `data.note` 字段里（HTML）。因此所有条目端点都能用来查笔记。
+
+| 路径 / 参数 | 说明 |
+|---|---|
+| `<p>/items?itemType=note` | 库内全部笔记（含独立笔记与子笔记） |
+| `<p>/items/top` | 顶层条目，其中**独立笔记**属于顶层（子笔记不属于） |
+| `<p>/items/<itemKey>/children` | 指定条目的子条目，其中的 `itemType: "note"` 即该条目的笔记 |
+| `<p>/collections/<collectionKey>/items` | 分类内条目**包含**笔记 |
+| `<p>/collections/<collectionKey>/items/top` | 分类内**只含**顶层条目，不含笔记 |
+| `<p>/items/<noteKey>` | 单条笔记详情（`data.note` 为正文 HTML） |
+| `<p>/items?itemType=note&format=keys` | 只取笔记 key 列表 |
+
+**笔记条目的数据形状**：
+
+```json
+{
+  "key": "IP4C8544",
+  "version": 469,
+  "data": {
+    "key": "IP4C8544",
+    "itemType": "note",
+    "parentItem": "EJYIQ6RM",
+    "note": "<div data-citation-items=\"...\">…</div>",
+    "tags": [],
+    "relations": {},
+    "dateAdded": "2026-01-07T06:51:30Z",
+    "dateModified": "2026-01-07T06:51:30Z"
+  }
+}
+```
+
+- `parentItem`：所属父条目的 key；**独立笔记无此字段**。
+- 笔记**没有 `title` 字段**，标题需从正文纯文本截取。
+- `links.up` 指向父条目。
+
+**正文 HTML 的注意事项**（实测）：
+
+- 段落是 `<p data-pid="…">`，标注高亮是 `<span class="highlight" data-annotation="…">`，
+  引用是 `<span class="citation" data-citation="…">`。
+- `data-citation-items` 属性内嵌了**整份被引条目的 JSON**（URL 编码），
+  单条笔记可达数 KB；`data-annotation` / `data-citation` 同样冗余。
+  直接渲染会带出超长无用数据，需剥离。
+- 图片是**外链**（`<img src="https://…" width="1080">`），本地图片则指向 Zotero 存储目录。
+- `format=html` 不支持（返回 `400 Invalid 'format' value`），只有 `data.note` 可拿 HTML。
+
+**其它限制**：
+
+- `/items/<key>/fulltext` **对笔记无效**（笔记没有全文索引，返回 `404`）。
+- 快速搜索 `q` + `qmode=everything` **搜不到笔记正文**（笔记未进全文索引），
+  实测搜笔记里的独有词返回 0 条。
+- `<p>/items?itemType=note` 返回的是**全部**笔记（子笔记 + 独立笔记）。
+
+### 4.5 搜索 Searches
 
 | 路径 | 说明 |
 |---|---|
@@ -231,7 +286,7 @@ API Key 也可用查询参数 `?key=<key>` 传递（不推荐）。
 
 > Web API 仅提供搜索元数据；本地可真正执行搜索。
 
-### 4.5 标签 Tags
+### 4.6 标签 Tags
 
 | 路径 | 说明 |
 |---|---|
@@ -250,14 +305,14 @@ API Key 也可用查询参数 `?key=<key>` 传递（不推荐）。
 ]
 ```
 
-### 4.6 群组与 Key（Other URLs）
+### 4.7 群组与 Key（Other URLs）
 
 | 路径 | 说明 |
 |---|---|
 | `<p>/groups` | 当前可访问的群组集合（元数据有限且只读） |
 | `/api/keys/<key>` | 指定 API Key 的用户 ID 与权限（Web API 用于管理 Key；本地主要面向读/删 Key） |
 
-### 4.7 本地专属文件端点
+### 4.8 本地专属文件端点
 
 | 路径 | 说明 | 返回 |
 |---|---|---|

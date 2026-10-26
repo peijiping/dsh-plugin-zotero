@@ -1,12 +1,14 @@
 /**
  * 右栏：单条条目详情。
  *
- * 版面分上下两区：上方「正文区」（元数据 / 摘要 / 附件 / 全文块），下方「参考文献区」（bib）。
- * 两区之间是可拖动的横向分隔条，默认正文占 80%，占比存 localStorage 跨会话记住；
- * 没有 bib 时不分区，正文独占整栏。
+ * 版面分上下两区：上方「正文区」（标题 / 元数据 / 摘要 / 全文块），下方「分区面板区」
+ * （参考文献 / 笔记 / 附件，用 tab 切换）。两区之间是可拖动的横向分隔条，默认正文占
+ * 85%，占比存 localStorage 跨会话记住；底部没有任何分区时不分区，正文独占整栏。
  *
- * 正文区内部再分两块：头部信息（标题 / 元数据 / 摘要 / 附件，过高时自己滚动）与
- * 全文块（撑满剩余高度、自己滚动），所以拖高正文区时全文文本跟着变高。
+ * 正文区内部再分两块：头部信息（标题 / 元数据 / 摘要，过高时自己滚动）与全文块
+ * （撑满剩余高度、自己滚动），所以拖高正文区时全文文本跟着变高。
+ *
+ * 摘要默认折叠，标题行右侧的箭头按钮展开 / 收起。
  *
  * 「添加到会话」两处入口：头部按钮（整条目元数据）、全文块里的选区浮出按钮
  * （摘录）。全文块内用鼠标选中文本后浮出小按钮，位置取选区 rect。
@@ -17,7 +19,10 @@ import { useRef, useState, type ReactElement } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroItemDetail } from '../zotero/types'
+import { DetailTabs, type DetailTab } from './DetailTabs'
 import type { Translate } from './locales'
+import { NoteList } from './NoteList'
+import { sectionTitleStyle, sectionToggleButtonStyle, sectionToggleRowStyle } from './styles'
 
 interface Props {
   t: Translate
@@ -32,9 +37,9 @@ interface Props {
 
 /** 正文区占比的存储键与取值范围（%）。 */
 const BODY_PERCENT_KEY = 'dsh-plugin-zotero.detailBodyPercent'
-const BODY_PERCENT_DEFAULT = 80
+const BODY_PERCENT_DEFAULT = 85
 const BODY_PERCENT_MIN = 30
-const BODY_PERCENT_MAX = 90
+const BODY_PERCENT_MAX = 95
 
 function readBodyPercent(): number {
   try {
@@ -68,12 +73,61 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
   const [bodyPercent, setBodyPercent] = useState(readBodyPercent)
   const [splitHover, setSplitHover] = useState(false)
+  const [abstractOpen, setAbstractOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ y: number; height: number; percent: number } | null>(null)
 
   const bib = detail.bib
   const fulltext = detail.fulltext
+
+  // 底部 tab 区：有参考文献 / 笔记 / 附件时才存在。
+  const tabs: DetailTab[] = []
+  if (bib !== null) {
+    tabs.push({
+      id: 'bib',
+      label: t('detail.bibTitle'),
+      content: (
+        <p style={{ margin: 0, opacity: 0.85, fontSize: 12.5, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+          {stripTags(bib)}
+        </p>
+      ),
+    })
+  }
+  if (detail.notes.length > 0) {
+    tabs.push({
+      id: 'notes',
+      label: t('detail.notes'),
+      hint: String(detail.notes.length),
+      content: <NoteList t={t} notes={detail.notes} />,
+    })
+  }
+  if (detail.attachments.length > 0) {
+    tabs.push({
+      id: 'attachments',
+      label: t('detail.attachments'),
+      hint: String(detail.attachments.length),
+      content: (
+        <div>
+          {detail.attachments.map((attachment) => (
+            <button
+              key={attachment.key}
+              type="button"
+              onClick={() => onOpenItem(attachment.key)}
+              style={linkRowStyle}
+            >
+              <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{attachment.title}</span>
+              <span style={{ opacity: 0.55, flexShrink: 0 }}>
+                {attachment.contentType}
+                {attachment.size > 0 ? ` · ${Math.round(attachment.size / 1024)} KB` : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      ),
+    })
+  }
+  const hasBottom = tabs.length > 0
 
   function clampBodyPercent(next: number): number {
     return Math.min(Math.max(next, BODY_PERCENT_MIN), BODY_PERCENT_MAX)
@@ -135,7 +189,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
     >
       <div
         style={{
-          flex: bib !== null ? `0 0 ${bodyPercent}%` : '1 1 auto',
+          flex: hasBottom ? `0 0 ${bodyPercent}%` : '1 1 auto',
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
@@ -167,29 +221,23 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
           {detail.tags.length > 0 && <MetaRow label={t('detail.tags')}>{detail.tags.join('、')}</MetaRow>}
 
           {detail.abstract !== '' && (
-            <section style={{ marginTop: 12 }}>
-              <h3 style={sectionTitle}>{t('detail.abstract')}</h3>
-              <p style={{ margin: 0, opacity: 0.85 }}>{detail.abstract}</p>
-            </section>
-          )}
-
-          {detail.attachments.length > 0 && (
-            <section style={{ marginTop: 14, paddingBottom: 14 }}>
-              <h3 style={sectionTitle}>{t('detail.attachments')}</h3>
-              {detail.attachments.map((attachment) => (
+            <section style={{ marginTop: 12, paddingBottom: 12 }}>
+              <div style={sectionToggleRowStyle}>
+                <h3 style={{ ...sectionTitleStyle, margin: 0 }}>{t('detail.abstract')}</h3>
+                <div style={{ flex: 1 }} />
                 <button
-                  key={attachment.key}
                   type="button"
-                  onClick={() => onOpenItem(attachment.key)}
-                  style={linkRowStyle}
+                  onClick={() => setAbstractOpen((open) => !open)}
+                  aria-expanded={abstractOpen}
+                  aria-label={abstractOpen ? t('detail.abstractCollapse') : t('detail.abstractExpand')}
+                  style={sectionToggleButtonStyle}
                 >
-                  <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{attachment.title}</span>
-                  <span style={{ opacity: 0.55, flexShrink: 0 }}>
-                    {attachment.contentType}
-                    {attachment.size > 0 ? ` · ${Math.round(attachment.size / 1024)} KB` : ''}
-                  </span>
+                  {abstractOpen ? '▴' : '▾'}
                 </button>
-              ))}
+              </div>
+              {abstractOpen && (
+                <p style={{ margin: '4px 0 0', opacity: 0.85 }}>{detail.abstract}</p>
+              )}
             </section>
           )}
         </div>
@@ -204,7 +252,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
             padding: '2px 14px 14px',
           }}
         >
-          <h3 style={sectionTitle}>
+          <h3 style={sectionTitleStyle}>
             {t('detail.fulltext')}
             {fulltext !== null && (
               <span style={{ opacity: 0.55, fontWeight: 400, marginLeft: 8 }}>{fulltext.attachmentKey}</span>
@@ -266,7 +314,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
         </section>
       </div>
 
-      {bib !== null && (
+      {hasBottom && (
         <div
           role="separator"
           aria-orientation="horizontal"
@@ -297,17 +345,14 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
         </div>
       )}
 
-      {bib !== null && (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px 12px' }}>
-          <h3 style={sectionTitle}>{t('detail.bibTitle')}</h3>
-          <p style={{ margin: 0, opacity: 0.85, fontSize: 12.5, whiteSpace: 'pre-wrap' }}>{stripTags(bib)}</p>
+      {hasBottom && (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <DetailTabs tabs={tabs} />
         </div>
       )}
     </div>
   )
 }
-
-const sectionTitle = { margin: '0 0 6px', fontSize: 12.5, fontWeight: 600, opacity: 0.75 } as const
 
 const linkRowStyle = {
   display: 'flex',

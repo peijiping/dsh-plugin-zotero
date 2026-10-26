@@ -19,6 +19,7 @@ import { insertBuilt } from './inline'
 import { ItemDetail } from './ItemDetail'
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import { sectionTitleStyle } from './styles'
 import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState } from './paneStore'
 
 /** 整目录插入时拉取的条目数（与 compose 的预览上限一致）。 */
@@ -280,9 +281,7 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
               </Button>
               {selectedCollection.scope === undefined && (
                 <>
-                  <h3 style={{ margin: '16px 0 6px', fontSize: 12.5, fontWeight: 600, opacity: 0.75 }}>
-                    {t('detail.bibTitle')}
-                  </h3>
+                  <h3 style={{ ...sectionTitleStyle, margin: '16px 0 6px' }}>{t('detail.bibTitle')}</h3>
                   {collectionBib === null ? (
                     <p style={{ margin: 0, opacity: 0.6 }}>{t('status.loading')}</p>
                   ) : collectionBib === '' ? (

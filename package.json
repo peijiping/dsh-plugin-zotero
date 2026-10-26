@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-zotero",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Bring your local Zotero library into DeepSeek Harness: a read-only sidebar panel for browsing, searching and inserting citations into conversation drafts, plus a self-hosted integration-MCP bridge that registers Zotero tools to the model with per-tool toggles.",
   "keywords": [
     "dsh",

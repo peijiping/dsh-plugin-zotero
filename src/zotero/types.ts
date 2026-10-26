@@ -44,6 +44,18 @@ export interface ZoteroAttachment {
   size: number
 }
 
+/** 条目下的一条笔记（子条目 `itemType: "note"`）。 */
+export interface ZoteroNote {
+  key: string
+  /** 笔记标题：取正文首段纯文本摘要（笔记本身无标题字段）。 */
+  title: string
+  /** 清洗后的正文 HTML（已剥离引用数据属性等，仅保留排版与图片）。 */
+  html: string
+  dateModified: string
+  /** 正文超长被截断时为 true。 */
+  truncated: boolean
+}
+
 /** 详情页数据。 */
 export interface ZoteroItemDetail {
   key: string
@@ -59,6 +71,8 @@ export interface ZoteroItemDetail {
   /** 所属分类 key 列表。 */
   collections: string[]
   attachments: ZoteroAttachment[]
+  /** 该条目下的笔记（子条目 `itemType: "note"`）。 */
+  notes: ZoteroNote[]
   fulltext: ZoteroFulltext | null
   bib: string | null
 }

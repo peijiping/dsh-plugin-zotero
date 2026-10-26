@@ -30,6 +30,7 @@ import type {
   ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItemSummary,
+  ZoteroNote,
 } from './types.js'
 
 /** 归一化后的 Zotero 访问错误。 */
@@ -69,6 +70,9 @@ interface RawItemData {
   collections?: string[]
   contentType?: string
   filename?: string
+  /** 笔记正文（HTML），仅 `itemType === 'note'` 有。 */
+  note?: string
+  dateModified?: string
 }
 
 interface RawEnclosure {
@@ -173,6 +177,99 @@ function toAttachment(raw: RawItem): ZoteroAttachment {
   }
 }
 
+// ---- 笔记正文清洗 ------------------------------------------------------------
+
+/**
+ * 笔记正文清洗。
+ *
+ * Zotero 的笔记 HTML 里塞了大量冗余标记，必须处理后再交给前端渲染：
+ * - `data-citation-items`：整份被引条目的 JSON（URL 编码），单条笔记能占几 KB；
+ * - `data-pid` / `data-first-child` 等 ProseMirror 内部标记；
+ * - `data-original-token` / `data-rawwidth` 等图片内部属性。
+ *
+ * 同时去掉脚本类标签与事件属性，避免正文里的原始 HTML 被直接注入 DOM。
+ * 图片的 `src` 保留（外链图），并去掉 `data-original-token` 等冗余属性。
+ */
+const NOTE_BLOCKED_TAGS = /<(script|style|noscript|iframe|object|embed)\b[\s\S]*?<\/\1\s*>/giu
+/** 无闭合标签的阻塞元素（base / link / meta 等）。 */
+const NOTE_BLOCKED_VOID = /<\/?(?:base|link|meta)\b[^>]*>/giu
+const NOTE_EVENT_ATTR = /\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/giu
+const NOTE_DATA_ATTR = /\s+data-[a-z-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/giu
+const NOTE_JS_URL = /\s+(?:href|src)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*'|javascript:[^\s>]+)/giu
+
+/** 笔记正文最大字节数，超出截断。 */
+const NOTE_MAX_BYTES = 200 * 1024
+
+/** HTML 实体解码表（用字符码拼装，避免源码里直接写实体被二次解码）。 */
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: ' ',
+  amp: String.fromCharCode(38),
+  lt: String.fromCharCode(60),
+  gt: String.fromCharCode(62),
+  quot: String.fromCharCode(34),
+  apos: String.fromCharCode(39),
+}
+
+/** 解码 HTML 实体（命名实体 + 数字实体）。 */
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/giu, (match, body: string) => {
+    if (body.startsWith('#x') || body.startsWith('#X')) {
+      const code = Number.parseInt(body.slice(2), 16)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match
+    }
+    if (body.startsWith('#')) {
+      const code = Number.parseInt(body.slice(1), 10)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? match
+  })
+}
+
+/** 去标签后取纯文本（用于笔记标题摘要）。 */
+function toPlainText(html: string): string {
+  return decodeEntities(
+    html
+      .replace(/<[^>]*>/gu, ' ')
+      .replace(/&nbsp;/giu, ' '),
+  )
+    .replace(/\s+/gu, ' ')
+    .trim()
+}
+
+/** 清洗笔记正文 HTML。 */
+export function sanitizeNoteHtml(html: string): string {
+  return html
+    .replace(NOTE_BLOCKED_TAGS, '')
+    .replace(NOTE_BLOCKED_VOID, '')
+    .replace(NOTE_EVENT_ATTR, '')
+    .replace(NOTE_JS_URL, '')
+    .replace(NOTE_DATA_ATTR, '')
+    // 笔记里的图是外链图，限宽避免撑破右栏。
+    .replace(/<img\b([^>]*)>/giu, (match, attrs: string) =>
+      attrs.includes('style=') ? match : `<img${attrs} style="max-width:100%;height:auto">`)
+    .trim()
+}
+
+/** 笔记标题：正文纯文本的前 60 个字符（笔记条目本身没有 title 字段）。 */
+function noteTitle(html: string): string {
+  const text = toPlainText(html)
+  if (text === '') return '(空笔记)'
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text
+}
+
+function toNote(raw: RawItem): ZoteroNote {
+  const html = sanitizeNoteHtml(raw.data?.note ?? '')
+  const maxBytes = NOTE_MAX_BYTES
+  const truncated = html.length > maxBytes
+  return {
+    key: raw.key,
+    title: noteTitle(html),
+    html: truncated ? html.slice(0, maxBytes) : html,
+    dateModified: raw.data?.dateModified ?? '',
+    truncated,
+  }
+}
+
 function toSummary(raw: RawItem): ZoteroItemSummary {
   const data = raw.data ?? {}
   const itemType = data.itemType ?? ''
@@ -181,9 +278,14 @@ function toSummary(raw: RawItem): ZoteroItemSummary {
     : itemType === 'note'
       ? false
       : (raw.meta?.numChildren ?? 0) > 0
+  // 笔记没有 title 字段，用正文首段摘要当标题。
+  const title = data.title
+    || data.filename
+    || (itemType === 'note' ? noteTitle(data.note ?? '') : '')
+    || '(无标题)'
   return {
     key: raw.key,
-    title: data.title || data.filename || '(无标题)',
+    title,
     creators: raw.meta?.creatorSummary ?? '',
     year: yearOf(raw.meta, data),
     itemType,
@@ -472,7 +574,7 @@ export async function getItemBib(key: string, style: string): Promise<string | n
   }
 }
 
-/** 条目详情：元数据 + 附件 + 首个可读附件全文 + CSL。 */
+/** 条目详情：元数据 + 附件 + 笔记 + 首个可读附件全文 + CSL。 */
 export async function getItemDetail(key: string, style: string): Promise<ZoteroItemDetail> {
   const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
   const data = raw.data ?? {}
@@ -483,6 +585,10 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
   const childAttachments = children.filter((c) => c.data?.itemType === 'attachment')
   const attachments =
     itemType === 'attachment' ? [toAttachment(raw), ...childAttachments.map(toAttachment)] : childAttachments.map(toAttachment)
+
+  // 笔记是子条目（itemType=note）；条目本身就是笔记时（独立笔记），正文即自身。
+  const childNotes = children.filter((c) => c.data?.itemType === 'note')
+  const notes = (itemType === 'note' ? [raw] : childNotes).map(toNote)
 
   const readable =
     itemType === 'attachment'
@@ -495,7 +601,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
   return {
     key: raw.key,
     itemType,
-    title: data.title || data.filename || '(无标题)',
+    title: data.title || data.filename || (itemType === 'note' ? notes[0]?.title ?? '(无标题)' : '(无标题)'),
     creators: (data.creators ?? []).map(creatorName).filter((n) => n !== ''),
     year: yearOf(raw.meta, data),
     publicationTitle: data.publicationTitle ?? '',
@@ -505,6 +611,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     tags: (data.tags ?? []).map((tag) => tag.tag ?? '').filter((tag) => tag !== ''),
     collections: data.collections ?? [],
     attachments,
+    notes,
     fulltext,
     bib,
   }

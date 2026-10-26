@@ -6,17 +6,17 @@
 
 [![DSH 右侧栏中的 Zotero 文献库面板](docs/images/zotero-pane.png)](docs/images/zotero-pane.png)
 
-<sub>上图为 DSH 会话与右侧「Zotero 文献库」面板，点击图片可查看原图。</sub>
+<sub>上图为 DSH 会话与右侧「Zotero 文献库」面板：上方正文区展示元数据与全文，下方分区 tab 展示参考文献、笔记与附件，点击图片可查看原图。</sub>
 
 面板分三块：
 
 - **顶部状态栏**：显示 Zotero 是否已连接、模型工具是否可用，并提供刷新。
 - **左侧分类树**：按 Zotero 分类逐级浏览，支持按标题 / 摘要搜索。
-- **右侧详情**：展示条目元数据、附件与全文；「添加条目引用」把引用写入当前会话草稿。
+- **右侧详情**：上方正文区展示条目元数据、可折叠摘要与 PDF 全文；下方分区 tab 切换参考文献、笔记、附件；「添加条目引用」把引用写入当前会话草稿。
 
 | 半边 | 能力 | 通道 |
 |---|---|---|
-| **人侧面板** | 在 DSH 右侧栏只读浏览 Zotero 文库（分类树 / 搜索 / 条目详情 / PDF 全文），把条目、摘录或整目录引用写进会话草稿 | 插件在宿主 web server 自注册的 `/dsh-zotero/api/*` 路由 |
+| **人侧面板** | 在 DSH 右侧栏只读浏览 Zotero 文库（分类树 / 搜索 / 条目详情 / 笔记 / PDF 全文），把条目、摘录或整目录引用写进会话草稿 | 插件在宿主 web server 自注册的 `/dsh-zotero/api/*` 路由 |
 | **模型侧** | 检索、精读、按需操作文库 | 插件**自持**连接本机 Zotero 集成 MCP，工具以 `mcp__zotero__*` 注册给模型 |
 
 MCP 没起，面板照常可用；Zotero 没开，模型工具自然也不可用。
@@ -40,6 +40,9 @@ dsh plugin --profile <profile> add dsh-plugin-zotero
 ## 特性
 
 - **右侧栏面板「Zotero 文献库」**：顶部状态栏（Zotero / 模型工具探活）+ 左侧分类树（按需拉取、标题摘要搜索）+ 右侧条目详情或分类概要。
+- **详情区上下分区**：上方正文区展示标题、元数据、摘要与 PDF 全文；下方用 tab 切换「参考文献 / 笔记 / 附件」。两个区域之间的分隔条可拖动，正文占比默认 85% 并按会话记住；没有次级内容的条目正文独占整栏。
+- **摘要默认折叠**：标题行右侧的箭头按钮展开 / 收起摘要，默认把空间留给正文与全文。
+- **笔记可读**：笔记以折叠列表呈现（默认收起，点击标题展开），正文保留 Zotero 的引用块、标注高亮、表格与外链图片；Host 侧已清洗脚本与事件属性，避免注入。
 - **三种插入方式**：单条目引用、全文划词摘录、整目录引用，均只写进会话草稿（不自动发送、不抢焦点），文本携带 `itemKey` / `collectionKey` 供模型接续操作。
 - **面板严格只读**：不提供任何新建 / 改名 / 删除分类的按钮。
 - **模型侧工具可逐个开关**：插件自持连接集成 MCP，把工具以 `mcp__zotero__*` 注册进 dsh，可在插件页按工具启用 / 禁用。
@@ -93,6 +96,7 @@ MCP 组下方是 **「MCP 工具」** 区：现场列出集成 MCP 的全部工�
 - Host 路由为 `GET /dsh-zotero/api/<action>`，action 有 `health` / `tree` / `items` / `item` / `collection-bib` / `mcp-tools`。
 - Host 侧带信任栅栏：仅接受 GET，拒绝 `sec-fetch-site: cross-site`，且 `Host` 必须是回环地址（防 DNS rebinding）。
 - 响应统一信封 `{ok:true,data}` / `{ok:false,error:{code,message}}`，错误码见 [src/zotero/types.ts](src/zotero/types.ts)。
+- 条目详情里的笔记由 Host 侧从 `itemType: "note"` 子条目提取并清洗 HTML（剥离脚本、事件属性与冗余 `data-*`，图片限宽），Client 只负责折叠展示。
 - 面板正文会被每个会话各挂一份，因此分类树 / 搜索词 / 选中项等状态放在 [src/client/paneStore.ts](src/client/paneStore.ts) 的模块级单例里，各会话看到的是同一块面板；右侧栏的展开状态与 tab 则**按会话**持久。
 - 无会话时面板仍可通过右侧栏的 guide 入口（「Zotero 文献库」）打开。
 
@@ -105,7 +109,7 @@ src/                      # 插件源码（主包，ESM / NodeNext / strict）
 │   ├── router.ts         # 只读 HTTP 路由 GET /dsh-zotero/api/<action>
 │   └── mcp-bridge.ts     # 自持集成 MCP 连接 + 按开关过滤注册模型工具
 ├── zotero/
-│   ├── client.ts         # Zotero 本地 API 客户端（只读）+ 集成 MCP JSON-RPC
+│   ├── client.ts         # Zotero 本地 API 客户端（只读）+ 笔记提取清洗 + 集成 MCP JSON-RPC
 │   ├── config.ts         # 端点 / 超时 / 截断阈值 + 运行时设置读取器
 │   └── types.ts          # Host ↔ Client 数据契约
 └── client/               # Client 半（浏览器）
@@ -113,6 +117,9 @@ src/                      # 插件源码（主包，ESM / NodeNext / strict）
     ├── ZoteroCard.tsx    # 插件页配置卡（API 设置 / MCP 设置 / 工具开关）
     ├── ZoteroPane.tsx    # 面板容器：状态栏 + 分类树 + 详情
     ├── CollectionTree.tsx / ItemDetail.tsx
+    ├── DetailTabs.tsx    # 详情底部分区 tab（参考文献 / 笔记 / 附件）
+    ├── NoteList.tsx      # 笔记折叠列表与正文渲染
+    ├── styles.ts         # 分区小标题 / 展开按钮等共用样式
     ├── paneStore.ts      # 跨会话共享的面板状态
     ├── inline.ts         # 往会话草稿插入文本
     ├── compose.ts        # 插入文本模板
