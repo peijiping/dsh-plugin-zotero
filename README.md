@@ -37,6 +37,38 @@ dsh plugin --profile <profile> add dsh-plugin-zotero
 
 包内是预构建产物（`lib/` + `client/client.js`），安装时**不运行构建脚本**，无需 `allowBuilds` 授权。本地源码开发见[方案一：本地路径安装](docs/插件发布/方案一本地路径安装.zh.md)。
 
+## 使用前提
+
+使用本插件前，本机 Zotero 需备好两件事：**集成 MCP 插件**与**本地 API**。
+
+### 1. 安装 Zotero MCP 插件
+
+在 Zotero 的插件市场搜索 `mcp`，安装列表第一行、标签为 `ai` / `integration` 的 **Zotero MCP Plugin**（即 `zotero-integrated-mcp`）。装好后无需额外配置，默认监听 `http://127.0.0.1:23120/mcp`。
+
+[![Zotero 插件市场中安装 Zotero MCP Plugin](docs/images/zotero-mcp-plugin-market.png)](docs/images/zotero-mcp-plugin-market.png)
+
+<sub>上图为 Zotero 插件市场，第一行「Zotero MCP Plugin」已安装。</sub>
+
+如果装的是**其他** MCP 插件，或它的监听地址 / 端口不是 23120，到 dsh「插件」面板展开 `dsh-plugin-zotero` → 「配置 dsh-plugin-zotero」，把 **MCP 设置 → `mcpUrl`** 改成实际端点（如 `http://127.0.0.1:<端口>/mcp`）并保存，即时生效，无需重启。字段说明见[插件页配置项](#插件页配置项)。
+
+> 没装 MCP 插件不影响右侧面板使用，只是模型侧 `mcp__zotero__*` 工具不可用。
+
+### 2. 开启 Zotero 本地 API
+
+Zotero → 设置 → 高级 → 勾选 **「允许此计算机上的其他应用程序与 Zotero 通信」**（默认端口 23119，仅监听回环）。
+
+[![在 Zotero 高级设置中允许其他应用与 Zotero 通信](docs/images/zotero-allow-communication.png)](docs/images/zotero-allow-communication.png)
+
+<sub>上图为 Zotero「设置 → 高级」中开启本地 API 的开关。</sub>
+
+验证：
+
+```sh
+curl http://127.0.0.1:23119/api/   # 期望输出：Zotero is running
+```
+
+未勾选时读端点返回 403，面板显示「Zotero 未连接」并提示启用步骤。
+
 ## 特性
 
 - **右侧栏面板「Zotero 文献库」**：顶部状态栏（Zotero / 模型工具探活）+ 左侧分类树（按需拉取、标题摘要搜索）+ 右侧条目详情或分类概要。
@@ -141,8 +173,8 @@ plugin_helloword/         # 官方插件示例（学习用，勿放正式代码�
 
 - Node + **pnpm**（主包与 `tstest/` 统一用 pnpm，勿与 npm / yarn 混用）。
 - **TypeScript ^5.9**：`tsdown@0.22.0` 的 peer 依赖不支持 TypeScript 7.x。
-- Zotero 桌面版已运行，且已开启本地 API（见「配置」）。
-- **模型侧必需**：Zotero 已安装集成 MCP 插件（`zotero-integrated-mcp`），监听 23120，并在插件设置中**开启「允许写操作」**。只装插件不开写操作时，模型侧读类工具照常，但让模型新建 / 修改分类会直接报错（插件返回「写操作已禁用」）。详见[模型侧 MCP 与权限边界](#模型侧-mcp-与权限边界)。
+- Zotero 桌面版已运行，且已开启本地 API（见[使用前提](#使用前提)）。
+- **模型侧必需**：Zotero 已安装集成 MCP 插件（插件市场中的 **Zotero MCP Plugin** / `zotero-integrated-mcp`），监听 23120——若用其他 MCP 插件或端口不同，需在插件配置卡改 `mcpUrl`；并在 MCP 插件设置中**开启「允许写操作」**。只装插件不开写操作时，模型侧读类工具照常，但让模型新建 / 修改分类会直接报错（插件返回「写操作已禁用」）。详见[模型侧 MCP 与权限边界](#模型侧-mcp-与权限边界)。
 - `dsh` CLI 可用。
 
 ## 构建
@@ -182,19 +214,13 @@ dsh --profile demo                 # 启动
 
 ### 开启 Zotero 本地 API
 
-Zotero → 设置 → 高级 → 勾选 **「允许本机其他应用与 Zotero 通信」**（默认端口 23119，仅监听回环）。验证：
-
-```sh
-curl http://127.0.0.1:23119/api/   # 期望输出：Zotero is running
-```
-
-未勾选时读端点返回 403，面板显示「Zotero 未连接」并提示启用步骤。
+见[使用前提 → 开启 Zotero 本地 API](#2-开启-zotero-本地-api)。未勾选时读端点返回 403，面板显示「Zotero 未连接」并提示启用步骤。
 
 ### 模型侧 MCP 与权限边界
 
 模型侧工具由**插件自己**桥接：[src/host/mcp-bridge.ts](src/host/mcp-bridge.ts) 直连本机 Zotero 集成 MCP（本机实测 `zotero-integrated-mcp v1.1.0`，暴露 20 个工具），按配置里的 `disabledMcpTools` 过滤后以 `mcp__zotero__*` 注册给模型。[cordis.patch.yml](cordis.patch.yml) **不再**插入 `@deepseek-ai/dsh-mcp-client` —— 它不支持按工具开关，且同 `serverName` 会与自注册工具重名冲突。
 
-⚠️ 前提是 **Zotero 里已装好集成 MCP 插件，并且开启了「允许写操作」**。插件未安装或服务未起时，模型侧工具全部不可用；插件装了但没开写操作时，读类工具正常，`create_collection` 等写工具会被插件拒绝（返回「写操作已禁用」），表现为让模型帮忙新建分类直接报错——此时到 MCP 插件设置里打开写操作并重试即可，无需重启 dsh。
+⚠️ 前提是 [Zotero 里已装好集成 MCP 插件](#1-安装-zotero-mcp-插件)（或改用其他 MCP 插件并在配置卡填对 `mcpUrl`），并且开启了「允许写操作」。插件未安装或服务未起时，模型侧工具全部不可用；插件装了但没开写操作时，读类工具正常，`create_collection` 等写工具会被插件拒绝（返回「写操作已禁用」），表现为让模型帮忙新建分类直接报错——此时到 MCP 插件设置里打开写操作并重试即可，无需重启 dsh。
 
 ⚠️ 面板只读，**但模型侧工具不是**：20 个工具中含 5 个改变文库结构的写工具（`create_collection` / `update_collection` / `delete_collection` / `add_items_to_collection` / `remove_items_from_collection`）。想收紧为纯只读，直接在插件页配置卡的「MCP 工具」里关掉它们并保存即可；面板功能不受影响。
 
