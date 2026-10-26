@@ -25,7 +25,7 @@
 
 ## 安装
 
-要求 dsh ≥ 0.2.0-rc.2（`package.json` 的 `engines.dsh` 为 `>=0.2.0-rc.2 <0.3.0-0`）。
+要求 dsh ≥ 0.2.1-rc.3（`package.json` 的 `engines.dsh` 为 `>=0.2.1-rc.3 <0.3.0-0`）。
 
 ```sh
 # 从 npm（推荐）

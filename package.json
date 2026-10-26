@@ -33,7 +33,7 @@
     "cordis.patch.yml"
   ],
   "engines": {
-    "dsh": ">=0.2.0-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -42,14 +42,14 @@
     "prepack": "pnpm build && pnpm build:client"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/schemastery": "^3.18.4"
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/schemastery": "^3.18.5"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4",
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
+    "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "^24.19.2",
     "@types/react": "~18.3.1",
     "react": "^18.3.1",
