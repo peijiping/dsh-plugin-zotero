@@ -15,6 +15,7 @@ import type {
   ZoteroCollection,
   ZoteroHealth,
   ZoteroItemDetail,
+  ZoteroItemScope,
   ZoteroItemSummary,
 } from '../zotero/types'
 import { fetchCollectionBib, fetchHealth, fetchItem, fetchItems, fetchTree } from './api'
@@ -25,8 +26,20 @@ const SEARCH_DEBOUNCE_MS = 250
 /** 搜索结果条数上限。 */
 const SEARCH_LIMIT = 100
 
+/** 分类树每个节点一次最多拉取的条目数。 */
+const NODE_LIMIT = 200
+
 /** 提示条停留时长。 */
 const TOAST_MS = 3000
+
+/** 文库根节点的 id（只存在于客户端，不对应任何 Zotero 分类）。 */
+export const TREE_ROOT_ID = '__library__'
+
+/** 拉取某节点条目所需的定位信息。 */
+export interface TreeNodeTarget {
+  collectionKey?: string
+  scope?: ZoteroItemScope
+}
 
 export interface PaneState {
   health: ZoteroHealth | null
@@ -36,6 +49,12 @@ export interface PaneState {
   treeLoading: boolean
   /** 分类树是否已成功拉取过；用于避免切会话时重复取数。 */
   loaded: boolean
+  /** 分类树中已展开的节点 id；放在 store 里，面板被重新挂载后仍然保留。 */
+  expanded: ReadonlySet<string>
+  /** 已拉取条目的节点缓存（节点 id → 条目列表）。 */
+  nodeItems: Record<string, ZoteroItemSummary[]>
+  /** 已拉取节点的条目总数（节点 id → 总数）。 */
+  nodeTotals: Record<string, number>
   query: string
   results: ZoteroItemSummary[] | null
   selectedItemKey: string | null
@@ -54,6 +73,9 @@ function initialState(): PaneState {
     treeError: null,
     treeLoading: true,
     loaded: false,
+    expanded: new Set([TREE_ROOT_ID]),
+    nodeItems: {},
+    nodeTotals: {},
     query: '',
     results: null,
     selectedItemKey: null,
@@ -72,6 +94,7 @@ function errorMessage(error: unknown): string {
 let state: PaneState = initialState()
 const listeners = new Set<() => void>()
 let treeInflight: Promise<void> | null = null
+const nodeInflight = new Set<string>()
 let searchTimer: number | null = null
 let toastTimer: number | null = null
 
@@ -134,6 +157,44 @@ export function loadTree(force = false): Promise<void> {
   return run
 }
 
+/** 按需拉取某节点的条目；已拉取或正在拉取时直接返回。 */
+function loadNodeItems(nodeId: string, target: TreeNodeTarget): void {
+  if (state.nodeItems[nodeId] !== undefined || nodeInflight.has(nodeId)) return
+  nodeInflight.add(nodeId)
+  fetchItems({ ...target, limit: NODE_LIMIT })
+    .then((data) => {
+      patch({
+        nodeItems: { ...state.nodeItems, [nodeId]: data.items },
+        nodeTotals: { ...state.nodeTotals, [nodeId]: data.total },
+      })
+    })
+    .catch(() => {
+      patch({
+        nodeItems: { ...state.nodeItems, [nodeId]: [] },
+        nodeTotals: { ...state.nodeTotals, [nodeId]: 0 },
+      })
+    })
+    .finally(() => {
+      nodeInflight.delete(nodeId)
+    })
+}
+
+/** 三角箭头：只开合节点，展开时按需拉取条目（根节点没有条目，不传 target）。 */
+export function toggleTreeNode(nodeId: string, target?: TreeNodeTarget): void {
+  const willOpen = !state.expanded.has(nodeId)
+  const expanded = new Set(state.expanded)
+  if (willOpen) expanded.add(nodeId)
+  else expanded.delete(nodeId)
+  patch({ expanded })
+  if (willOpen && target !== undefined) loadNodeItems(nodeId, target)
+}
+
+/** 选中分类时调用：确保节点展开且条目已拉取。 */
+export function expandTreeNode(nodeId: string, target: TreeNodeTarget): void {
+  if (!state.expanded.has(nodeId)) patch({ expanded: new Set(state.expanded).add(nodeId) })
+  loadNodeItems(nodeId, target)
+}
+
 /** 更新搜索词并按防抖取数；清空时回到分类树。 */
 export function setQuery(next: string): void {
   patch({ query: next })
@@ -190,6 +251,7 @@ export function resetPaneStore(): void {
   searchTimer = null
   toastTimer = null
   treeInflight = null
+  nodeInflight.clear()
   state = initialState()
   for (const listener of listeners) listener()
 }

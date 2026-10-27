@@ -7,6 +7,8 @@
  * - 「我的文库」根节点**不再平铺全库条目**（这些条目本就挂在各分类下，平铺会造成重复）；
  *   其下额外挂三个虚拟分类：我的出版物 / 未分类条目 / 回收站，与 Zotero 左侧栏一致。
  * - 分类 / 条目右键 → 「添加到会话」。
+ * - 展开集合与各节点条目都放在 {@link paneStore}：右侧栏切 tab 时面板正文会被卸载
+ *   重挂，局部 state 会丢，只有模块级 store 能让树保持原样。
  */
 
 import { useState, type ReactElement, type ReactNode } from 'react'
@@ -14,13 +16,8 @@ import { useState, type ReactElement, type ReactNode } from 'react'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zotero/types'
-import { fetchItems } from './api'
 import type { Translate } from './locales'
-
-/** 每个节点一次最多拉取的条目数。 */
-const NODE_LIMIT = 200
-
-const ROOT_NODE = '__library__'
+import { expandTreeNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -32,10 +29,7 @@ const BASE_INDENT = 8
 const ROW_HEIGHT = 24
 
 /** 一次加载节点条目所需的定位信息。 */
-interface LoadOpts {
-  collectionKey?: string
-  scope?: ZoteroItemScope
-}
+type LoadOpts = TreeNodeTarget
 
 /** 虚拟分类定义（顺序与 Zotero 左侧栏一致，排在真实分类之后）。 */
 interface VirtualNode {
@@ -382,38 +376,16 @@ export function CollectionTree(props: Props): ReactElement {
     onInsertCollection,
   } = props
 
-  /** 默认展开根节点，进面板就能看到顶层分类（与 Zotero 一致）。 */
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([ROOT_NODE]))
-  const [itemsByNode, setItemsByNode] = useState<Record<string, ZoteroItemSummary[]>>({})
-  const [totalsByNode, setTotalsByNode] = useState<Record<string, number>>({})
-
-  async function load(nodeId: string, opts: LoadOpts = {}): Promise<void> {
-    if (itemsByNode[nodeId] !== undefined) return
-    try {
-      const data = await fetchItems({ ...opts, limit: NODE_LIMIT })
-      setItemsByNode((prev) => ({ ...prev, [nodeId]: data.items }))
-      setTotalsByNode((prev) => ({ ...prev, [nodeId]: data.total }))
-    } catch {
-      setItemsByNode((prev) => ({ ...prev, [nodeId]: [] }))
-      setTotalsByNode((prev) => ({ ...prev, [nodeId]: 0 }))
-    }
-  }
+  /** 展开集合与各节点条目都在 store 里（默认展开根节点），重挂面板后原样恢复。 */
+  const { expanded, nodeItems, nodeTotals } = usePaneState()
 
   /** 按需拉取：条目一律由 toggle / select 触发，根节点不再预取全库条目。 */
   function open(nodeId: string, collection: ZoteroCollection): void {
-    setExpanded((prev) => (prev.has(nodeId) ? prev : new Set(prev).add(nodeId)))
-    void load(nodeId, loadOpts(collection))
+    expandTreeNode(nodeId, loadOpts(collection))
   }
 
   function toggle(nodeId: string, collection?: ZoteroCollection): void {
-    const willOpen = !expanded.has(nodeId)
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (willOpen) next.add(nodeId)
-      else next.delete(nodeId)
-      return next
-    })
-    if (willOpen && collection !== undefined) void load(nodeId, loadOpts(collection))
+    toggleTreeNode(nodeId, collection === undefined ? undefined : loadOpts(collection))
   }
 
   function select(collection: ZoteroCollection): void {
@@ -424,8 +396,8 @@ export function CollectionTree(props: Props): ReactElement {
   const ctx: TreeCtx = {
     t,
     expanded,
-    itemsByNode,
-    totalsByNode,
+    itemsByNode: nodeItems,
+    totalsByNode: nodeTotals,
     selectedItemKey,
     selectedCollectionKey,
     toggle,
@@ -435,15 +407,15 @@ export function CollectionTree(props: Props): ReactElement {
     onInsertCollection,
   }
 
-  const rootOpen = expanded.has(ROOT_NODE)
+  const rootOpen = expanded.has(TREE_ROOT_ID)
 
   return (
     <div style={{ padding: '8px 6px', display: 'flex', flexDirection: 'column' }}>
       <div
-        onClick={() => toggle(ROOT_NODE)}
+        onClick={() => toggle(TREE_ROOT_ID)}
         style={{ ...rowStyle, ...rowIndent(0) }}
       >
-        <Chevron open={rootOpen} onToggle={() => toggle(ROOT_NODE)} />
+        <Chevron open={rootOpen} onToggle={() => toggle(TREE_ROOT_ID)} />
         <span style={iconBox}>{glyph(LIBRARY_ICON)}</span>
         <span style={titleStyle}>{t('tree.library')}</span>
       </div>
