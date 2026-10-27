@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-zotero",
-  "version": "0.1.3",
-  "description": "Connect your local Zotero library to DSH. Once installed, the model can view, search and read your Zotero papers, notes and PDF full text, while you can browse the same library in a read-only sidebar and send a citation, an excerpt or a whole collection into the conversation with one click.",
+  "version": "0.1.4",
+  "description": "Connect the Zotero library on your computer to DSH: browse and search your own papers in the right sidebar, read metadata, notes and PDF full text, and bring a citation, an excerpt or a whole collection into the conversation with one click, so the model can answer from your own literature.",
   "keywords": [
     "dsh",
     "deepseek",
