@@ -45,4 +45,5 @@ pnpm dev   # tsx watch src/main.ts
 - 主包为 ESM（`"type": "module"`），模块解析 NodeNext，strict 模式。
 - 发布文件清单见 `package.json` 的 `files` 字段：`lib`、`client`、`locale`、`cordis.patch.yml`。
 - `dsh` 配置字段定义了 client 注入项与平台（web），修改需谨慎。
+- **发版必须双端同步**：每次发版同时更新 npm 与 GitHub Release，两者版本号必须一致（tag `v<version>`）。npm 用 `npm publish`（granular token + `--ignore-scripts`，pnpm publish 会误报 404）；GitHub 侧建同版本 Release 并上传打包产物，**资产名固定为 `dsh-plugin-zotero.tgz`**（市场依赖 `releases/latest/download/` 永久链接）。只发 npm 或只发 Release 都算未完成发版。
 - 遵循迭代改进方式，避免过度工程化，优先轻量方案。
