@@ -2,7 +2,7 @@
  * 右栏：单条条目详情。
  *
  * 版面分上下两区：上方「正文区」（标题 / 元数据 / 摘要 / 全文块），下方「分区面板区」
- * （参考文献 / 笔记 / 附件，用 tab 切换）。两区之间是可拖动的横向分隔条，默认正文占
+ * （参考文献 / 笔记 / 标注 / 附件，用 tab 切换）。两区之间是可拖动的横向分隔条，默认正文占
  * 85%，占比存 localStorage 跨会话记住；底部没有任何分区时不分区，正文独占整栏。
  *
  * 正文区内部再分两块：头部信息（标题 / 元数据 / 摘要，过高时自己滚动）与全文块
@@ -15,11 +15,22 @@
  * （摘录）。全文块内用鼠标选中文本后浮出小按钮，位置取选区 rect。
  */
 
-import { useRef, useState, type ReactElement } from 'react'
+import {
+  Fragment,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+} from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroItemDetail } from '../zotero/types'
+import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
+import { AnnotationList } from './AnnotationList'
+import { buildSegments, filterAnnotations, type AnnotationFilter, type Segment } from './annotationRuns'
 import { DetailTabs, type DetailTab } from './DetailTabs'
 import type { Translate } from './locales'
 import { NoteList } from './NoteList'
@@ -32,6 +43,10 @@ interface Props {
   onInsertItem(): void
   /** 插入全文选区摘录。 */
   onInsertExcerpt(quote: string): void
+  /** 插入一条标注（原文 + 评论 + 页码）。 */
+  onInsertAnnotation(annotation: ZoteroAnnotation): void
+  /** 插入一条笔记（正文纯文本）。 */
+  onInsertNote(note: ZoteroNote): void
   /** 点击附件行：以其 key 作为条目重新打开（附件条目自带全文）。 */
   onOpenItem(key: string): void
 }
@@ -108,20 +123,92 @@ function SectionToggle({ label, open, onToggle, expandLabel, collapseLabel }: Se
   )
 }
 
-export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenItem }: Props): ReactElement {
+/** 定位时给标注元素加的闪烁类与持续时间。 */
+const FLASH_CLASS = 'dsh-zotero-ann-flash'
+const FLASH_MS = 1200
+
+/**
+ * 全文正文：把切好的片段渲染成文本 + 标注元素。
+ *
+ * 用 memo 包住——鼠标选区（`selection` state）变化会重渲染父组件，
+ * 但 200KB 文本不该跟着重排。
+ */
+const AnnotatedText = memo(function AnnotatedText({ segments }: { segments: Segment[] }): ReactElement {
+  return (
+    <>
+      {segments.map((segment, index) => {
+        if (segment.kind === 'text') return <Fragment key={index}>{segment.text}</Fragment>
+        const style: CSSProperties = {}
+        if (segment.background !== null) style.background = segment.background
+        if (segment.underline !== null) {
+          style.textDecorationLine = 'underline'
+          style.textDecorationColor = segment.underline
+          style.textDecorationThickness = 2
+          style.textUnderlineOffset = 2
+        }
+        const owners = segment.owners.join(' ')
+        return segment.background !== null ? (
+          <mark key={index} className="dsh-zotero-ann" data-ann={owners} style={style}>
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={index} className="dsh-zotero-ann" data-ann={owners} style={style}>
+            {segment.text}
+          </span>
+        )
+      })}
+    </>
+  )
+})
+
+const ANNOTATION_CSS = `
+.dsh-zotero-ann { color: inherit; padding: 0; border-radius: 2px; }
+.dsh-zotero-ann-flash {
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  animation: dsh-zotero-ann-flash 1.1s ease-in-out 1;
+}
+@keyframes dsh-zotero-ann-flash {
+  0%, 100% { outline-color: transparent; }
+  20%, 80% { outline-color: rgba(80,140,255,0.95); }
+}
+`
+
+export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onOpenItem }: Props): ReactElement {
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
   const [bodyPercent, setBodyPercent] = useState(readBodyPercent)
   const [splitHover, setSplitHover] = useState(false)
   const [abstractOpen, setAbstractOpen] = useState(false)
   const [metaOpen, setMetaOpen] = useState(false)
+  const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>({ type: 'all', color: null })
+  const [filterItemKey, setFilterItemKey] = useState(detail.key)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ y: number; height: number; percent: number } | null>(null)
+  const flashTimer = useRef<number | null>(null)
+
+  // 切条目时重置筛选（渲染期调整态，React 认可的 props 派生写法）。
+  if (filterItemKey !== detail.key) {
+    setFilterItemKey(detail.key)
+    setAnnotationFilter({ type: 'all', color: null })
+  }
 
   const bib = detail.bib
   const fulltext = detail.fulltext
+  const visibleAnnotations = useMemo(
+    () => filterAnnotations(detail.annotations, annotationFilter),
+    [detail.annotations, annotationFilter],
+  )
+  const segments = useMemo(
+    () => buildSegments(fulltext?.content ?? '', visibleAnnotations),
+    [fulltext, visibleAnnotations],
+  )
 
-  // 底部 tab 区：有参考文献 / 笔记 / 附件时才存在。
+  useEffect(() => () => {
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
+  }, [])
+
+  // 底部 tab 区：有参考文献 / 笔记 / 标注 / 附件时才存在。
   const tabs: DetailTab[] = []
   if (bib !== null) {
     tabs.push({
@@ -139,7 +226,26 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
       id: 'notes',
       label: t('detail.notes'),
       hint: String(detail.notes.length),
-      content: <NoteList t={t} notes={detail.notes} />,
+      content: <NoteList t={t} notes={detail.notes} onInsert={onInsertNote} />,
+    })
+  }
+  if (detail.annotations.length > 0) {
+    tabs.push({
+      id: 'annotations',
+      label: t('detail.annotations'),
+      hint: String(detail.annotations.length),
+      content: (
+        <AnnotationList
+          t={t}
+          annotations={detail.annotations}
+          hasFulltext={fulltext !== null}
+          truncated={fulltext?.truncated === true}
+          filter={annotationFilter}
+          onFilterChange={setAnnotationFilter}
+          onLocate={locate}
+          onInsert={onInsertAnnotation}
+        />
+      ),
     })
   }
   if (detail.attachments.length > 0) {
@@ -230,11 +336,39 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
     })
   }
 
+  /**
+   * 滚动到某条标注并闪烁。
+   *
+   * 不用 `scrollIntoView`：它会连带滚动外层 pane 的滚动容器，整页都会跳。
+   * 这里只动全文块自己的 `scrollTop`。
+   */
+  function locate(annotationKey: string): void {
+    const box = boxRef.current
+    if (box === null) return
+    const target = box.querySelector<HTMLElement>(`[data-ann~="${CSS.escape(annotationKey)}"]`)
+    if (target === null) return
+    const boxRect = box.getBoundingClientRect()
+    const rect = target.getBoundingClientRect()
+    box.scrollTo({
+      top: box.scrollTop + rect.top - boxRect.top - box.clientHeight / 2 + rect.height / 2,
+      behavior: 'smooth',
+    })
+    target.classList.remove(FLASH_CLASS)
+    void target.offsetWidth
+    target.classList.add(FLASH_CLASS)
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
+    flashTimer.current = window.setTimeout(() => {
+      target.classList.remove(FLASH_CLASS)
+      flashTimer.current = null
+    }, FLASH_MS)
+  }
+
   return (
     <div
       ref={rootRef}
       style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
     >
+      <style>{ANNOTATION_CSS}</style>
       <div
         style={{
           flex: hasBottom ? `0 0 ${bodyPercent}%` : '1 1 auto',
@@ -332,7 +466,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
                 opacity: 0.9,
               }}
             >
-              {fulltext.content}
+              <AnnotatedText segments={segments} />
               {fulltext.truncated && (
                 <div style={{ marginTop: 6, opacity: 0.6 }}>{t('detail.fulltextTruncated')}</div>
               )}

@@ -70,6 +70,8 @@ const tabBarStyle = {
   flexShrink: 0,
   padding: '0 10px',
   borderBottom: '1px solid rgba(127,127,127,0.22)',
+  // 窄栏下 4 个分区会溢出，横向滚动而不是挤压/换行。
+  overflowX: 'auto',
 } as const
 
 function tabButtonStyle(selected: boolean): React.CSSProperties {
@@ -77,6 +79,7 @@ function tabButtonStyle(selected: boolean): React.CSSProperties {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 5,
+    flexShrink: 0,
     padding: '8px 10px 7px',
     marginBottom: -1,
     fontSize: 13,

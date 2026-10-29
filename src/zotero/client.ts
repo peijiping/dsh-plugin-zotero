@@ -15,6 +15,7 @@
 
 import { connect } from 'node:net'
 
+import { anchorAnnotations, type RawAnnotation } from './annotations.js'
 import {
   getSettings,
   libraryBase,
@@ -23,6 +24,7 @@ import {
 } from './config.js'
 import type {
   ApiErrorCode,
+  ZoteroAnnotation,
   ZoteroAttachment,
   ZoteroCollection,
   ZoteroFulltext,
@@ -72,6 +74,14 @@ interface RawItemData {
   filename?: string
   /** 笔记正文（HTML），仅 `itemType === 'note'` 有。 */
   note?: string
+  /** 标注所属附件，仅 `itemType === 'annotation'` 有。 */
+  parentItem?: string | false
+  annotationType?: string
+  annotationText?: string
+  annotationComment?: string
+  annotationColor?: string
+  annotationPageLabel?: string
+  annotationSortIndex?: string
   dateModified?: string
 }
 
@@ -539,6 +549,59 @@ export async function getItemChildren(key: string): Promise<RawItem[]> {
   return Array.isArray(body) ? body : []
 }
 
+/** 展示的标注类型：高亮与划线（Zotero 支持两者互转）。 */
+const ANNOTATION_TYPES = new Set(['highlight', 'underline'])
+
+/** 标注分页大小（本地 API 单页上限 100）与总量上限。 */
+const ANNOTATION_PAGE_SIZE = 100
+const ANNOTATION_MAX = 1000
+
+/** 原始标注 → 展示用标注；非高亮/划线返回 null。 */
+function toAnnotation(raw: RawItem): RawAnnotation | null {
+  const data = raw.data ?? {}
+  const type = data.annotationType ?? ''
+  if (!ANNOTATION_TYPES.has(type)) return null
+  const parentItem = data.parentItem
+  return {
+    key: raw.key,
+    attachmentKey: typeof parentItem === 'string' ? parentItem : '',
+    type,
+    text: data.annotationText ?? '',
+    comment: data.annotationComment ?? '',
+    color: data.annotationColor ?? '',
+    pageLabel: data.annotationPageLabel ?? '',
+    sortIndex: data.annotationSortIndex ?? '',
+  }
+}
+
+/**
+ * 条目下所有 PDF 附件上的高亮与划线。
+ *
+ * 必须显式带 `itemType=annotation`：实测 `/children` 不带参数时不返回标注。
+ * 失败降级为空数组——标注是详情的附加信息，不能拖垮整个条目。
+ */
+export async function getItemAnnotations(key: string): Promise<RawAnnotation[]> {
+  const out: RawAnnotation[] = []
+  try {
+    for (let start = 0; start < ANNOTATION_MAX; start += ANNOTATION_PAGE_SIZE) {
+      const { body, total } = await requestJson<RawItem[]>(
+        `${libraryBase()}/items/${encode(key)}/children`
+        + `?itemType=annotation&limit=${ANNOTATION_PAGE_SIZE}&start=${start}`,
+      )
+      const page = Array.isArray(body) ? body : []
+      for (const raw of page) {
+        const annotation = toAnnotation(raw)
+        if (annotation !== null) out.push(annotation)
+      }
+      if (page.length < ANNOTATION_PAGE_SIZE) break
+      if (total !== null && start + page.length >= total) break
+    }
+  } catch {
+    return out
+  }
+  return out
+}
+
 /** 附件全文；仅附件条目可用。 */
 export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFulltext | null> {
   let body: { content?: string } | null
@@ -574,29 +637,53 @@ export async function getItemBib(key: string, style: string): Promise<string | n
   }
 }
 
-/** 条目详情：元数据 + 附件 + 笔记 + 首个可读附件全文 + CSL。 */
+/** 条目详情：元数据 + 附件 + 笔记 + 标注 + 首个可读附件全文 + CSL。 */
 export async function getItemDetail(key: string, style: string): Promise<ZoteroItemDetail> {
   const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
   const data = raw.data ?? {}
   const itemType = data.itemType ?? ''
+  const isAttachment = itemType === 'attachment'
 
   // 顶层条目可能是附件本身（直接导入的 PDF），此时把自己也算作附件。
-  const children = itemType === 'attachment' ? [] : await getItemChildren(key)
+  const [children, rawAnnotations] = await Promise.all([
+    isAttachment ? Promise.resolve<RawItem[]>([]) : getItemChildren(key),
+    itemType === 'note' ? Promise.resolve<RawAnnotation[]>([]) : getItemAnnotations(key),
+  ])
   const childAttachments = children.filter((c) => c.data?.itemType === 'attachment')
   const attachments =
-    itemType === 'attachment' ? [toAttachment(raw), ...childAttachments.map(toAttachment)] : childAttachments.map(toAttachment)
+    isAttachment ? [toAttachment(raw), ...childAttachments.map(toAttachment)] : childAttachments.map(toAttachment)
 
   // 笔记是子条目（itemType=note）；条目本身就是笔记时（独立笔记），正文即自身。
   const childNotes = children.filter((c) => c.data?.itemType === 'note')
   const notes = (itemType === 'note' ? [raw] : childNotes).map(toNote)
 
   const readable =
-    itemType === 'attachment'
+    isAttachment
       ? raw
       : childAttachments.find((c) => c.data?.contentType === 'application/pdf') ?? childAttachments[0]
-  const fulltext = readable ? await getItemFulltext(readable.key) : null
 
-  const bib = await getItemBib(key, style)
+  const [fulltext, bib] = await Promise.all([
+    readable ? getItemFulltext(readable.key) : Promise.resolve(null),
+    getItemBib(key, style),
+  ])
+
+  // 展示顺序：当前附件的标注排前，同附件内按 PDF 位置（annotationSortIndex 零填充，可字典序比较）。
+  const rank = new Map(attachments.map((attachment, index) => [attachment.key, index] as const))
+  rawAnnotations.sort((a, b) =>
+    (rank.get(a.attachmentKey) ?? Number.MAX_SAFE_INTEGER)
+      - (rank.get(b.attachmentKey) ?? Number.MAX_SAFE_INTEGER)
+    || (a.sortIndex < b.sortIndex ? -1 : a.sortIndex > b.sortIndex ? 1 : 0))
+
+  const annotations: ZoteroAnnotation[] = anchorAnnotations(rawAnnotations, fulltext).map((annotation) => ({
+    key: annotation.key,
+    attachmentKey: annotation.attachmentKey,
+    type: annotation.type,
+    text: annotation.text,
+    comment: annotation.comment,
+    color: annotation.color,
+    pageLabel: annotation.pageLabel,
+    range: annotation.range,
+  }))
 
   return {
     key: raw.key,
@@ -612,6 +699,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     collections: data.collections ?? [],
     attachments,
     notes,
+    annotations,
     fulltext,
     bib,
   }

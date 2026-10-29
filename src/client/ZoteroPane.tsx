@@ -10,10 +10,10 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroItemDetail } from '../zotero/types'
+import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { fetchItem, fetchItems } from './api'
 import { CollectionTree } from './CollectionTree'
-import { collectionText, excerptText, itemText } from './compose'
+import { annotationText, collectionText, excerptText, itemText, noteText } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import { insertBuilt } from './inline'
 import { ItemDetail } from './ItemDetail'
@@ -141,6 +141,17 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
     report(await insertBuilt(inputActions, () => excerptText(t, target, quote)))
   }, [inputActions, report, t])
 
+  const insertAnnotation = useCallback(async (
+    target: ZoteroItemDetail,
+    annotation: ZoteroAnnotation,
+  ): Promise<void> => {
+    report(await insertBuilt(inputActions, () => annotationText(t, target, annotation)))
+  }, [inputActions, report, t])
+
+  const insertNote = useCallback(async (target: ZoteroItemDetail, note: ZoteroNote): Promise<void> => {
+    report(await insertBuilt(inputActions, () => noteText(t, target, note)))
+  }, [inputActions, report, t])
+
   const insertCollection = useCallback(async (collection: ZoteroCollection): Promise<void> => {
     report(await insertBuilt(inputActions, async () => {
       const data = await fetchItems({
@@ -265,6 +276,8 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
                 detail={detail}
                 onInsertItem={() => void insertItem(detail.key)}
                 onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
+                onInsertAnnotation={(annotation) => void insertAnnotation(detail, annotation)}
+                onInsertNote={(note) => void insertNote(detail, note)}
                 onOpenItem={openItem}
               />
             )

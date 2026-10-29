@@ -6,10 +6,13 @@
  * Host 侧已完成清洗（剥离 `data-*` 冗余属性、脚本与事件属性、图片限宽），
  * 这里直接以 `dangerouslySetInnerHTML` 渲染。
  *
- * 每条笔记默认折叠成一行标题（正文首段摘要），点击标题展开正文。
+ * 每条笔记默认折叠成一行标题（正文首段摘要），点击标题展开正文；
+ * 行尾「引用」把该条笔记（正文纯文本）写进会话草稿。
  */
 
 import { useState, type ReactElement } from 'react'
+
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroNote } from '../zotero/types'
 import type { Translate } from './locales'
@@ -17,9 +20,10 @@ import type { Translate } from './locales'
 interface Props {
   t: Translate
   notes: ZoteroNote[]
+  onInsert(note: ZoteroNote): void
 }
 
-export function NoteList({ t, notes }: Props): ReactElement | null {
+export function NoteList({ t, notes, onInsert }: Props): ReactElement | null {
   // 展开的笔记 key 集合；默认全部折叠。
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
 
@@ -41,11 +45,22 @@ export function NoteList({ t, notes }: Props): ReactElement | null {
         const open = expanded.has(note.key)
         return (
           <div key={note.key} style={{ marginBottom: 10 }}>
-            <button type="button" onClick={() => toggle(note.key)} style={noteHeaderStyle}>
-              <span style={{ flexShrink: 0, opacity: 0.55 }}>{open ? '▾' : '▸'}</span>
-              <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{note.title}</span>
-              {note.truncated && <span style={{ opacity: 0.55, flexShrink: 0 }}>{t('detail.noteTruncated')}</span>}
-            </button>
+            <div style={noteRowStyle}>
+              <button type="button" onClick={() => toggle(note.key)} style={noteHeaderStyle}>
+                <span style={{ flexShrink: 0, opacity: 0.55 }}>{open ? '▾' : '▸'}</span>
+                <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{note.title}</span>
+                {note.truncated && <span style={{ opacity: 0.55, flexShrink: 0 }}>{t('detail.noteTruncated')}</span>}
+              </button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onInsert(note)}
+                title={t('action.insertToChat')}
+                style={insertButtonStyle}
+              >
+                {t('action.insertItemShort')}
+              </Button>
+            </div>
             {open && (
               <div
                 className="dsh-zotero-note"
@@ -86,19 +101,36 @@ const NOTE_CSS = `
 .dsh-zotero-note td, .dsh-zotero-note th { border: 1px solid rgba(127,127,127,0.25); padding: 3px 6px; }
 `
 
+const noteRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 2px',
+  borderBottom: '1px solid rgba(127,127,127,0.18)',
+} as const
+
 const noteHeaderStyle = {
   display: 'flex',
   gap: 6,
   alignItems: 'baseline',
-  width: '100%',
-  padding: '4px 2px',
+  flex: 1,
+  minWidth: 0,
+  padding: 0,
   fontSize: 12.5,
   lineHeight: 1.6,
   background: 'transparent',
   border: 'none',
-  borderBottom: '1px solid rgba(127,127,127,0.18)',
   color: 'inherit',
   cursor: 'pointer',
+} as const
+
+const insertButtonStyle = {
+  flexShrink: 0,
+  height: 20,
+  padding: '0 6px',
+  fontSize: 11,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
 } as const
 
 const noteBodyStyle = {

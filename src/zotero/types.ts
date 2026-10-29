@@ -56,6 +56,32 @@ export interface ZoteroNote {
   truncated: boolean
 }
 
+/**
+ * 条目下的一条 PDF 标注（子条目 `itemType: "annotation"`）。
+ *
+ * 只取高亮与划线：Zotero 支持两者互转，展示时以当前类型为准。
+ */
+export interface ZoteroAnnotation {
+  key: string
+  /** 所属附件 key；用于判断标注是否落在当前展示全文的那份 PDF 上。 */
+  attachmentKey: string
+  /** `highlight` 或 `underline`。 */
+  type: string
+  /** PDF 中选中的原文。 */
+  text: string
+  /**
+   * 评论：Zotero 的富文本字面量（`<b>` / `<i>` / `<sub>` / `<sup>` / `<br>` / `<div>`
+   * 以文本形式存储，不是可注入的 HTML），由 Client 按白名单解析。
+   */
+  comment: string
+  /** Zotero 十六进制色，如 `#ffd400`；可能为空串。 */
+  color: string
+  /** PDF 印刷页码标签；可能为空串。 */
+  pageLabel: string
+  /** 在 `fulltext.content` 中的 UTF-16 区间；`null` 表示未能在全文里定位。 */
+  range: { start: number; end: number } | null
+}
+
 /** 详情页数据。 */
 export interface ZoteroItemDetail {
   key: string
@@ -73,6 +99,8 @@ export interface ZoteroItemDetail {
   attachments: ZoteroAttachment[]
   /** 该条目下的笔记（子条目 `itemType: "note"`）。 */
   notes: ZoteroNote[]
+  /** 该条目下的高亮与划线。 */
+  annotations: ZoteroAnnotation[]
   fulltext: ZoteroFulltext | null
   bib: string | null
 }
