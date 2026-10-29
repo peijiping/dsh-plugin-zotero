@@ -8,7 +8,8 @@
  * 正文区内部再分两块：头部信息（标题 / 元数据 / 摘要，过高时自己滚动）与全文块
  * （撑满剩余高度、自己滚动），所以拖高正文区时全文文本跟着变高。
  *
- * 摘要默认折叠，标题行右侧的箭头按钮展开 / 收起。
+ * 元数据与摘要都默认折叠，各自小标题行右侧的箭头按钮展开 / 收起——右栏空间有限，
+ * 折叠后把高度尽量让给全文正文。
  *
  * 「添加到会话」两处入口：头部按钮（整条目元数据）、全文块里的选区浮出按钮
  * （摘录）。全文块内用鼠标选中文本后浮出小按钮，位置取选区 rect。
@@ -53,7 +54,18 @@ function readBodyPercent(): number {
 }
 
 const labelStyle = { opacity: 0.6, marginRight: 8, flexShrink: 0 } as const
-const metaRowStyle = { display: 'flex', gap: 4, marginBottom: 4, lineHeight: 1.6 } as const
+const metaRowStyle = { display: 'flex', gap: 4, marginBottom: 2, lineHeight: 1.5 } as const
+/** 折叠区块（元数据 / 摘要）的外框：紧凑的上间距，展开内容再留 4px。 */
+const collapsibleStyle = { marginTop: 8 } as const
+/** 头部「添加条目引用」：压到最小号，把宽度尽量让给标题。 */
+const insertButtonStyle = {
+  flexShrink: 0,
+  height: 20,
+  padding: '0 6px',
+  fontSize: 11,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+} as const
 
 /** 去掉 CSL HTML 标签，只留可见文本（zotero 导出的是便携 HTML）。 */
 function stripTags(html: string): string {
@@ -69,11 +81,39 @@ function MetaRow({ label, children }: { label: string; children: ReactElement | 
   )
 }
 
+interface SectionToggleProps {
+  label: string
+  open: boolean
+  onToggle(): void
+  expandLabel: string
+  collapseLabel: string
+}
+
+/** 小标题 + 右侧展开/收起箭头。 */
+function SectionToggle({ label, open, onToggle, expandLabel, collapseLabel }: SectionToggleProps): ReactElement {
+  return (
+    <div style={sectionToggleRowStyle}>
+      <h3 style={{ ...sectionTitleStyle, margin: 0 }}>{label}</h3>
+      <div style={{ flex: 1 }} />
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={open ? collapseLabel : expandLabel}
+        style={sectionToggleButtonStyle}
+      >
+        {open ? '▴' : '▾'}
+      </button>
+    </div>
+  )
+}
+
 export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenItem }: Props): ReactElement {
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
   const [bodyPercent, setBodyPercent] = useState(readBodyPercent)
   const [splitHover, setSplitHover] = useState(false)
   const [abstractOpen, setAbstractOpen] = useState(false)
+  const [metaOpen, setMetaOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ y: number; height: number; percent: number } | null>(null)
@@ -128,6 +168,14 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
     })
   }
   const hasBottom = tabs.length > 0
+
+  const metaRows: { label: string; value: string }[] = []
+  if (detail.creators.length > 0) metaRows.push({ label: t('detail.creators'), value: detail.creators.join('、') })
+  if (detail.year !== '') metaRows.push({ label: t('detail.year'), value: detail.year })
+  if (detail.publicationTitle !== '') metaRows.push({ label: t('detail.source'), value: detail.publicationTitle })
+  if (detail.doi !== '') metaRows.push({ label: t('detail.doi'), value: detail.doi })
+  if (detail.url !== '') metaRows.push({ label: t('detail.url'), value: detail.url })
+  if (detail.tags.length > 0) metaRows.push({ label: t('detail.tags'), value: detail.tags.join('、') })
 
   function clampBodyPercent(next: number): number {
     return Math.min(Math.max(next, BODY_PERCENT_MIN), BODY_PERCENT_MAX)
@@ -206,35 +254,41 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onOpenIte
             lineHeight: 1.6,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
-            <h2 style={{ flex: 1, margin: 0, fontSize: 15, lineHeight: 1.45 }}>{detail.title}</h2>
-            <Button variant="outline" size="sm" onClick={onInsertItem}>
-              {t('action.insertItem')}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
+            <h2 style={{ flex: 1, margin: 0, fontSize: 13.5, fontWeight: 700, lineHeight: 1.4 }}>{detail.title}</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onInsertItem}
+              title={t('action.insertItem')}
+              style={insertButtonStyle}
+            >
+              {t('action.insertItemShort')}
             </Button>
           </div>
 
-          {detail.creators.length > 0 && <MetaRow label={t('detail.creators')}>{detail.creators.join('、')}</MetaRow>}
-          {detail.year !== '' && <MetaRow label={t('detail.year')}>{detail.year}</MetaRow>}
-          {detail.publicationTitle !== '' && <MetaRow label={t('detail.source')}>{detail.publicationTitle}</MetaRow>}
-          {detail.doi !== '' && <MetaRow label={t('detail.doi')}>{detail.doi}</MetaRow>}
-          {detail.url !== '' && <MetaRow label={t('detail.url')}>{detail.url}</MetaRow>}
-          {detail.tags.length > 0 && <MetaRow label={t('detail.tags')}>{detail.tags.join('、')}</MetaRow>}
+          {metaRows.length > 0 && (
+            <section style={collapsibleStyle}>
+              <SectionToggle
+                label={t('detail.metadata')}
+                open={metaOpen}
+                onToggle={() => setMetaOpen((open) => !open)}
+                expandLabel={t('detail.metadataExpand')}
+                collapseLabel={t('detail.metadataCollapse')}
+              />
+              {metaOpen && metaRows.map((row) => <MetaRow key={row.label} label={row.label}>{row.value}</MetaRow>)}
+            </section>
+          )}
 
           {detail.abstract !== '' && (
-            <section style={{ marginTop: 12, paddingBottom: 12 }}>
-              <div style={sectionToggleRowStyle}>
-                <h3 style={{ ...sectionTitleStyle, margin: 0 }}>{t('detail.abstract')}</h3>
-                <div style={{ flex: 1 }} />
-                <button
-                  type="button"
-                  onClick={() => setAbstractOpen((open) => !open)}
-                  aria-expanded={abstractOpen}
-                  aria-label={abstractOpen ? t('detail.abstractCollapse') : t('detail.abstractExpand')}
-                  style={sectionToggleButtonStyle}
-                >
-                  {abstractOpen ? '▴' : '▾'}
-                </button>
-              </div>
+            <section style={{ ...collapsibleStyle, paddingBottom: 12 }}>
+              <SectionToggle
+                label={t('detail.abstract')}
+                open={abstractOpen}
+                onToggle={() => setAbstractOpen((open) => !open)}
+                expandLabel={t('detail.abstractExpand')}
+                collapseLabel={t('detail.abstractCollapse')}
+              />
               {abstractOpen && (
                 <p style={{ margin: '4px 0 0', opacity: 0.85 }}>{detail.abstract}</p>
               )}

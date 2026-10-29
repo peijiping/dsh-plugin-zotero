@@ -24,6 +24,7 @@ const zh: Record<string, string> = {
 
   'action.refresh': '刷新',
   'action.insertItem': '添加条目引用',
+  'action.insertItemShort': '引用',
   'action.insertExcerpt': '添加摘录',
   'action.insertCollection': '添加整目录引用',
 
@@ -42,6 +43,9 @@ const zh: Record<string, string> = {
   'tree.empty': '这个分类下没有条目',
 
   'detail.empty': '从左侧选择分类或条目',
+  'detail.metadata': '文献信息',
+  'detail.metadataExpand': '展开文献信息',
+  'detail.metadataCollapse': '收起文献信息',
   'detail.creators': '作者',
   'detail.year': '年份',
   'detail.source': '出处',
@@ -125,6 +129,7 @@ const en: Record<string, string> = {
 
   'action.refresh': 'Refresh',
   'action.insertItem': 'Add item citation',
+  'action.insertItemShort': 'Cite',
   'action.insertExcerpt': 'Add excerpt',
   'action.insertCollection': 'Add collection citations',
 
@@ -143,6 +148,9 @@ const en: Record<string, string> = {
   'tree.empty': 'No items in this collection',
 
   'detail.empty': 'Select a collection or item on the left',
+  'detail.metadata': 'Metadata',
+  'detail.metadataExpand': 'Expand metadata',
+  'detail.metadataCollapse': 'Collapse metadata',
   'detail.creators': 'Creators',
   'detail.year': 'Year',
   'detail.source': 'Source',
