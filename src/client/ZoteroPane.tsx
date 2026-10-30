@@ -81,6 +81,7 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
     selectedCollection,
     detail,
     detailLoading,
+    detailError,
     collectionBib,
     toast,
   } = usePaneState()
@@ -268,8 +269,15 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
 
         <section style={{ flex: 1, minWidth: 0, overflow: 'auto', minHeight: 0 }}>
           {selectedItemKey !== null ? (
-            detailLoading || detail === null ? (
+            detailLoading ? (
               <div style={hintStyle}>{t('status.loading')}</div>
+            ) : detail === null ? (
+              <div style={{ padding: '12px 14px', fontSize: 12.5, color: '#d29922' }}>
+                <p style={{ margin: '0 0 8px' }}>{tpl(t('detail.loadFailed'), { message: detailError ?? '' })}</p>
+                <Button variant="outline" size="sm" onClick={() => openItem(selectedItemKey)}>
+                  {t('action.retry')}
+                </Button>
+              </div>
             ) : (
               <ItemDetail
                 t={t}

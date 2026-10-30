@@ -13,6 +13,9 @@
  *
  * 「添加到会话」两处入口：头部按钮（整条目元数据）、全文块里的选区浮出按钮
  * （摘录）。全文块内用鼠标选中文本后浮出小按钮，位置取选区 rect。
+ *
+ * 独立笔记（条目自身 `itemType: "note"`）的正文直接作为全文块内容渲染，
+ * 与打开普通条目一样占据正文区，不再只能去底部「笔记」tab 里翻。
  */
 
 import {
@@ -33,7 +36,7 @@ import { AnnotationList } from './AnnotationList'
 import { buildSegments, filterAnnotations, type AnnotationFilter, type Segment } from './annotationRuns'
 import { DetailTabs, type DetailTab } from './DetailTabs'
 import type { Translate } from './locales'
-import { NoteList } from './NoteList'
+import { NoteList, NOTE_CSS } from './NoteList'
 import { sectionTitleStyle, sectionToggleButtonStyle, sectionToggleRowStyle } from './styles'
 
 interface Props {
@@ -81,6 +84,28 @@ const insertButtonStyle = {
   lineHeight: 1.2,
   whiteSpace: 'nowrap',
 } as const
+
+/** 正文块外框：PDF 全文与独立笔记共用，仅排版细节不同。 */
+const bodyBoxStyle = {
+  // 全文块内的选区浮出按钮靠绝对定位，需要这里做定位参照。
+  position: 'relative',
+  flex: 1,
+  minHeight: 60,
+  overflow: 'auto',
+  padding: '8px 10px',
+  border: '1px solid rgba(127,127,127,0.25)',
+  borderRadius: 6,
+  fontSize: 12.5,
+  opacity: 0.9,
+} as const
+
+/** PDF 全文：纯文本，保留换行。 */
+const textBodyStyle = { ...bodyBoxStyle, whiteSpace: 'pre-wrap', lineHeight: 1.7 } as const
+
+/** 独立笔记：HTML 自带块级换行，不能再叠 pre-wrap，否则标签间空白会被放大。 */
+const noteBodyStyle = { ...bodyBoxStyle, lineHeight: 1.75, overflowWrap: 'break-word' } as const
+
+const truncatedHintStyle = { marginTop: 6, opacity: 0.6 } as const
 
 /** 去掉 CSL HTML 标签，只留可见文本（zotero 导出的是便携 HTML）。 */
 function stripTags(html: string): string {
@@ -195,6 +220,13 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
 
   const bib = detail.bib
   const fulltext = detail.fulltext
+  /** 条目本身就是独立笔记时，正文即自身，直接放到全文位置展示。 */
+  const selfNote = detail.itemType === 'note'
+    ? detail.notes.find((note) => note.key === detail.key) ?? null
+    : null
+  /** 正文区是否有可展示的内容（PDF 全文或独立笔记正文）。 */
+  const hasBody = fulltext !== null || selfNote !== null
+  const bodyKey = selfNote !== null ? selfNote.key : fulltext?.attachmentKey ?? ''
   const visibleAnnotations = useMemo(
     () => filterAnnotations(detail.annotations, annotationFilter),
     [detail.annotations, annotationFilter],
@@ -221,7 +253,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
       ),
     })
   }
-  if (detail.notes.length > 0) {
+  // 独立笔记的正文已经在正文区展示，底部不再重复列出。
+  if (detail.notes.length > 0 && selfNote === null) {
     tabs.push({
       id: 'notes',
       label: t('detail.notes'),
@@ -368,7 +401,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
       ref={rootRef}
       style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
     >
-      <style>{ANNOTATION_CSS}</style>
+      <style>{ANNOTATION_CSS + NOTE_CSS}</style>
       <div
         style={{
           flex: hasBottom ? `0 0 ${bodyPercent}%` : '1 1 auto',
@@ -381,7 +414,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         {/* 头部信息：内容不足时不抢空间，超高时自己滚动 */}
         <div
           style={{
-            flex: fulltext !== null ? '0 1 auto' : '1 1 auto',
+            flex: hasBody ? '0 1 auto' : '1 1 auto',
             minHeight: 44,
             overflow: 'auto',
             padding: '12px 14px 0',
@@ -390,15 +423,18 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         >
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
             <h2 style={{ flex: 1, margin: 0, fontSize: 13.5, fontWeight: 700, lineHeight: 1.4 }}>{detail.title}</h2>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onInsertItem}
-              title={t('action.insertItem')}
-              style={insertButtonStyle}
-            >
-              {t('action.insertItemShort')}
-            </Button>
+            {/* 独立笔记没有可引的 CSL 元数据，整条笔记的「引用」在正文区标题行 */}
+            {selfNote === null && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onInsertItem}
+                title={t('action.insertItem')}
+                style={insertButtonStyle}
+              >
+                {t('action.insertItemShort')}
+              </Button>
+            )}
           </div>
 
           {metaRows.length > 0 && (
@@ -430,45 +466,56 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
           )}
         </div>
 
-        {/* 全文块：撑满正文区剩余高度，文本随之变高 */}
+        {/* 正文块：撑满正文区剩余高度，文本随之变高；独立笔记的正文也放这里 */}
         <section
           style={{
-            flex: fulltext !== null ? '1 1 0' : '0 0 auto',
+            flex: hasBody ? '1 1 0' : '0 0 auto',
             minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
             padding: '2px 14px 14px',
           }}
         >
-          <h3 style={sectionTitleStyle}>
-            {t('detail.fulltext')}
-            {fulltext !== null && (
-              <span style={{ opacity: 0.55, fontWeight: 400, marginLeft: 8 }}>{fulltext.attachmentKey}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <h3 style={{ ...sectionTitleStyle, margin: 0 }}>
+              {t(selfNote !== null ? 'detail.noteBody' : 'detail.fulltext')}
+              {bodyKey !== '' && (
+                <span style={{ opacity: 0.55, fontWeight: 400, marginLeft: 8 }}>{bodyKey}</span>
+              )}
+            </h3>
+            <div style={{ flex: 1 }} />
+            {selfNote !== null && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onInsertNote(selfNote)}
+                title={t('action.insertToChat')}
+                style={insertButtonStyle}
+              >
+                {t('action.insertItemShort')}
+              </Button>
             )}
-          </h3>
-          {fulltext === null ? (
+          </div>
+          {!hasBody ? (
             <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noFulltext')}</p>
           ) : (
             <div
               ref={boxRef}
               onMouseUp={handleMouseUp}
-              style={{
-                position: 'relative',
-                flex: 1,
-                minHeight: 60,
-                overflow: 'auto',
-                padding: '8px 10px',
-                border: '1px solid rgba(127,127,127,0.25)',
-                borderRadius: 6,
-                whiteSpace: 'pre-wrap',
-                fontSize: 12.5,
-                lineHeight: 1.7,
-                opacity: 0.9,
-              }}
+              style={selfNote === null ? textBodyStyle : noteBodyStyle}
             >
-              <AnnotatedText segments={segments} />
-              {fulltext.truncated && (
-                <div style={{ marginTop: 6, opacity: 0.6 }}>{t('detail.fulltextTruncated')}</div>
+              {selfNote !== null ? (
+                <>
+                  <div className="dsh-zotero-note" dangerouslySetInnerHTML={{ __html: selfNote.html }} />
+                  {selfNote.truncated && <div style={truncatedHintStyle}>{t('detail.noteTruncated')}</div>}
+                </>
+              ) : (
+                <>
+                  <AnnotatedText segments={segments} />
+                  {fulltext?.truncated === true && (
+                    <div style={truncatedHintStyle}>{t('detail.fulltextTruncated')}</div>
+                  )}
+                </>
               )}
               {selection !== null && (
                 <button

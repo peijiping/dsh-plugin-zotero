@@ -28,6 +28,7 @@ const zh: Record<string, string> = {
   'action.insertExcerpt': '添加摘录',
   'action.insertToChat': '引用到会话',
   'action.insertCollection': '添加整目录引用',
+  'action.retry': '重试',
 
   'status.zoteroOn': 'Zotero 已连接',
   'status.zoteroOff': 'Zotero 未连接',
@@ -42,8 +43,10 @@ const zh: Record<string, string> = {
   'tree.searchPlaceholder': '搜索标题 / 摘要',
   'tree.count': '{n} 条',
   'tree.empty': '这个分类下没有条目',
+  'tree.loadFailed': '条目加载失败',
 
   'detail.empty': '从左侧选择分类或条目',
+  'detail.loadFailed': '条目加载失败：{message}',
   'detail.metadata': '文献信息',
   'detail.metadataExpand': '展开文献信息',
   'detail.metadataCollapse': '收起文献信息',
@@ -71,6 +74,7 @@ const zh: Record<string, string> = {
   'detail.annotationNotAnchoredTruncated': '全文超出索引上限，这段原文可能在未返回的部分',
   'detail.annotationNotAnchoredNoFulltext': '该附件没有全文索引，无法定位',
   'detail.fulltext': '全文',
+  'detail.noteBody': '笔记正文',
   'detail.noFulltext': '该附件没有可用的全文索引',
   'detail.fulltextTruncated': '（已按长度截断）',
   'detail.collectionSummary': '分类：{name}',
@@ -155,6 +159,7 @@ const en: Record<string, string> = {
   'action.insertExcerpt': 'Add excerpt',
   'action.insertToChat': 'Add to chat',
   'action.insertCollection': 'Add collection citations',
+  'action.retry': 'Retry',
 
   'status.zoteroOn': 'Zotero connected',
   'status.zoteroOff': 'Zotero not connected',
@@ -169,8 +174,10 @@ const en: Record<string, string> = {
   'tree.searchPlaceholder': 'Search title / abstract',
   'tree.count': '{n} items',
   'tree.empty': 'No items in this collection',
+  'tree.loadFailed': 'Failed to load items',
 
   'detail.empty': 'Select a collection or item on the left',
+  'detail.loadFailed': 'Failed to load the item: {message}',
   'detail.metadata': 'Metadata',
   'detail.metadataExpand': 'Expand metadata',
   'detail.metadataCollapse': 'Collapse metadata',
@@ -198,6 +205,7 @@ const en: Record<string, string> = {
   'detail.annotationNotAnchoredTruncated': 'The full text was truncated; this passage may be in the omitted part',
   'detail.annotationNotAnchoredNoFulltext': 'No full-text index for this attachment, so it cannot be located',
   'detail.fulltext': 'Full text',
+  'detail.noteBody': 'Note',
   'detail.noFulltext': 'No full-text index available for this attachment',
   'detail.fulltextTruncated': '(truncated by length)',
   'detail.collectionSummary': 'Collection: {name}',

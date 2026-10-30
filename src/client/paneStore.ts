@@ -55,12 +55,21 @@ export interface PaneState {
   nodeItems: Record<string, ZoteroItemSummary[]>
   /** 已拉取节点的条目总数（节点 id → 总数）。 */
   nodeTotals: Record<string, number>
+  /**
+   * 条目加载失败的节点（节点 id → 错误消息）。
+   *
+   * 失败不写空列表：空列表会被当成「这个分类没有条目」永久缓存，
+   * 用户只能重启面板才能恢复。错误单独记录，展开或点「重试」可再拉。
+   */
+  nodeErrors: Record<string, string>
   query: string
   results: ZoteroItemSummary[] | null
   selectedItemKey: string | null
   selectedCollection: ZoteroCollection | null
   detail: ZoteroItemDetail | null
   detailLoading: boolean
+  /** 条目详情加载失败的原因；与 {@link PaneState.detailLoading} 一起避免一直停在「加载中」。 */
+  detailError: string | null
   collectionBib: string | null
   toast: string | null
 }
@@ -76,12 +85,14 @@ function initialState(): PaneState {
     expanded: new Set([TREE_ROOT_ID]),
     nodeItems: {},
     nodeTotals: {},
+    nodeErrors: {},
     query: '',
     results: null,
     selectedItemKey: null,
     selectedCollection: null,
     detail: null,
     detailLoading: false,
+    detailError: null,
     collectionBib: null,
     toast: null,
   }
@@ -95,12 +106,21 @@ let state: PaneState = initialState()
 const listeners = new Set<() => void>()
 let treeInflight: Promise<void> | null = null
 const nodeInflight = new Set<string>()
+/** 各节点最近一次加载用的定位信息；刷新时用来重拉已展开的分支。 */
+const nodeTargets = new Map<string, TreeNodeTarget>()
 let searchTimer: number | null = null
 let toastTimer: number | null = null
 
 function patch(next: Partial<PaneState>): void {
   state = { ...state, ...next }
   for (const listener of listeners) listener()
+}
+
+/** 返回去掉某个 key 的记录；没有该 key 时原样返回，避免无意义的新对象。 */
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record
+  const { [key]: _removed, ...rest } = record
+  return rest
 }
 
 /** 订阅整份面板状态（任一字段变化都会触发重渲染）。 */
@@ -136,6 +156,18 @@ export function loadTree(force = false): Promise<void> {
   if (treeInflight !== null) return treeInflight
   if (!force && state.loaded) return Promise.resolve()
   patch({ treeLoading: true })
+  if (force) {
+    // 手动刷新：清掉节点缓存（失败留下的空结果也在这里一并清掉），
+    // 再把已展开的分支和当前详情按最新数据重拉。
+    const expanded = [...state.expanded]
+    patch({ nodeItems: {}, nodeTotals: {}, nodeErrors: {}, collectionBib: null })
+    for (const nodeId of expanded) {
+      const target = nodeTargets.get(nodeId)
+      if (target !== undefined) loadNodeItems(nodeId, target, true)
+    }
+    if (state.selectedItemKey !== null) openItem(state.selectedItemKey)
+    else if (state.selectedCollection !== null) selectCollection(state.selectedCollection)
+  }
   const run = (async (): Promise<void> => {
     try {
       const [healthData, tree] = await Promise.all([fetchHealth(), fetchTree()])
@@ -157,10 +189,19 @@ export function loadTree(force = false): Promise<void> {
   return run
 }
 
-/** 按需拉取某节点的条目；已拉取或正在拉取时直接返回。 */
-function loadNodeItems(nodeId: string, target: TreeNodeTarget): void {
-  if (state.nodeItems[nodeId] !== undefined || nodeInflight.has(nodeId)) return
+/** 按需拉取某节点的条目；已拉取或正在拉取时直接返回（force 时清缓存重拉）。 */
+function loadNodeItems(nodeId: string, target: TreeNodeTarget, force = false): void {
+  nodeTargets.set(nodeId, target)
+  if (nodeInflight.has(nodeId)) return
+  if (!force && state.nodeItems[nodeId] !== undefined) return
   nodeInflight.add(nodeId)
+  if (force) {
+    patch({
+      nodeItems: withoutKey(state.nodeItems, nodeId),
+      nodeTotals: withoutKey(state.nodeTotals, nodeId),
+    })
+  }
+  patch({ nodeErrors: withoutKey(state.nodeErrors, nodeId) })
   fetchItems({ ...target, limit: NODE_LIMIT })
     .then((data) => {
       patch({
@@ -168,15 +209,23 @@ function loadNodeItems(nodeId: string, target: TreeNodeTarget): void {
         nodeTotals: { ...state.nodeTotals, [nodeId]: data.total },
       })
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      // 失败不写空列表：否则会被当成「这个分类没有条目」一直挂着，只能重启恢复。
       patch({
-        nodeItems: { ...state.nodeItems, [nodeId]: [] },
-        nodeTotals: { ...state.nodeTotals, [nodeId]: 0 },
+        nodeItems: withoutKey(state.nodeItems, nodeId),
+        nodeTotals: withoutKey(state.nodeTotals, nodeId),
+        nodeErrors: { ...state.nodeErrors, [nodeId]: errorMessage(error) },
       })
     })
     .finally(() => {
       nodeInflight.delete(nodeId)
     })
+}
+
+/** 重试某个加载失败的节点（树行内「重试」）。 */
+export function retryNode(nodeId: string): void {
+  const target = nodeTargets.get(nodeId)
+  if (target !== undefined) loadNodeItems(nodeId, target, true)
 }
 
 /** 三角箭头：只开合节点，展开时按需拉取条目（根节点没有条目，不传 target）。 */
@@ -213,12 +262,12 @@ export function setQuery(next: string): void {
   }, SEARCH_DEBOUNCE_MS)
 }
 
-/** 打开条目详情。 */
+/** 打开条目详情。失败时记录原因，由详情区就地显示「重试」。 */
 export function openItem(key: string): void {
-  patch({ selectedItemKey: key, detail: null, detailLoading: true })
+  patch({ selectedItemKey: key, detail: null, detailLoading: true, detailError: null })
   void fetchItem(key)
     .then((data) => patch({ detail: data }))
-    .catch((error: unknown) => showToast(errorMessage(error)))
+    .catch((error: unknown) => patch({ detailError: errorMessage(error) }))
     .finally(() => patch({ detailLoading: false }))
 }
 
@@ -252,6 +301,7 @@ export function resetPaneStore(): void {
   toastTimer = null
   treeInflight = null
   nodeInflight.clear()
+  nodeTargets.clear()
   state = initialState()
   for (const listener of listeners) listener()
 }

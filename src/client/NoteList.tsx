@@ -80,8 +80,11 @@ export function NoteList({ t, notes, onInsert }: Props): ReactElement | null {
  *
  * 笔记 HTML 由 Zotero 生成，段落/引用/高亮标记都是默认样式，这里补一套
  * 贴合右栏密度的排版（引用块、标注高亮、图片、表格）。
+ *
+ * 独立笔记（条目本身就是 note）在详情「全文」位置渲染，那里也引这份样式，
+ * 因此导出。
  */
-const NOTE_CSS = `
+export const NOTE_CSS = `
 .dsh-zotero-note p { margin: 0 0 6px; }
 .dsh-zotero-note p:last-child { margin-bottom: 0; }
 .dsh-zotero-note blockquote {

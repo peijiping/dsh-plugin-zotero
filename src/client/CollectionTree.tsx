@@ -17,7 +17,7 @@ import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zotero/types'
 import type { Translate } from './locales'
-import { expandTreeNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
+import { expandTreeNode, retryNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -55,12 +55,16 @@ interface TreeCtx {
   expanded: ReadonlySet<string>
   itemsByNode: Record<string, ZoteroItemSummary[]>
   totalsByNode: Record<string, number>
+  /** 条目加载失败的节点 → 错误消息。 */
+  nodeErrors: Readonly<Record<string, string>>
   selectedItemKey: string | null
   selectedCollectionKey: string | null
   /** 三角箭头：只开合，不动选中态。 */
   toggle(nodeId: string, collection?: ZoteroCollection): void
   /** 行体：选中该分类（已折叠则顺带展开并拉取条目）。 */
   select(collection: ZoteroCollection): void
+  /** 行内「重试」：重新拉取该节点条目。 */
+  retry(nodeId: string): void
   onSelectItem(key: string): void
   onInsertItem(key: string): void
   onInsertCollection(collection: ZoteroCollection): void
@@ -200,6 +204,18 @@ function hintStyle(depth: number): React.CSSProperties {
   }
 }
 
+/** 行内「重试」按钮：失败提示旁的小按钮。 */
+const retryButtonStyle: React.CSSProperties = {
+  padding: '0 6px',
+  fontSize: 11.5,
+  lineHeight: '18px',
+  color: 'inherit',
+  background: 'transparent',
+  border: '1px solid rgba(127,127,127,0.35)',
+  borderRadius: 5,
+  cursor: 'pointer',
+}
+
 // ---- 展开箭头 ---------------------------------------------------------------
 
 function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): ReactElement {
@@ -260,6 +276,17 @@ function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; 
 }
 
 function renderItems(ctx: TreeCtx, nodeId: string, depth: number): ReactElement[] {
+  // 加载失败的行单独提示，避免和「这个分类没有条目」混淆。
+  if (ctx.nodeErrors[nodeId] !== undefined) {
+    return [
+      <div key="error" style={{ ...hintStyle(depth), display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: '#d29922' }}>{ctx.t('tree.loadFailed')}</span>
+        <button type="button" onClick={() => ctx.retry(nodeId)} style={retryButtonStyle}>
+          {ctx.t('action.retry')}
+        </button>
+      </div>,
+    ]
+  }
   const items = ctx.itemsByNode[nodeId]
   if (items === undefined) {
     return [<div key="loading" style={hintStyle(depth)}>{ctx.t('status.loading')}</div>]
@@ -377,7 +404,7 @@ export function CollectionTree(props: Props): ReactElement {
   } = props
 
   /** 展开集合与各节点条目都在 store 里（默认展开根节点），重挂面板后原样恢复。 */
-  const { expanded, nodeItems, nodeTotals } = usePaneState()
+  const { expanded, nodeItems, nodeTotals, nodeErrors } = usePaneState()
 
   /** 按需拉取：条目一律由 toggle / select 触发，根节点不再预取全库条目。 */
   function open(nodeId: string, collection: ZoteroCollection): void {
@@ -398,10 +425,12 @@ export function CollectionTree(props: Props): ReactElement {
     expanded,
     itemsByNode: nodeItems,
     totalsByNode: nodeTotals,
+    nodeErrors,
     selectedItemKey,
     selectedCollectionKey,
     toggle,
     select,
+    retry: retryNode,
     onSelectItem,
     onInsertItem,
     onInsertCollection,
