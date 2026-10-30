@@ -276,7 +276,7 @@ function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; 
 }
 
 function renderItems(ctx: TreeCtx, nodeId: string, depth: number): ReactElement[] {
-  // 加载失败的行单独提示，避免和「这个分类没有条目」混淆。
+  // 加载失败的行单独提示，避免和「分类为空」混淆。
   if (ctx.nodeErrors[nodeId] !== undefined) {
     return [
       <div key="error" style={{ ...hintStyle(depth), display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -292,7 +292,7 @@ function renderItems(ctx: TreeCtx, nodeId: string, depth: number): ReactElement[
     return [<div key="loading" style={hintStyle(depth)}>{ctx.t('status.loading')}</div>]
   }
   if (items.length === 0) {
-    return [<div key="empty" style={hintStyle(depth)}>{ctx.t('tree.empty')}</div>]
+    return []
   }
   return items.map((item) => <ItemRow key={item.key} ctx={ctx} item={item} depth={depth} />)
 }

@@ -80,7 +80,8 @@ const zh: Record<string, string> = {
   'detail.collectionSummary': '分类：{name}',
   'detail.collectionCount': '共 {n} 条条目',
   'detail.bibTitle': '参考文献（APA）',
-  'detail.noBib': '该分类没有可导出的引用条目（裸 PDF 附件不产生引用）',
+  'detail.noBib': '该分类没有可导出的引用条目（笔记与裸 PDF 附件不产生引用）',
+  'detail.items': '条目',
 
   'error.noEditor': '当前面板不在会话上下文中，无法插入到输入框',
   'error.draftChanged': '输入框草稿已变化，未插入；请避免在插入期间编辑草稿',
@@ -211,7 +212,8 @@ const en: Record<string, string> = {
   'detail.collectionSummary': 'Collection: {name}',
   'detail.collectionCount': '{n} items',
   'detail.bibTitle': 'Bibliography (APA)',
-  'detail.noBib': 'Nothing citable here (bare PDF attachments produce no citation)',
+  'detail.noBib': 'Nothing citable here (notes and bare PDF attachments produce no citation)',
+  'detail.items': 'Items',
 
   'error.noEditor': 'This panel is not in a conversation context; cannot insert into the composer',
   'error.draftChanged': 'The draft changed; nothing was inserted. Avoid editing while inserting.',

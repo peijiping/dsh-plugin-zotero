@@ -83,6 +83,8 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
     detailLoading,
     detailError,
     collectionBib,
+    nodeItems,
+    nodeErrors,
     toast,
   } = usePaneState()
 
@@ -163,6 +165,9 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
       return collectionText(t, collection, data.items, data.total)
     }))
   }, [inputActions, report, t])
+
+  /** 分类详情里的条目列表：与左侧树共用同一份缓存（选中分类时树已按需拉取）。 */
+  const collectionItems = selectedCollection === null ? undefined : nodeItems[selectedCollection.key]
 
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, fontSize: 13 }}>
@@ -310,6 +315,26 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
                   ) : (
                     <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.7, opacity: 0.85 }}>{stripTags(collectionBib)}</p>
                   )}
+                </>
+              )}
+              {/* 笔记不产生 CSL 引用，靠这份列表让「笔记目录」也有内容可看可点。 */}
+              {collectionItems !== undefined && collectionItems.length > 0 && (
+                <>
+                  <h3 style={{ ...sectionTitleStyle, margin: '16px 0 6px' }}>{t('detail.items')}</h3>
+                  <div>
+                    {collectionItems.map((item) => (
+                      <div
+                        key={item.key}
+                        onClick={() => openItem(item.key)}
+                        style={resultRowStyle}
+                      >
+                        <span style={resultTitleStyle} title={item.title}>{item.title}</span>
+                        <span style={resultMetaStyle}>
+                          {[item.creators, item.year].filter((part) => part !== '').join(' · ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </>
               )}
             </div>
