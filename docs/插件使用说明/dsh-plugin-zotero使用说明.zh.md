@@ -142,27 +142,46 @@ curl -i http://127.0.0.1:23119/api/users/0/collections | head -1
 
 模型侧工具由**插件自己**桥接（`src/host/mcp-bridge.ts`）：直连本机 Zotero 集成 MCP（地址取自配置字段 `mcpUrl`，默认 `http://127.0.0.1:23120/mcp`），按配置里的 `disabledMcpTools` 过滤后，以 `mcp__zotero__<原始名>` 注册给模型。[cordis.patch.yml](../../cordis.patch.yml) **不再**插入 `@deepseek-ai/dsh-mcp-client` —— 官方 MCP 客户端不支持按工具开关，且同 `serverName` 会与自注册工具重名冲突。
 
-服务端细节见 [Zotero集成MCP服务参考.md](../Zotero文档/Zotero集成MCP服务参考.md)。本机实测为 `zotero-integrated-mcp v1.1.0`，暴露 **20 个工具**。
+服务端细节见 [Zotero集成MCP服务参考.md](../Zotero文档/Zotero集成MCP服务参考.md)。本机实测暴露 **25 个工具**。
 
 ### ⚠️ 权限边界：这些工具里有写操作
 
-人侧面板是只读的，**但桥接进来的模型工具不是**。20 个工具中包含 5 个改变文库结构的写工具：
+人侧面板是只读的，**但桥接进来的模型工具不是**。25 个工具中包含 10 个写工具：
 
 | 工具 | 作用 |
 |---|---|
+| `write_item` | 新建条目（`create`）/ 把本地文件导入为附件（`import`）/ 重挂附件（`reparent`） |
+| `write_note` | 新建 / 更新 / 追加笔记 |
+| `write_tag` | 加 / 删 / 替换标签 |
+| `write_metadata` | 改条目元数据字段与作者 |
+| `add_by_identifier` | 按 DOI / arXiv / ISBN / PMID 批量入库（走 Zotero 自带解析器） |
 | `create_collection` | 新建分类 |
 | `update_collection` | 改名 / 改父分类 |
 | `delete_collection` | **删除分类** |
 | `add_items_to_collection` | 把条目加进分类 |
 | `remove_items_from_collection` | 把条目移出分类 |
 
-也就是说，**模型可以在你不知情的情况下改动文库结构**。删分类与改归属是不可逆的结构变更（`delete_collection` 尤其在模型理解错分类名时危险）。
+也就是说，**模型可以在你不知情的情况下改动文库**。删分类与改归属是不可逆的结构变更（`delete_collection` 尤其在模型理解错分类名时危险）。
+
+### 为什么写操作要优先走 MCP
+
+这些写工具在 Zotero 进程内直接改库，不经过本地 API，**不会触发 Zotero 的「本地 API 授权」弹窗**。
+
+反过来说，如果让模型用 shell/curl 直接打 `127.0.0.1:23119` 的写接口，就必须先 `POST /api/local/authorize` 换 key，而这个端点有两个坑：
+
+1. **每次调用都会弹一次授权框**，它不会按应用名复用已有授权；
+2. 用户点「允许」拿到的 key 是**一次性**的，首个写请求就被 Zotero 删除；只有点「始终允许」才是长期 key。
+
+这就是「每写一次就要点一次允许」的根源。为此插件在 [mcp-bridge.ts](../../src/host/mcp-bridge.ts) 里给所有写工具的描述统一注入了「首选写通道」引导语，并把高频场景直接写进提示：
+
+- **导入本地文件挂到某条目下**：`write_item` + `action: "import"` + `filePath` + `parentItemKey`，一次调用完成；
+- **按 DOI / arXiv / ISBN / PMID 入库**：`add_by_identifier`，元数据由 Zotero 解析器生成，比手填准。
 
 建议：
 
 - 默认全开可以接受——多数调用是读工具，写工具偶尔很有用（比如「把刚找的文献收进 DRG 分类」）。
-- 想收紧成纯只读：在插件页配置卡的 **「MCP 工具」** 区把 5 个写工具的开关关掉并「保存」，模型侧立刻不再注册这些工具；面板功能不受影响。
-- 涉及 `delete_collection` 的请求，建议先让模型列出分类再确认，不要一句话让它删。
+- 想收紧成纯只读：在插件页配置卡的 **「MCP 工具」** 区把 10 个写工具的开关关掉并「保存」，模型侧立刻不再注册这些工具；面板功能不受影响。
+- 涉及 `delete_collection` / `remove_items_from_collection` 的请求，建议先让模型列出目标再确认，不要一句话让它删。
 
 ## 6. 插件页配置项
 

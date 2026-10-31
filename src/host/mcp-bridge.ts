@@ -42,11 +42,60 @@ function blocksToText(content: unknown): string {
     .join('\n')
 }
 
+/**
+ * 写工具判定：集成 MCP 里所有会改库的工具名都以这些动词开头
+ * （`write_item` / `create_collection` / `add_by_identifier` / `remove_items_from_collection` …）。
+ */
+const WRITE_TOOL_RE = /^(write|add|create|update|delete|remove)_/i
+
+/** 破坏性写工具：删除/移除类，需要额外的确认提示。 */
+const DESTRUCTIVE_TOOL_RE = /^(delete|remove)_/i
+
+/**
+ * 注入到写工具描述前面的引导语。
+ *
+ * 背景：Zotero 的本地 API（23119）写接口必须先用 `POST /api/local/authorize`
+ * 换一个 key，而该端点**每次调用都会弹授权框**、且不像应用名复用；模型若绕开
+ * MCP 手写 curl，就会每次写都让用户点一次「允许」。集成 MCP 的写工具在 Zotero
+ * 进程内直接改库，完全不触发这套授权，因此这里明确把 MCP 标成首选通道。
+ *
+ * 注意措辞是「优先」而不是「禁止」：集成 MCP 某些场景确实可能失败，必须给模型
+ * 留下降级空间，否则它会在报错后继续硬试或改用更糟的方式。
+ */
+const WRITE_PREFIX =
+  '[首选写通道] 本工具在 Zotero 进程内执行，不会触发本地 API 授权弹窗。写 Zotero 优先用它。' +
+  '仅当本工具不可用或调用失败时再考虑其他方式；不要直接用 shell/curl 访问 http://127.0.0.1:23119，' +
+  '那会每次都弹出「本地 API 授权」框让用户点允许。'
+
+/** 针对「导入本地文件挂到条目下」这一高频场景，直接点明参数组合，省得模型去猜。 */
+const WRITE_ITEM_HINT =
+  '「导入 PDF/文件并挂到某个条目下」用本工具：action=import、filePath=<文件绝对路径>、parentItemKey=<目标条目 key>，title 可选。'
+
+/** 按标识符入库优先走 Zotero 自带解析器，元数据比模型手填准确。 */
+const IDENTIFIER_HINT =
+  '「按 DOI/arXiv/ISBN/PMID 入库」优先用本工具，它调用 Zotero 自带的元数据解析器，比手填字段准确。'
+
+const DESTRUCTIVE_HINT =
+  '[破坏性写操作] 执行前必须先与用户确认要操作的具体条目/分类，不要凭推断批量删除或移除。'
+
+/** 在不改动上游对象的前提下，给写工具的描述拼上引导语。 */
+function descriptionFor(tool: McpToolInfo): string {
+  const parts: string[] = []
+  if (DESTRUCTIVE_TOOL_RE.test(tool.name)) parts.push(DESTRUCTIVE_HINT)
+  if (WRITE_TOOL_RE.test(tool.name)) parts.push(WRITE_PREFIX)
+  if (tool.name === 'write_item') parts.push(WRITE_ITEM_HINT)
+  if (tool.name === 'add_by_identifier') parts.push(IDENTIFIER_HINT)
+
+  const base = tool.description ?? ''
+  if (parts.length === 0) return base
+  return `${parts.join('\n\n')}\n\n${base}`
+}
+
 /** 由 MCP 工具造一条 dsh 工具定义（参数直接沿用上游 JSON Schema）。 */
 function definitionFor(tool: McpToolInfo): unknown {
   return {
     name: publicName(tool.name),
-    description: tool.description,
+    description: descriptionFor(tool),
     parameters: tool.parameters,
     output: {
       schema: {

@@ -21,7 +21,7 @@
 - **整理文库**：新建、重命名、移动、删除分类，批量把条目加入或移出分类。你说一句「把这几篇归到『待读』里」，它就照做。
 - **帮你入库**：把本地下载好的论文、PDF 交给 DSH 导入 Zotero；也可以让它读完外文文献后，把译文作为附件挂回条目。
 - **带进对话**：右侧面板单条目引用、全文划词摘录或整分类引用，一键写进当前会话草稿（不自动发送），你再接着说要求。
-- **安全可控**：浏览面板严格只读；模型能用的每一项工具都能单独开关，想彻底只读就把写操作关掉。
+- **安全可控**：浏览面板严格只读；模型能用的每一项工具都能单独开关，想彻底只读就把写操作关掉；写操作优先走集成 MCP，它在 Zotero 进程内直接执行，不触发本地 API 的授权弹窗。
 
 面板分三块：顶部状态栏显示连接状态并提供刷新；左侧分类树按分类浏览与搜索；右侧详情区展示正文与「参考文献 / 笔记 / 标注 / 附件」标签页。
 
@@ -234,11 +234,13 @@ dsh --profile demo                 # 启动
 
 ### 模型侧 MCP 与权限边界
 
-模型侧工具由**插件自己**桥接：[src/host/mcp-bridge.ts](src/host/mcp-bridge.ts) 直连本机 Zotero 集成 MCP（本机实测 `zotero-integrated-mcp v1.1.0`，暴露 20 个工具），按配置里的 `disabledMcpTools` 过滤后以 `mcp__zotero__*` 注册给模型。[cordis.patch.yml](cordis.patch.yml) **不再**插入 `@deepseek-ai/dsh-mcp-client` —— 它不支持按工具开关，且同 `serverName` 会与自注册工具重名冲突。
+模型侧工具由**插件自己**桥接：[src/host/mcp-bridge.ts](src/host/mcp-bridge.ts) 直连本机 Zotero 集成 MCP（本机实测暴露 25 个工具），按配置里的 `disabledMcpTools` 过滤后以 `mcp__zotero__*` 注册给模型。[cordis.patch.yml](cordis.patch.yml) **不再**插入 `@deepseek-ai/dsh-mcp-client` —— 它不支持按工具开关，且同 `serverName` 会与自注册工具重名冲突。
 
 ⚠️ 前提是 [Zotero 里已装好集成 MCP 插件](#1-安装-zotero-mcp-插件)（或改用其他 MCP 插件并在配置卡填对 `mcpUrl`），并且开启了「允许写操作」。插件未安装或服务未起时，模型侧工具全部不可用；插件装了但没开写操作时，读类工具正常，`create_collection` 等写工具会被插件拒绝（返回「写操作已禁用」），表现为让模型帮忙新建分类直接报错——此时到 MCP 插件设置里打开写操作并重试即可，无需重启 dsh。
 
-⚠️ 面板只读，**但模型侧工具不是**：20 个工具中含 5 个改变文库结构的写工具（`create_collection` / `update_collection` / `delete_collection` / `add_items_to_collection` / `remove_items_from_collection`）。想收紧为纯只读，直接在插件页配置卡的「MCP 工具」里关掉它们并保存即可；面板功能不受影响。
+⚠️ 面板只读，**但模型侧工具不是**：25 个工具中含 10 个写工具（`write_item` / `write_note` / `write_tag` / `write_metadata` / `add_by_identifier` / `create_collection` / `update_collection` / `delete_collection` / `add_items_to_collection` / `remove_items_from_collection`）。想收紧为纯只读，直接在插件页配置卡的「MCP 工具」里关掉它们并保存即可；面板功能不受影响。
+
+**写操作为什么优先走 MCP**：这些工具在 Zotero 进程内直接改库，不经过本地 API，因此**不会触发 Zotero 的「本地 API 授权」弹窗**。反过来，若让模型用 shell/curl 直接打 `127.0.0.1:23119` 的写接口，就必须先用 `POST /api/local/authorize` 换 key —— 该端点每次调用都会弹一次授权框，用户点「允许」拿到的 key 还是一次性的（首个写请求即被 Zotero 删除），这就是「每写一次就要点一次允许」的根源。为此插件在 [mcp-bridge.ts](src/host/mcp-bridge.ts) 里给所有写工具的描述统一注入了「首选写通道」引导语；「导入本地文件并挂到某条目下」用 `write_item` 的 `action: "import"` + `filePath` + `parentItemKey`，一条工具调用即可。
 
 ## 相关文档
 
