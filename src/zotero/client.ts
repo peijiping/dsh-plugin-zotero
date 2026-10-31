@@ -622,7 +622,23 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
     attachmentKey,
     content: truncated ? content.slice(0, maxBytes) : content,
     truncated,
+    fallback: false,
   }
+}
+
+/**
+ * 依次尝试候选附件的全文，返回第一份可用的。
+ *
+ * 条目常同时挂原文与中文译本：译本若尚未建索引（`/fulltext` 404），
+ * 不能直接判定整条无全文，应回退到原文等其他附件。
+ */
+async function getFirstFulltext(candidates: RawItem[]): Promise<ZoteroFulltext | null> {
+  const preferredKey = candidates[0]?.key ?? ''
+  for (const attachment of candidates) {
+    const fulltext = await getItemFulltext(attachment.key)
+    if (fulltext !== null) return { ...fulltext, fallback: attachment.key !== preferredKey }
+  }
+  return null
 }
 
 /** 单条条目的 CSL HTML（`format=bib`）；失败返回 null。 */
@@ -657,13 +673,17 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
   const childNotes = children.filter((c) => c.data?.itemType === 'note')
   const notes = (itemType === 'note' ? [raw] : childNotes).map(toNote)
 
-  const readable =
+  // 候选顺序：PDF 优先，其余附件随后；逐份尝试直到拿到全文。
+  const candidates =
     isAttachment
-      ? raw
-      : childAttachments.find((c) => c.data?.contentType === 'application/pdf') ?? childAttachments[0]
+      ? [raw]
+      : [
+          ...childAttachments.filter((c) => c.data?.contentType === 'application/pdf'),
+          ...childAttachments.filter((c) => c.data?.contentType !== 'application/pdf'),
+        ]
 
   const [fulltext, bib] = await Promise.all([
-    readable ? getItemFulltext(readable.key) : Promise.resolve(null),
+    getFirstFulltext(candidates),
     getItemBib(key, style),
   ])
 

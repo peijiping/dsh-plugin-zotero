@@ -496,6 +496,9 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
               </Button>
             )}
           </div>
+          {fulltext?.fallback === true && (
+            <p style={{ margin: '0 0 6px', opacity: 0.6, fontSize: 12 }}>{t('detail.fulltextFallback')}</p>
+          )}
           {!hasBody ? (
             <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noFulltext')}</p>
           ) : (

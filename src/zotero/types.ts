@@ -110,6 +110,8 @@ export interface ZoteroFulltext {
   attachmentKey: string
   content: string
   truncated: boolean
+  /** 首选附件没有全文索引，正文取自同条目的其他附件。 */
+  fallback: boolean
 }
 
 /** 探活结果。 */
