@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-zotero",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Install this plugin and DSH can operate your Zotero for you: search the library, read PDF full text, summarize highlights and notes, organize collections by topic, import your downloaded papers, and attach a translated version back to an item. The right sidebar also gains a Zotero library panel that brings an item, an excerpt or a whole collection into the conversation with one click.",
   "keywords": [
     "dsh",
