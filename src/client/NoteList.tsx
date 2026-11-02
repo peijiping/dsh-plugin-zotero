@@ -7,7 +7,7 @@
  * 这里直接以 `dangerouslySetInnerHTML` 渲染。
  *
  * 每条笔记默认折叠成一行标题（正文首段摘要），点击标题展开正文；
- * 行尾「引用」把该条笔记（正文纯文本）写进会话草稿。
+ * 行尾「引用」往会话输入框插一个笔记 chip，正文在提交那一刻才展开成文本。
  */
 
 import { useState, type ReactElement } from 'react'

@@ -74,6 +74,27 @@ export function annotationText(
   return lines.join('\n')
 }
 
+/** chip 标签里原文摘要的长度上限（字符，非字节）。 */
+const CHIP_LABEL_LIMIT = 40
+
+/**
+ * 标注 chip 的标签：原文摘要 + 页码。
+ *
+ * 标注没有标题字段，最能代表它的就是高亮那段原文；纯评论型标注退到评论。
+ * 两者都空时返回空串，由 chip 构造处兜底成标注 key。
+ */
+export function annotationChipLabel(t: Translate, annotation: ZoteroAnnotation): string {
+  const source = tidyAnnotation(annotation.text) || commentPlain(annotation.comment)
+  if (source === '') return ''
+  const chars = Array.from(source)
+  const summary = chars.length > CHIP_LABEL_LIMIT
+    ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…`
+    : source
+  return annotation.pageLabel === ''
+    ? summary
+    : `${summary}${tpl(t('cmp.annotation.pageTag'), { value: annotation.pageLabel })}`
+}
+
 /** 命名实体的最小集合（与 Host 清洗后的笔记 HTML 对齐）。 */
 const NAMED_ENTITIES: Record<string, string> = {
   nbsp: ' ',

@@ -18,7 +18,7 @@
 
 import type { Translate } from './locales'
 import type { InsertionSpan } from './inline'
-import { collectionCitation, itemCitation } from './cite'
+import { annotationCitation, collectionCitation, itemCitation, noteCitation } from './cite'
 
 /**
  * 写进 chip 的持久标识：一旦发布就不能改名，老草稿里的 chip 靠它找回 codec。
@@ -27,6 +27,11 @@ export const REF_SOURCE = 'zotero'
 
 const ITEM_PREFIX = 'item:'
 const COLLECTION_PREFIX = 'col:'
+const NOTE_PREFIX = 'note:'
+const ANNOTATION_PREFIX = 'ann:'
+
+/** 笔记 / 标注是子条目，单靠自身 key 取不到所属条目，ref 存「父 key/子 key」。 */
+const REF_SEPARATOR = '/'
 
 /** chip 的结构（宿主 ReferenceInsert 中本插件用到的部分）。 */
 export interface ReferenceInsert {
@@ -72,6 +77,10 @@ export interface ZoteroTriggerSource {
 export function citationForRef(t: Translate, ref: string, signal: AbortSignal): Promise<string> {
   if (ref.startsWith(ITEM_PREFIX)) return itemCitation(t, ref.slice(ITEM_PREFIX.length), signal)
   if (ref.startsWith(COLLECTION_PREFIX)) return collectionCitation(t, ref.slice(COLLECTION_PREFIX.length), signal)
+  if (ref.startsWith(NOTE_PREFIX)) return noteCitation(t, ref.slice(NOTE_PREFIX.length), signal)
+  if (ref.startsWith(ANNOTATION_PREFIX)) {
+    return annotationCitation(t, ref.slice(ANNOTATION_PREFIX.length), signal)
+  }
   return Promise.reject(new Error(`无法识别的 Zotero 引用：${ref}`))
 }
 
@@ -110,6 +119,26 @@ export function itemReference(key: string, title: string): ReferenceInsert {
 /** 一个目录的 chip。 */
 export function collectionReference(key: string, name: string): ReferenceInsert {
   return reference(COLLECTION_PREFIX, key, name, 'folder')
+}
+
+/** 子条目的 ref 前缀：`note:<父 key>/` 形式，后半段由 {@link reference} 拼上子 key。 */
+function childPrefix(prefix: string, parentKey: string): string {
+  return `${prefix}${parentKey}${REF_SEPARATOR}`
+}
+
+/**
+ * 一条笔记的 chip。
+ *
+ * `parentKey` 必须是面板当前条目的 key——独立笔记时它就是笔记自身，
+ * codec 用 `fetchItem(parentKey)` 复现笔记列表，与面板取数路径一致才找得到。
+ */
+export function noteReference(parentKey: string, noteKey: string, title: string): ReferenceInsert {
+  return reference(childPrefix(NOTE_PREFIX, parentKey), noteKey, title, 'file')
+}
+
+/** 一条标注（高亮 / 划线）的 chip。 */
+export function annotationReference(parentKey: string, annotationKey: string, label: string): ReferenceInsert {
+  return reference(childPrefix(ANNOTATION_PREFIX, parentKey), annotationKey, label, 'file')
 }
 
 /**

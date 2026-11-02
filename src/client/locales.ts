@@ -174,6 +174,7 @@ const zh: Record<string, string> = {
   'cmp.annotation.page': '页码：{value}',
   'cmp.annotation.comment': '批注：{value}',
   'cmp.annotation.key': '标注：{value}',
+  'cmp.annotation.pageTag': '（第 {value} 页）',
   'cmp.note.header': '【Zotero 笔记｜{title}｜{key}】',
   'cmp.note.truncated': '……（笔记正文已按长度截断）',
   'cmp.note.date': '更新：{value}',
@@ -195,6 +196,8 @@ const zh: Record<string, string> = {
   'cmp.collection.more': '……（仅列出前 {n} 条；完整清单可用 mcp__zotero__get_collection_items 获取）',
   'cmp.missing.item': '【Zotero 条目｜{key}】该条目已不在文库中，引用文本未能生成。',
   'cmp.missing.collection': '【Zotero 目录｜{key}】该目录已不存在，条目清单未能生成。',
+  'cmp.missing.note': '【Zotero 笔记｜{key}】该笔记已不在文库中，引用文本未能生成。',
+  'cmp.missing.annotation': '【Zotero 标注｜{key}】该标注已不在文库中，引用文本未能生成。',
 }
 
 const en: Record<string, string> = {
@@ -354,6 +357,7 @@ const en: Record<string, string> = {
   'cmp.annotation.page': 'Page: {value}',
   'cmp.annotation.comment': 'Comment: {value}',
   'cmp.annotation.key': 'Annotation: {value}',
+  'cmp.annotation.pageTag': ' (p. {value})',
   'cmp.note.header': '[Zotero note | {title} | {key}]',
   'cmp.note.truncated': '… (note body truncated by length)',
   'cmp.note.date': 'Updated: {value}',
@@ -375,6 +379,8 @@ const en: Record<string, string> = {
   'cmp.collection.more': '… (first {n} only; use mcp__zotero__get_collection_items for the full list)',
   'cmp.missing.item': '[Zotero item | {key}] this item is no longer in the library; citation text unavailable.',
   'cmp.missing.collection': '[Zotero collection | {key}] this collection no longer exists; item list unavailable.',
+  'cmp.missing.note': '[Zotero note | {key}] this note is no longer in the library; citation text unavailable.',
+  'cmp.missing.annotation': '[Zotero annotation | {key}] this annotation is no longer in the library; citation text unavailable.',
 }
 
 export const dicts = { zh, en }

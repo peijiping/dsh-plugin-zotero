@@ -47,9 +47,9 @@ interface Props {
   onInsertItem(): void
   /** 插入全文选区摘录。 */
   onInsertExcerpt(quote: string): void
-  /** 插入一条标注（原文 + 评论 + 页码）。 */
+  /** 插一条标注的引用 chip（chip 里是原文摘要，提交时展开为完整引用文本）。 */
   onInsertAnnotation(annotation: ZoteroAnnotation): void
-  /** 插入一条笔记（正文纯文本）。 */
+  /** 插一条笔记的引用 chip（提交时展开为笔记正文）。 */
   onInsertNote(note: ZoteroNote): void
   /** 点击附件行：以其 key 作为条目重新打开（附件条目自带全文）。 */
   onOpenItem(key: string): void

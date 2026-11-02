@@ -3,8 +3,8 @@
  *
  * 两栏之间是可拖动的分隔条（宽度存 localStorage，跨会话/重启都记住）。
  * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）。
- * 「添加到会话」走 ui-conversation 下发的会话级标准 prop：条目与整目录插引用
- * chip（见 reference.ts），摘录 / 标注 / 笔记仍是纯文本插入。
+ * 「添加到会话」走 ui-conversation 下发的会话级标准 prop：条目、整目录、笔记、
+ * 标注都插引用 chip（见 reference.ts），只有摘录仍插纯文本。
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
@@ -13,7 +13,7 @@ import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { CollectionTree } from './CollectionTree'
-import { annotationText, excerptText, noteText } from './compose'
+import { annotationChipLabel, excerptText } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import { insertBuilt } from './inline'
 import { ItemDetail } from './ItemDetail'
@@ -21,7 +21,7 @@ import { ItemTypeIcon } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ReferenceInsert, SessionsFace } from './reference'
-import { collectionReference, insertChip, itemReference } from './reference'
+import { annotationReference, collectionReference, insertChip, itemReference, noteReference } from './reference'
 import { sectionTitleStyle } from './styles'
 import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
@@ -157,16 +157,20 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
     report(await insertBuilt(inputActions, () => excerptText(t, target, quote)))
   }, [inputActions, report, t])
 
-  const insertAnnotation = useCallback(async (
+  const insertAnnotation = useCallback((
     target: ZoteroItemDetail,
     annotation: ZoteroAnnotation,
-  ): Promise<void> => {
-    report(await insertBuilt(inputActions, () => annotationText(t, target, annotation)))
-  }, [inputActions, report, t])
+  ): void => {
+    insertReference(annotationReference(
+      target.key,
+      annotation.key,
+      annotationChipLabel(t, annotation),
+    ))
+  }, [insertReference, t])
 
-  const insertNote = useCallback(async (target: ZoteroItemDetail, note: ZoteroNote): Promise<void> => {
-    report(await insertBuilt(inputActions, () => noteText(t, target, note)))
-  }, [inputActions, report, t])
+  const insertNote = useCallback((target: ZoteroItemDetail, note: ZoteroNote): void => {
+    insertReference(noteReference(target.key, note.key, note.title))
+  }, [insertReference])
 
   const insertCollection = useCallback((collection: ZoteroCollection): void => {
     insertReference(collectionReference(collection.key, collection.name))
@@ -300,8 +304,8 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
                 detail={detail}
                 onInsertItem={() => insertItem(detail.key, detail.title)}
                 onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
-                onInsertAnnotation={(annotation) => void insertAnnotation(detail, annotation)}
-                onInsertNote={(note) => void insertNote(detail, note)}
+                onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
+                onInsertNote={(note) => insertNote(detail, note)}
                 onOpenItem={openItem}
               />
             )
