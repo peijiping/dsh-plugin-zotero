@@ -19,7 +19,7 @@ import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zo
 import { ItemTypeIcon } from './itemType'
 import type { Translate } from './locales'
 import { expandTreeNode, retryNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
-import { isRead, itemTooltip, ReadDot, readTitleStyle } from './readState'
+import { isRead, itemTooltip, readTitleStyle } from './readState'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -270,8 +270,7 @@ function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; 
           style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedItemKey === item.key) }}
         >
           <span style={iconBox} />
-          <span style={iconBox}><ItemTypeIcon itemType={item.itemType} /></span>
-          <ReadDot read={read} />
+          <span style={iconBox}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
           <span style={{ ...titleStyle, ...readTitleStyle(read) }}>{item.title}</span>
           {meta !== '' && <span style={metaStyle}>{meta}</span>}
         </div>

@@ -24,7 +24,7 @@ import type { ReferenceInsert, SessionsFace } from './reference'
 import { collectionReference, insertChip, itemReference } from './reference'
 import { sectionTitleStyle } from './styles'
 import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState } from './paneStore'
-import { isRead, itemTooltip, ReadDot, readTitleStyle } from './readState'
+import { isRead, itemTooltip, readTitleStyle } from './readState'
 
 /** 左栏宽度的存储键与取值范围。 */
 const TREE_WIDTH_KEY = 'dsh-plugin-zotero.treeWidth'
@@ -232,8 +232,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
                         onClick={() => openItem(item.key)}
                         style={{ ...resultRowStyle, background: selectedItemKey === item.key ? 'rgba(127,127,127,0.16)' : 'transparent' }}
                       >
-                        <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} /></span>
-                        <ReadDot read={read} />
+                        <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
                         <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
                         <span style={resultMetaStyle}>{[item.creators, item.year].filter((p) => p !== '').join(' · ')}</span>
                       </div>
@@ -343,8 +342,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
                           onClick={() => openItem(item.key)}
                           style={resultRowStyle}
                         >
-                          <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} /></span>
-                          <ReadDot read={read} />
+                          <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
                           <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
                           <span style={resultMetaStyle}>
                             {[item.creators, item.year].filter((part) => part !== '').join(' · ')}

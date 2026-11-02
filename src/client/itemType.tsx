@@ -89,8 +89,11 @@ const PATH: Record<IconFamily, string> = {
   attachment: 'M9.6 3.5 4.9 8.2a1.9 1.9 0 0 0 2.7 2.7l4.7-4.7a3 3 0 0 0-4.2-4.2L3.4 6.7a4.2 4.2 0 0 0 5.9 5.9l1.2-1.2',
 }
 
-/** 条目类型图标；未知类型显示文档图标。 */
-export function ItemTypeIcon({ itemType }: { itemType: string }): ReactElement {
+/** 已读图标的粉色：不用主题蓝，蓝色容易被读成「未读消息」徽标。 */
+const READ_ICON_COLOR = '#e8798d'
+
+/** 条目类型图标；未知类型显示文档图标，已读条目整体转粉色。 */
+export function ItemTypeIcon({ itemType, read = false }: { itemType: string; read?: boolean }): ReactElement {
   const family = FAMILY[itemType] ?? 'document'
   return (
     <svg
@@ -102,7 +105,7 @@ export function ItemTypeIcon({ itemType }: { itemType: string }): ReactElement {
       strokeWidth={1.3}
       strokeLinejoin="round"
       strokeLinecap="round"
-      style={{ opacity: 0.65 }}
+      style={{ opacity: read ? 0.9 : 0.65, color: read ? READ_ICON_COLOR : undefined }}
       aria-hidden
     >
       <path d={PATH[family]} />
