@@ -17,7 +17,7 @@ import type {
 } from '../zotero/types'
 
 /** 整目录插入时最多列出多少条（完整清单交给模型的 MCP 工具）。 */
-const COLLECTION_PREVIEW_LIMIT = 50
+export const COLLECTION_PREVIEW_LIMIT = 50
 
 function line(t: Translate, key: string, value: string): string {
   return tpl(t(key), { value })

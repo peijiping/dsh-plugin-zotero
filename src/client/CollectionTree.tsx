@@ -18,6 +18,7 @@ import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zotero/types'
 import type { Translate } from './locales'
 import { expandTreeNode, retryNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
+import { isRead, itemTooltip, ReadDot, readTitleStyle } from './readState'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -66,7 +67,8 @@ interface TreeCtx {
   /** 行内「重试」：重新拉取该节点条目。 */
   retry(nodeId: string): void
   onSelectItem(key: string): void
-  onInsertItem(key: string): void
+  /** chip 的 label 用标题，故整条摘要传出去。 */
+  onInsertItem(item: ZoteroItemSummary): void
   onInsertCollection(collection: ZoteroCollection): void
 }
 
@@ -77,7 +79,7 @@ interface Props {
   selectedCollectionKey: string | null
   onSelectItem(key: string): void
   onSelectCollection(collection: ZoteroCollection): void
-  onInsertItem(key: string): void
+  onInsertItem(item: ZoteroItemSummary): void
   onInsertCollection(collection: ZoteroCollection): void
 }
 
@@ -245,19 +247,21 @@ function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): R
 function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; depth: number }): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
   const meta = [item.creators, item.year].filter((part) => part !== '').join(' · ')
+  const read = isRead(item)
   return (
     <Menu
       open={menuOpen}
       onClose={() => setMenuOpen(false)}
       onSelect={(id) => {
         setMenuOpen(false)
-        if (id === 'insert-item') ctx.onInsertItem(item.key)
+        if (id === 'insert-item') ctx.onInsertItem(item)
       }}
       align="end"
       portal
       items={[{ id: 'insert-item', label: ctx.t('action.insertItem') }]}
       anchor={(
         <div
+          title={itemTooltip(ctx.t, item)}
           onClick={() => ctx.onSelectItem(item.key)}
           onContextMenu={(event) => {
             event.preventDefault()
@@ -267,7 +271,8 @@ function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; 
         >
           <span style={iconBox} />
           <span style={iconBox}>{glyph(ITEM_ICON)}</span>
-          <span style={titleStyle} title={item.title}>{item.title}</span>
+          <ReadDot read={read} />
+          <span style={{ ...titleStyle, ...readTitleStyle(read) }}>{item.title}</span>
           {meta !== '' && <span style={metaStyle}>{meta}</span>}
         </div>
       )}

@@ -2,8 +2,9 @@
  * 右侧栏面板容器：头部状态栏 + 左分类树 + 右详情。
  *
  * 两栏之间是可拖动的分隔条（宽度存 localStorage，跨会话/重启都记住）。
- * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）；
- * 「添加到会话」通过 ui-conversation 下发的会话级标准 prop `inputActions` 完成。
+ * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）。
+ * 「添加到会话」走 ui-conversation 下发的会话级标准 prop：条目与整目录插引用
+ * chip（见 reference.ts），摘录 / 标注 / 笔记仍是纯文本插入。
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
@@ -11,19 +12,18 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
-import { fetchItem, fetchItems } from './api'
 import { CollectionTree } from './CollectionTree'
-import { annotationText, collectionText, excerptText, itemText, noteText } from './compose'
+import { annotationText, excerptText, noteText } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import { insertBuilt } from './inline'
 import { ItemDetail } from './ItemDetail'
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import type { ReferenceInsert, SessionsFace } from './reference'
+import { collectionReference, insertChip, itemReference } from './reference'
 import { sectionTitleStyle } from './styles'
 import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState } from './paneStore'
-
-/** 整目录插入时拉取的条目数（与 compose 的预览上限一致）。 */
-const COLLECTION_PREVIEW_LIMIT = 50
+import { isRead, itemTooltip, ReadDot, readTitleStyle } from './readState'
 
 /** 左栏宽度的存储键与取值范围。 */
 const TREE_WIDTH_KEY = 'dsh-plugin-zotero.treeWidth'
@@ -45,6 +45,10 @@ interface Props {
   t: Translate
   /** ui-conversation 下发的会话级操作集；不在会话上下文时为 undefined。 */
   inputActions?: InputActions
+  /** 会话作用域入口（插 chip 用），由入口闭包根 ctx 的 `sessions` 下发。 */
+  sessions: SessionsFace
+  /** 当前会话 id；chip 只认它自己那一个会话的输入框。 */
+  sessionId?: string
 }
 
 function stripTags(html: string): string {
@@ -68,7 +72,7 @@ function StatusDot({ ok, label }: { ok: boolean; label: string }): ReactElement 
   )
 }
 
-export function ZoteroPane({ t, inputActions }: Props): ReactElement {
+export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): ReactElement {
   const {
     health,
     libraryName,
@@ -133,12 +137,20 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
     else showToast(t('error.draftChanged'))
   }, [t])
 
-  const insertItem = useCallback(async (key: string): Promise<void> => {
-    report(await insertBuilt(inputActions, async () => {
-      const target = detail !== null && detail.key === key ? detail : await fetchItem(key)
-      return itemText(t, target)
-    }))
-  }, [detail, inputActions, report, t])
+  /**
+   * 插一个引用 chip：草稿里只留 key，完整文本在提交那一刻由引用源的 codec 现取。
+   */
+  const insertReference = useCallback((reference: ReferenceInsert): void => {
+    if (!inputActions) {
+      report('no-editor')
+      return
+    }
+    report(insertChip(sessions, sessionId, reference, inputActions.captureInsertion()) ? 'inserted' : 'draft-changed')
+  }, [inputActions, report, sessionId, sessions])
+
+  const insertItem = useCallback((key: string, title: string): void => {
+    insertReference(itemReference(key, title))
+  }, [insertReference])
 
   const insertExcerpt = useCallback(async (target: ZoteroItemDetail, quote: string): Promise<void> => {
     report(await insertBuilt(inputActions, () => excerptText(t, target, quote)))
@@ -155,16 +167,9 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
     report(await insertBuilt(inputActions, () => noteText(t, target, note)))
   }, [inputActions, report, t])
 
-  const insertCollection = useCallback(async (collection: ZoteroCollection): Promise<void> => {
-    report(await insertBuilt(inputActions, async () => {
-      const data = await fetchItems({
-        scope: collection.scope,
-        collectionKey: collection.scope === undefined ? collection.key : undefined,
-        limit: COLLECTION_PREVIEW_LIMIT,
-      })
-      return collectionText(t, collection, data.items, data.total)
-    }))
-  }, [inputActions, report, t])
+  const insertCollection = useCallback((collection: ZoteroCollection): void => {
+    insertReference(collectionReference(collection.key, collection.name))
+  }, [insertReference])
 
   /** 分类详情里的条目列表：与左侧树共用同一份缓存（选中分类时树已按需拉取）。 */
   const collectionItems = selectedCollection === null ? undefined : nodeItems[selectedCollection.key]
@@ -217,16 +222,21 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
                 <div style={hintStyle}>{t('tree.empty')}</div>
               ) : (
                 <div style={{ padding: '8px 6px' }}>
-                  {results.map((item) => (
-                    <div
-                      key={item.key}
-                      onClick={() => openItem(item.key)}
-                      style={{ ...resultRowStyle, background: selectedItemKey === item.key ? 'rgba(127,127,127,0.16)' : 'transparent' }}
-                    >
-                      <span style={resultTitleStyle} title={item.title}>{item.title}</span>
-                      <span style={resultMetaStyle}>{[item.creators, item.year].filter((p) => p !== '').join(' · ')}</span>
-                    </div>
-                  ))}
+                  {results.map((item) => {
+                    const read = isRead(item)
+                    return (
+                      <div
+                        key={item.key}
+                        title={itemTooltip(t, item)}
+                        onClick={() => openItem(item.key)}
+                        style={{ ...resultRowStyle, background: selectedItemKey === item.key ? 'rgba(127,127,127,0.16)' : 'transparent' }}
+                      >
+                        <ReadDot read={read} />
+                        <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
+                        <span style={resultMetaStyle}>{[item.creators, item.year].filter((p) => p !== '').join(' · ')}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               )
             ) : (
@@ -237,8 +247,8 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
                 selectedCollectionKey={selectedCollection?.key ?? null}
                 onSelectItem={openItem}
                 onSelectCollection={selectCollection}
-                onInsertItem={(key) => void insertItem(key)}
-                onInsertCollection={(collection) => void insertCollection(collection)}
+                onInsertItem={(item) => insertItem(item.key, item.title)}
+                onInsertCollection={insertCollection}
               />
             )}
           </div>
@@ -287,7 +297,7 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
               <ItemDetail
                 t={t}
                 detail={detail}
-                onInsertItem={() => void insertItem(detail.key)}
+                onInsertItem={() => insertItem(detail.key, detail.title)}
                 onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
                 onInsertAnnotation={(annotation) => void insertAnnotation(detail, annotation)}
                 onInsertNote={(note) => void insertNote(detail, note)}
@@ -302,7 +312,7 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
                   {tpl(t('detail.collectionCount'), { n: selectedCollection.itemCount })}
                 </p>
               )}
-              <Button variant="outline" size="sm" onClick={() => void insertCollection(selectedCollection)}>
+              <Button variant="outline" size="sm" onClick={() => insertCollection(selectedCollection)}>
                 {t('action.insertCollection')}
               </Button>
               {selectedCollection.scope === undefined && (
@@ -322,18 +332,23 @@ export function ZoteroPane({ t, inputActions }: Props): ReactElement {
                 <>
                   <h3 style={{ ...sectionTitleStyle, margin: '16px 0 6px' }}>{t('detail.items')}</h3>
                   <div>
-                    {collectionItems.map((item) => (
-                      <div
-                        key={item.key}
-                        onClick={() => openItem(item.key)}
-                        style={resultRowStyle}
-                      >
-                        <span style={resultTitleStyle} title={item.title}>{item.title}</span>
-                        <span style={resultMetaStyle}>
-                          {[item.creators, item.year].filter((part) => part !== '').join(' · ')}
-                        </span>
-                      </div>
-                    ))}
+                    {collectionItems.map((item) => {
+                      const read = isRead(item)
+                      return (
+                        <div
+                          key={item.key}
+                          title={itemTooltip(t, item)}
+                          onClick={() => openItem(item.key)}
+                          style={resultRowStyle}
+                        >
+                          <ReadDot read={read} />
+                          <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
+                          <span style={resultMetaStyle}>
+                            {[item.creators, item.year].filter((part) => part !== '').join(' · ')}
+                          </span>
+                        </div>
+                      )
+                    })}
                   </div>
                 </>
               )}

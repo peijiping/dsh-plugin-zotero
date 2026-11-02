@@ -34,6 +34,11 @@ export interface ZoteroItemSummary {
   itemType: string
   /** 是否有可读附件（决定详情里能否取全文）。 */
   hasAttachment: boolean
+  /**
+   * 子附件里最晚的阅读时间（Unix **秒**），与 Zotero 原生 `getItemLastRead()` 一致；
+   * `null` 表示从未读过。Zotero 不记录读到第几页，只有这一个「读过没有」的信号。
+   */
+  lastRead: number | null
 }
 
 /** 条目下的一个附件。 */

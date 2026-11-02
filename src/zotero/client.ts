@@ -76,6 +76,8 @@ interface RawItemData {
   note?: string
   /** 标注所属附件，仅 `itemType === 'annotation'` 有。 */
   parentItem?: string | false
+  /** 附件最后阅读时间（Unix 秒）；本地 API 在附件 JSON 里直接给出。 */
+  lastRead?: number
   annotationType?: string
   annotationText?: string
   annotationComment?: string
@@ -280,7 +282,7 @@ function toNote(raw: RawItem): ZoteroNote {
   }
 }
 
-function toSummary(raw: RawItem): ZoteroItemSummary {
+function toSummary(raw: RawItem, lastRead: number | null): ZoteroItemSummary {
   const data = raw.data ?? {}
   const itemType = data.itemType ?? ''
   const hasAttachment = itemType === 'attachment'
@@ -300,7 +302,24 @@ function toSummary(raw: RawItem): ZoteroItemSummary {
     year: yearOf(raw.meta, data),
     itemType,
     hasAttachment,
+    lastRead,
   }
+}
+
+/** 附件自己的 `lastRead` 就在它的 JSON 里，笔记没有，其余条目去问子附件。 */
+function lastReadOf(raw: RawItem): Promise<number | null> {
+  const data = raw.data ?? {}
+  if (data.itemType === 'attachment') {
+    const value = data.lastRead
+    return Promise.resolve(typeof value === 'number' && value > 0 ? value : null)
+  }
+  if (data.itemType === 'note') return Promise.resolve(null)
+  return itemLastRead(raw.key)
+}
+
+/** 列表归一化：已读状态并发取，单条失败按未读（不拖垮整页）。 */
+async function toSummaries(raws: RawItem[]): Promise<ZoteroItemSummary[]> {
+  return Promise.all(raws.map(async (raw) => toSummary(raw, await lastReadOf(raw))))
 }
 
 /** 从库名 `library.name` 或条目数据里取文库名（缺省回退）。 */
@@ -491,6 +510,49 @@ const UNFILED_SCAN_MAX = 1000
 /** 一页扫描条数（本地 API 上限 100）。 */
 const PAGE_SIZE = 100
 
+// ---- 已读状态 ---------------------------------------------------------------
+
+/** 已读状态缓存时长：`lastRead` 由 Zotero 阅读器写入，分钟级刷新足够。 */
+const READ_STATE_TTL_MS = 60_000
+
+/** 单条已读状态缓存的上限；超了就整体丢弃（重新查一遍即可）。 */
+const READ_STATE_CACHE_MAX = 5000
+
+interface ReadStateEntry {
+  at: number
+  lastRead: number | null
+}
+
+const readStateCache = new Map<string, ReadStateEntry>()
+
+/**
+ * 条目（父条目）的最晚阅读时间（Unix 秒），`null` 表示没读过。
+ *
+ * 已读状态只记在附件上，父条目要问它的子附件（原生 `getItemLastRead()` 同理）。
+ * 按条目查而不是扫全库：单条约 6ms，只查当前列表里的条目，大口库也不会卡。
+ * 取不到按未读处理——已读标志是附加信息，不能拖垮条目列表。
+ */
+async function itemLastRead(key: string): Promise<number | null> {
+  const cached = readStateCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < READ_STATE_TTL_MS) return cached.lastRead
+  try {
+    const { body } = await requestJson<RawItem[]>(
+      `${libraryBase()}/items/${encode(key)}/children?itemType=attachment`,
+    )
+    let lastRead: number | null = null
+    for (const child of Array.isArray(body) ? body : []) {
+      const value = child.data?.lastRead
+      if (typeof value !== 'number' || value <= 0) continue
+      if (lastRead === null || value > lastRead) lastRead = value
+    }
+    if (readStateCache.size >= READ_STATE_CACHE_MAX) readStateCache.clear()
+    readStateCache.set(key, { at: Date.now(), lastRead })
+    return lastRead
+  } catch {
+    return null
+  }
+}
+
 /** 把 options 折成「顶层条目」端点基址 + 查询参数。 */
 function itemListQuery(options: ListItemsOptions): { base: string; params: URLSearchParams } {
   const base =
@@ -517,18 +579,19 @@ async function listUnfiled(
   offset: number,
   limit: number,
 ): Promise<{ total: number; items: ZoteroItemSummary[] }> {
-  const all: ZoteroItemSummary[] = []
+  const all: RawItem[] = []
   for (let start = 0; start < UNFILED_SCAN_MAX; start += PAGE_SIZE) {
     const { body } = await requestJson<RawItem[]>(
       `${libraryBase()}/items/top?limit=${PAGE_SIZE}&start=${start}`,
     )
     if (!Array.isArray(body) || body.length === 0) break
     for (const raw of body) {
-      if ((raw.data?.collections ?? []).length === 0) all.push(toSummary(raw))
+      if ((raw.data?.collections ?? []).length === 0) all.push(raw)
     }
     if (body.length < PAGE_SIZE) break
   }
-  return { total: all.length, items: all.slice(offset, offset + limit) }
+  const page = all.slice(offset, offset + limit)
+  return { total: all.length, items: await toSummaries(page) }
 }
 
 /** 顶层条目列表（按虚拟分类、真实分类、或全库，或关键字搜索）。 */
@@ -539,8 +602,8 @@ export async function listItems(
 
   const { base, params } = itemListQuery(options)
   const { body, total } = await requestJson<RawItem[]>(`${base}?${params.toString()}`)
-  const items = Array.isArray(body) ? body.map(toSummary) : []
-  return { total: total ?? items.length, items }
+  const raws = Array.isArray(body) ? body : []
+  return { total: total ?? raws.length, items: await toSummaries(raws) }
 }
 
 /** 子条目（附件 / 笔记）。 */

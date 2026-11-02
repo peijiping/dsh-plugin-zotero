@@ -36,6 +36,8 @@ const zh: Record<string, string> = {
   'status.mcpOff': '模型工具不可用',
   'status.loading': '加载中…',
 
+  'item.lastRead': '最后阅读：{date}',
+
   'tree.library': '我的文库',
   'tree.publications': '我的出版物',
   'tree.unfiled': '未分类条目',
@@ -148,6 +150,8 @@ const zh: Record<string, string> = {
   'cmp.collection.header': '【Zotero 目录｜{name}｜{key}】共 {n} 条',
   'cmp.collection.line': '- {title}（{meta}）',
   'cmp.collection.more': '……（仅列出前 {n} 条；完整清单可用 mcp__zotero__get_collection_items 获取）',
+  'cmp.missing.item': '【Zotero 条目｜{key}】该条目已不在文库中，引用文本未能生成。',
+  'cmp.missing.collection': '【Zotero 目录｜{key}】该目录已不存在，条目清单未能生成。',
 }
 
 const en: Record<string, string> = {
@@ -168,6 +172,8 @@ const en: Record<string, string> = {
   'status.mcpOn': 'Model tools available',
   'status.mcpOff': 'Model tools unavailable',
   'status.loading': 'Loading…',
+
+  'item.lastRead': 'Last read: {date}',
 
   'tree.library': 'My Library',
   'tree.publications': 'My Publications',
@@ -281,6 +287,8 @@ const en: Record<string, string> = {
   'cmp.collection.header': '[Zotero collection | {name} | {key}] {n} items',
   'cmp.collection.line': '- {title} ({meta})',
   'cmp.collection.more': '… (first {n} only; use mcp__zotero__get_collection_items for the full list)',
+  'cmp.missing.item': '[Zotero item | {key}] this item is no longer in the library; citation text unavailable.',
+  'cmp.missing.collection': '[Zotero collection | {key}] this collection no longer exists; item list unavailable.',
 }
 
 export const dicts = { zh, en }

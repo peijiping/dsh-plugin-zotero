@@ -37,10 +37,10 @@ function buildUrl(action: string, query: Query = {}): string {
   return `${BASE}/${action}${search === '' ? '' : `?${search}`}`
 }
 
-async function get<T>(action: string, query: Query = {}): Promise<T> {
+async function get<T>(action: string, query: Query = {}, signal?: AbortSignal): Promise<T> {
   let res: Response
   try {
-    res = await fetch(buildUrl(action, query))
+    res = await fetch(buildUrl(action, query), { signal })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new ApiFailure('network_error', `无法访问 Host 端点：${message}`)
@@ -58,8 +58,8 @@ export function fetchHealth(): Promise<ZoteroHealth> {
   return get<ZoteroHealth>('health')
 }
 
-export function fetchTree(): Promise<ZoteroTree> {
-  return get<ZoteroTree>('tree')
+export function fetchTree(signal?: AbortSignal): Promise<ZoteroTree> {
+  return get<ZoteroTree>('tree', {}, signal)
 }
 
 export function fetchItems(
@@ -70,12 +70,13 @@ export function fetchItems(
     limit?: number
     offset?: number
   } = {},
+  signal?: AbortSignal,
 ): Promise<ZoteroItems> {
-  return get<ZoteroItems>('items', query)
+  return get<ZoteroItems>('items', query, signal)
 }
 
-export function fetchItem(key: string, style = 'apa'): Promise<ZoteroItemDetail> {
-  return get<ZoteroItemDetail>('item', { key, style })
+export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Promise<ZoteroItemDetail> {
+  return get<ZoteroItemDetail>('item', { key, style }, signal)
 }
 
 export function fetchCollectionBib(key: string, style = 'apa'): Promise<ZoteroCollectionBib> {

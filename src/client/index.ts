@@ -3,7 +3,11 @@
  *
  * 在右侧栏注册一个「页」类型 tab（不给 patterns，走 guide 入口），并把面板
  * 正文注册到 `sidebar.right.pane.tab` 席位。会话级标准 prop `inputActions`
- * 由 ui-conversation 通过 `uiSession.provide` 下发，随槽位作用域透传给正文。
+ * （ui-conversation 下发）与 `sessionId`（ui-session 下发）随槽位作用域透传给
+ * 正文。
+ *
+ * 同时注册一个 Zotero 引用源（见 reference.ts）：面板插的引用 chip 靠它的 codec
+ * 在提交时展开成模型文本。它不进 `@` 菜单（候选恒空）。
  *
  * 注意：cordis 的对象式 inject 是「拦截 config」，不是 {required,optional}，
  * 因此这里用数组式 inject。
@@ -14,6 +18,7 @@ import { createElement, type ComponentType, type ReactElement } from 'react'
 import type { InputActions } from './inline'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
+import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { ZoteroCard, ZoteroCardController, ROW_CONFIG_KEY, ROW_ID } from './ZoteroCard'
 import { ZoteroPane } from './ZoteroPane'
 
@@ -62,19 +67,27 @@ interface ConfigFormsService {
   ): () => void
 }
 
+/** 引用源注册服务（由 `@deepseek-ai/dsh-client-ui-input-trigger` 提供）。 */
+interface InputTriggersService {
+  /** 注册一个触发源；同名（trigger + name）重复注册会抛，故必须走 effect disposer。 */
+  registerSource(source: ZoteroTriggerSource): () => void
+}
+
 interface ClientContext {
   effect(callback: () => unknown, label?: string): void
   locale: LocaleService
   slots: SlotsService
   sidebarRightTabs: SidebarRightTabsService
   configForms: ConfigFormsService
+  inputTriggers: InputTriggersService
+  sessions: SessionsFace
 }
 
 /** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
 const TAB_ID = 'zotero'
 
 export const name = 'dsh-plugin-zotero'
-export const inject = ['slots', 'locale', 'sidebarRightTabs', 'configForms']
+export const inject = ['slots', 'locale', 'sidebarRightTabs', 'configForms', 'inputTriggers', 'sessions']
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-zotero: dictionaries')
@@ -95,10 +108,21 @@ export function apply(ctx: ClientContext): void {
     'dsh-plugin-zotero: sidebar tab',
   )
 
-  // 正文：把 t 闭包进来，并把槽位透传的会话级标准 prop `inputActions` 取出来
-  // 交给面板（面板不在会话上下文时该 prop 为 undefined）。
-  const Body = (props: { inputActions?: InputActions }): ReactElement =>
-    createElement(ZoteroPane, { t, inputActions: props.inputActions })
+  // 引用 chip 的展开器：面板插的 chip 只带 key，提交时由这个 codec 现取文本。
+  ctx.effect(
+    () => ctx.inputTriggers.registerSource(createZoteroSource(t)),
+    'dsh-plugin-zotero: reference codec',
+  )
+
+  // 正文：把 t 闭包进来，并把槽位透传的会话级标准 prop（`inputActions` /
+  // `sessionId`）交给面板；两者缺失都表示面板不在会话上下文。
+  const Body = (props: { inputActions?: InputActions; sessionId?: string }): ReactElement =>
+    createElement(ZoteroPane, {
+      t,
+      sessions: ctx.sessions,
+      inputActions: props.inputActions,
+      sessionId: props.sessionId,
+    })
 
   ctx.effect(
     () => ctx.slots.register(
