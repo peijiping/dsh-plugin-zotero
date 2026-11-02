@@ -9,6 +9,7 @@
 import type { CSSProperties, ReactElement } from 'react'
 
 import type { ZoteroItemSummary } from '../zotero/types'
+import { itemTypeLabel } from './itemType'
 import { tpl, type Translate } from './locales'
 
 /**
@@ -50,9 +51,14 @@ export function readTitleStyle(read: boolean): CSSProperties {
   return read ? { opacity: READ_TITLE_OPACITY } : {}
 }
 
-/** 行内 hover 提示：读过的在标题后补一行最后阅读时间。 */
+/** 行内 hover 提示：类型、读过的补一行最后阅读时间。 */
 export function itemTooltip(t: Translate, item: ZoteroItemSummary): string {
-  if (item.lastRead === null) return item.title
-  const date = new Date(item.lastRead * 1000).toLocaleDateString()
-  return `${item.title}\n${tpl(t('item.lastRead'), { date })}`
+  const lines = [item.title]
+  const type = itemTypeLabel(t, item.itemType)
+  if (type !== '') lines.push(tpl(t('item.type'), { type }))
+  if (item.lastRead !== null) {
+    const date = new Date(item.lastRead * 1000).toLocaleDateString()
+    lines.push(tpl(t('item.lastRead'), { date }))
+  }
+  return lines.join('\n')
 }

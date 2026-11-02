@@ -17,6 +17,7 @@ import { annotationText, excerptText, noteText } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import { insertBuilt } from './inline'
 import { ItemDetail } from './ItemDetail'
+import { ItemTypeIcon } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ReferenceInsert, SessionsFace } from './reference'
@@ -231,6 +232,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
                         onClick={() => openItem(item.key)}
                         style={{ ...resultRowStyle, background: selectedItemKey === item.key ? 'rgba(127,127,127,0.16)' : 'transparent' }}
                       >
+                        <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} /></span>
                         <ReadDot read={read} />
                         <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
                         <span style={resultMetaStyle}>{[item.creators, item.year].filter((p) => p !== '').join(' · ')}</span>
@@ -341,6 +343,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
                           onClick={() => openItem(item.key)}
                           style={resultRowStyle}
                         >
+                          <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} /></span>
                           <ReadDot read={read} />
                           <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
                           <span style={resultMetaStyle}>
@@ -403,3 +406,6 @@ const resultTitleStyle: React.CSSProperties = {
 }
 
 const resultMetaStyle: React.CSSProperties = { ...resultTitleStyle, flex: '0 0 auto', maxWidth: '48%', opacity: 0.5, fontSize: 11.5 }
+
+/** 列表行首的类型图标：基线对齐的行里改为垂直居中。 */
+const itemIconStyle: React.CSSProperties = { display: 'flex', alignSelf: 'center', flexShrink: 0 }

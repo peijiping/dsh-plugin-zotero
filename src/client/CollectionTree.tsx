@@ -16,6 +16,7 @@ import { useState, type ReactElement, type ReactNode } from 'react'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zotero/types'
+import { ItemTypeIcon } from './itemType'
 import type { Translate } from './locales'
 import { expandTreeNode, retryNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
 import { isRead, itemTooltip, ReadDot, readTitleStyle } from './readState'
@@ -103,7 +104,6 @@ function glyph(path: string): ReactNode {
 }
 
 const FOLDER_ICON = 'M2.5 12.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z'
-const ITEM_ICON = 'M4.5 2.5h5L12 5v8.5H4.5zM9.5 2.5V5H12'
 const LIBRARY_ICON = 'M2.5 3.5h5v9h-5zM8.5 3.5h5v9h-5z'
 
 /** 虚拟分类图标：我的出版物（书）/ 未分类条目（文件夹）/ 回收站（垃圾桶）。 */
@@ -270,7 +270,7 @@ function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; 
           style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedItemKey === item.key) }}
         >
           <span style={iconBox} />
-          <span style={iconBox}>{glyph(ITEM_ICON)}</span>
+          <span style={iconBox}><ItemTypeIcon itemType={item.itemType} /></span>
           <ReadDot read={read} />
           <span style={{ ...titleStyle, ...readTitleStyle(read) }}>{item.title}</span>
           {meta !== '' && <span style={metaStyle}>{meta}</span>}

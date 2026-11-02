@@ -35,6 +35,7 @@ import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/t
 import { AnnotationList } from './AnnotationList'
 import { buildSegments, filterAnnotations, type AnnotationFilter, type Segment } from './annotationRuns'
 import { DetailTabs, type DetailTab } from './DetailTabs'
+import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { NoteList, NOTE_CSS } from './NoteList'
 import { sectionTitleStyle, sectionToggleButtonStyle, sectionToggleRowStyle } from './styles'
@@ -309,6 +310,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
   const hasBottom = tabs.length > 0
 
   const metaRows: { label: string; value: string }[] = []
+  const typeLabel = itemTypeLabel(t, detail.itemType)
+  if (typeLabel !== '') metaRows.push({ label: t('detail.type'), value: typeLabel })
   if (detail.creators.length > 0) metaRows.push({ label: t('detail.creators'), value: detail.creators.join('、') })
   if (detail.year !== '') metaRows.push({ label: t('detail.year'), value: detail.year })
   if (detail.publicationTitle !== '') metaRows.push({ label: t('detail.source'), value: detail.publicationTitle })
