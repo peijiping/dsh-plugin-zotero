@@ -6,6 +6,8 @@
  * - 真实分类行右侧显示条目数；右键 → 「添加整目录引用」。
  * - 「我的文库」根节点是可选中的全库范围；其下挂三个虚拟分类
  *   （我的出版物 / 未分类条目 / 回收站），与 Zotero 左侧栏一致。
+ * - 顶部筛选框只筛目录名（同 Zotero 左栏）：命中分类保留、非命中的祖先作为
+ *   上下文行保留、未命中的子分类隐藏；筛选期间自动展开命中路径。
  * - 展开状态放在 {@link paneStore}：右侧栏切 tab 时正文会被卸载重挂，
  *   只有模块级 store 能让树保持原样。
  */
@@ -49,6 +51,8 @@ interface CollectionNode {
 interface TreeCtx {
   t: Translate
   expanded: ReadonlySet<string>
+  /** 当前筛选词（已小写）；空串表示不筛选。 */
+  filter: string
   selectedCollectionKey: string | null
   toggle(nodeId: string): void
   select(collection: ZoteroCollection): void
@@ -59,6 +63,8 @@ interface Props {
   t: Translate
   libraryName: string
   collections: ZoteroCollection[]
+  /** 分类树筛选词（只筛目录名）。 */
+  treeQuery: string
   selectedCollectionKey: string | null
   onSelectCollection(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
@@ -111,6 +117,28 @@ function buildForest(collections: ZoteroCollection[]): CollectionNode[] {
     else parent.children.push(node)
   }
   return roots
+}
+
+/** 目录名是否命中筛选词（大小写不敏感的子串匹配，与 Zotero 左栏一致）。 */
+function nameMatches(name: string, filter: string): boolean {
+  return name.toLowerCase().includes(filter)
+}
+
+/**
+ * 按 Zotero 左栏的规则裁剪分类森林。
+ *
+ * 命中分类保留、非命中的祖先作为上下文行保留（否则层级断裂）、命中分类下
+ * 未命中的子分类隐藏：可见集 = 命中节点 ∪ 命中节点的祖先。
+ */
+function filterForest(nodes: CollectionNode[], filter: string): CollectionNode[] {
+  const kept: CollectionNode[] = []
+  for (const node of nodes) {
+    const children = filterForest(node.children, filter)
+    if (children.length > 0 || nameMatches(node.collection.name, filter)) {
+      kept.push({ collection: node.collection, children })
+    }
+  }
+  return kept
 }
 
 // ---- 样式 -------------------------------------------------------------------
@@ -190,7 +218,9 @@ function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): R
 
 function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNode; depth: number }): ReactElement {
   const nodeId = node.collection.key
-  const open = ctx.expanded.has(nodeId)
+  /** 筛选期间命中路径自动展开，折叠箭头暂不可用。 */
+  const filtering = ctx.filter !== ''
+  const open = filtering || ctx.expanded.has(nodeId)
   const [menuOpen, setMenuOpen] = useState(false)
   /** 没有子分类就不给折叠箭头（只留同宽空位，图标仍对齐）。 */
   const hasChildren = node.children.length > 0
@@ -216,7 +246,7 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
             }}
             style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
           >
-            {hasChildren
+            {hasChildren && !filtering
               ? <Chevron open={open} onToggle={() => ctx.toggle(nodeId)} />
               : <span style={iconBox} />}
             <span style={iconBox}>{glyph(FOLDER_ICON)}</span>
@@ -262,6 +292,7 @@ export function CollectionTree(props: Props): ReactElement {
     t,
     libraryName,
     collections,
+    treeQuery,
     selectedCollectionKey,
     onSelectCollection,
     onInsertCollection,
@@ -270,16 +301,26 @@ export function CollectionTree(props: Props): ReactElement {
   /** 展开集合在 store 里（默认展开根节点），重挂面板后原样恢复。 */
   const { expanded } = usePaneState()
 
+  const filter = treeQuery.trim().toLowerCase()
+  const filtering = filter !== ''
+  const forest = filtering ? filterForest(buildForest(collections), filter) : buildForest(collections)
+  const virtuals = filtering
+    ? VIRTUAL_NODES.filter((node) => nameMatches(t(node.labelKey), filter))
+    : VIRTUAL_NODES
+  const matched = forest.length > 0 || virtuals.length > 0
+
   const ctx: TreeCtx = {
     t,
     expanded,
+    filter,
     selectedCollectionKey,
     toggle: toggleTreeNode,
     select: onSelectCollection,
     onInsertCollection,
   }
 
-  const rootOpen = expanded.has(TREE_ROOT_ID)
+  /** 筛选期间根节点恒为展开，命中结果才有地方显示。 */
+  const rootOpen = filtering || expanded.has(TREE_ROOT_ID)
   const root: ZoteroCollection = { key: TREE_ROOT_ID, name: libraryName === '' ? t('tree.library') : libraryName, parentKey: false }
 
   return (
@@ -288,20 +329,27 @@ export function CollectionTree(props: Props): ReactElement {
         onClick={() => onSelectCollection(root)}
         style={{ ...rowStyle, ...rowIndent(0), ...rowBackground(selectedCollectionKey === TREE_ROOT_ID) }}
       >
-        <Chevron open={rootOpen} onToggle={() => toggleTreeNode(TREE_ROOT_ID)} />
+        {filtering
+          ? <span style={iconBox} />
+          : <Chevron open={rootOpen} onToggle={() => toggleTreeNode(TREE_ROOT_ID)} />}
         <span style={iconBox}>{glyph(LIBRARY_ICON)}</span>
         <span style={titleStyle}>{t('tree.library')}</span>
       </div>
       {rootOpen && (
         <>
-          {buildForest(collections).map((node) => (
+          {forest.map((node) => (
             <CollectionRows key={node.collection.key} ctx={ctx} node={node} depth={1} />
           ))}
-          {VIRTUAL_NODES.map((node) => (
+          {virtuals.map((node) => (
             <VirtualRows key={node.key} ctx={ctx} node={node} depth={1} />
           ))}
+          {filtering && !matched && (
+            <div style={{ ...hintStyle, paddingLeft: BASE_INDENT + INDENT }}>{t('tree.emptyFiltered')}</div>
+          )}
         </>
       )}
     </div>
   )
 }
+
+const hintStyle: React.CSSProperties = { padding: '6px 8px', fontSize: 12, opacity: 0.6 }

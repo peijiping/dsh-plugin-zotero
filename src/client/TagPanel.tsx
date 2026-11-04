@@ -11,12 +11,13 @@
 
 import { useRef, useState, type ReactElement } from 'react'
 
-import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroTag } from '../zotero/types'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import { MAX_TAG_REFERENCE } from './reference'
+import { SearchField } from './SearchField'
 
 /** 面板高度与折叠状态的存储键。 */
 const HEIGHT_KEY = 'dsh-plugin-zotero.tagPanelHeight'
@@ -269,10 +270,11 @@ export function TagPanel(props: Props): ReactElement {
 
       {!collapsed && (
         <div style={{ height, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 8px 6px' }}>
-          <Input
+          <SearchField
             value={tagQuery}
             placeholder={t('tags.filterPlaceholder')}
-            onChange={(event) => onTagQuery(event.target.value)}
+            clearLabel={t('search.clear')}
+            onChange={onTagQuery}
           />
 
           {selected.length > 0 && (

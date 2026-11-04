@@ -20,7 +20,6 @@ import type { InputActions } from './inline'
 import { ItemList } from './ItemList'
 import type { Translate } from './locales'
 import {
-  clearFilters,
   clearItemSelection,
   clearTags,
   loadMoreItems,
@@ -32,11 +31,13 @@ import {
   setQuery,
   setTagMode,
   setTagQuery,
+  setTreeQuery,
   toggleTag,
   TREE_ROOT_ID,
   usePaneState,
 } from './paneStore'
 import type { SessionsFace } from './reference'
+import { SearchField } from './SearchField'
 import { TagPanel } from './TagPanel'
 import { Toast } from './Toast'
 import { useInsertion } from './useInsertion'
@@ -102,6 +103,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     tags,
     tagsLoading,
     tagsError,
+    treeQuery,
     tagQuery,
     selectedTags,
     tagMode,
@@ -182,6 +184,14 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             minHeight: 0,
           }}
         >
+          <div style={{ flexShrink: 0, padding: '8px 8px 2px' }}>
+            <SearchField
+              value={treeQuery}
+              placeholder={t('tree.filterPlaceholder')}
+              clearLabel={t('search.clear')}
+              onChange={setTreeQuery}
+            />
+          </div>
           <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
             {treeLoading && collections.length === 0 ? (
               <div style={hintStyle}>{t('status.loading')}</div>
@@ -192,6 +202,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
                 t={t}
                 libraryName={libraryName}
                 collections={collections}
+                treeQuery={treeQuery}
                 selectedCollectionKey={selectedCollection?.key ?? null}
                 onSelectCollection={selectCollection}
                 onInsertCollection={insertion.insertCollection}
@@ -261,7 +272,6 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             tagMode={tagMode}
             selectedItemKeys={selectedItemKeys}
             onSearch={setQuery}
-            onClearFilters={clearFilters}
             onRemoveTag={toggleTag}
             onRetry={retryItems}
             onLoadMore={loadMoreItems}

@@ -9,7 +9,7 @@
 
 import { useState, type ReactElement } from 'react'
 
-import { Button, Input, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
 import { ItemTypeIcon } from './itemType'
@@ -17,6 +17,7 @@ import type { Translate } from './locales'
 import { tpl } from './locales'
 import { TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
+import { SearchField } from './SearchField'
 
 interface Props {
   t: Translate
@@ -32,7 +33,6 @@ interface Props {
   /** 列表里被点选的条目 key；引用按钮按这批插 chip。 */
   selectedItemKeys: ReadonlySet<string>
   onSearch(text: string): void
-  onClearFilters(): void
   onRemoveTag(name: string): void
   onRetry(): void
   onLoadMore(): void
@@ -196,7 +196,6 @@ export function ItemList(props: Props): ReactElement {
     tagMode,
     selectedItemKeys,
     onSearch,
-    onClearFilters,
     onRemoveTag,
     onRetry,
     onLoadMore,
@@ -250,12 +249,13 @@ export function ItemList(props: Props): ReactElement {
             </Button>
           ) : null}
         </div>
-        <Input
+        <SearchField
           value={query}
           placeholder={t('list.searchPlaceholder')}
-          onChange={(event) => onSearch(event.target.value)}
+          clearLabel={t('search.clear')}
+          onChange={onSearch}
         />
-        {filtered && (
+        {tags.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, fontSize: 11.5 }}>
             {tags.map((tag) => (
               <span key={tag} style={chipStyle} title={tag}>
@@ -276,23 +276,6 @@ export function ItemList(props: Props): ReactElement {
                 {t(tagMode === 'any' ? 'tags.matchAnyHint' : 'tags.matchAllHint')}
               </span>
             )}
-            <button
-              type="button"
-              onClick={onClearFilters}
-              style={{
-                padding: '1px 6px',
-                fontSize: 11.5,
-                lineHeight: '17px',
-                color: 'inherit',
-                background: 'transparent',
-                border: '1px solid rgba(127,127,127,0.3)',
-                borderRadius: 9,
-                cursor: 'pointer',
-                opacity: 0.8,
-              }}
-            >
-              {t('list.clearFilters')}
-            </button>
           </div>
         )}
       </div>

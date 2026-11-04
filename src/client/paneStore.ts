@@ -43,6 +43,8 @@ export interface PaneState {
   loaded: boolean
   /** 分类树中已展开的节点 id（只控制分类开合，不承载条目）。 */
   expanded: ReadonlySet<string>
+  /** 左栏分类树的名称筛选词（纯客户端，只筛目录，不搜条目）。 */
+  treeQuery: string
 
   /** 当前选择：文库根（key = TREE_ROOT_ID）/ 真实分类 / 虚拟分类。 */
   selectedCollection: ZoteroCollection | null
@@ -83,6 +85,7 @@ function initialState(): PaneState {
     treeLoading: true,
     loaded: false,
     expanded: new Set([TREE_ROOT_ID]),
+    treeQuery: '',
     selectedCollection: null,
     items: [],
     itemsTotal: 0,
@@ -232,6 +235,16 @@ export function toggleTreeNode(nodeId: string): void {
 }
 
 /**
+ * 分类树名称筛选（纯客户端，参照 Zotero 左栏的目录过滤）。
+ *
+ * 只筛目录名，不触发条目重新查询；展开状态照旧保留，清空筛选后恢复原样。
+ */
+export function setTreeQuery(text: string): void {
+  if (state.treeQuery === text) return
+  patch({ treeQuery: text })
+}
+
+/**
  * 选中分类（文库根 / 真实分类 / 虚拟分类）：重拉列表与范围标签。
  *
  * 切换范围时标签集也换了，已选标签与标签面板里的名称过滤一并清空，
@@ -315,17 +328,6 @@ export function setTagMode(mode: 'all' | 'any'): void {
   if (state.tagMode === mode) return
   patch({ tagMode: mode })
   if (state.selectedTags.size > 0) reloadItems({ reset: true })
-}
-
-/** 清除搜索词与全部已选标签。 */
-export function clearFilters(): void {
-  if (searchTimer !== null) window.clearTimeout(searchTimer)
-  searchTimer = null
-  if (state.selectedTags.size === 0 && state.query === '') return
-  const hadQuery = state.query.trim() !== ''
-  patch({ selectedTags: new Set(), query: '' })
-  reloadItems({ reset: true })
-  if (hadQuery) loadTagUsage()
 }
 
 /** 标签面板的名称过滤（纯客户端）。 */
