@@ -52,7 +52,7 @@ interface Props {
   /** 插一条笔记的引用 chip（提交时展开为笔记正文）。 */
   onInsertNote(note: ZoteroNote): void
   /** 点击附件行：以其 key 作为条目重新打开（附件条目自带全文）。 */
-  onOpenItem(key: string): void
+  onOpenItem(key: string, title?: string): void
 }
 
 /** 正文区占比的存储键与取值范围（%）。 */
@@ -293,7 +293,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
             <button
               key={attachment.key}
               type="button"
-              onClick={() => onOpenItem(attachment.key)}
+              onClick={() => onOpenItem(attachment.key, attachment.title)}
               style={linkRowStyle}
             >
               <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{attachment.title}</span>

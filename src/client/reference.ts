@@ -18,7 +18,14 @@
 
 import type { Translate } from './locales'
 import type { InsertionSpan } from './inline'
-import { annotationCitation, collectionCitation, itemCitation, noteCitation } from './cite'
+import {
+  annotationCitation,
+  collectionCitation,
+  itemCitation,
+  noteCitation,
+  tagCitation,
+  tagSetCitation,
+} from './cite'
 
 /**
  * 写进 chip 的持久标识：一旦发布就不能改名，老草稿里的 chip 靠它找回 codec。
@@ -29,6 +36,13 @@ const ITEM_PREFIX = 'item:'
 const COLLECTION_PREFIX = 'col:'
 const NOTE_PREFIX = 'note:'
 const ANNOTATION_PREFIX = 'ann:'
+/** 单个标签：`tag:<编码后的标签名>`。 */
+const TAG_PREFIX = 'tag:'
+/** 标签组：`tags:<all|any>:<编码后的标签名>,…`。 */
+const TAG_SET_PREFIX = 'tags:'
+
+/** 一次最多引用的标签数（防止 URL 与提示文本过长）。 */
+export const MAX_TAG_REFERENCE = 20
 
 /** 笔记 / 标注是子条目，单靠自身 key 取不到所属条目，ref 存「父 key/子 key」。 */
 const REF_SEPARATOR = '/'
@@ -81,6 +95,8 @@ export function citationForRef(t: Translate, ref: string, signal: AbortSignal): 
   if (ref.startsWith(ANNOTATION_PREFIX)) {
     return annotationCitation(t, ref.slice(ANNOTATION_PREFIX.length), signal)
   }
+  if (ref.startsWith(TAG_SET_PREFIX)) return tagSetCitation(t, ref.slice(TAG_SET_PREFIX.length), signal)
+  if (ref.startsWith(TAG_PREFIX)) return tagCitation(t, ref.slice(TAG_PREFIX.length), signal)
   return Promise.reject(new Error(`无法识别的 Zotero 引用：${ref}`))
 }
 
@@ -139,6 +155,43 @@ export function noteReference(parentKey: string, noteKey: string, title: string)
 /** 一条标注（高亮 / 划线）的 chip。 */
 export function annotationReference(parentKey: string, annotationKey: string, label: string): ReferenceInsert {
   return reference(childPrefix(ANNOTATION_PREFIX, parentKey), annotationKey, label, 'file')
+}
+
+/**
+ * 单个标签的 chip。
+ *
+ * 标签名可能含空格，`clipboardText` 必须无空格，所以先 `encodeURIComponent`。
+ */
+export function tagReference(name: string): ReferenceInsert {
+  const ref = `${TAG_PREFIX}${encodeURIComponent(name)}`
+  return {
+    source: REF_SOURCE,
+    ref,
+    label: name,
+    appearance: 'folder',
+    clipboardText: `@${ref}`,
+  }
+}
+
+/**
+ * 多个标签合并成一个「标签组」chip。
+ *
+ * `encodeURIComponent` 会编码标签名里的 `,` / `:` / 空格，所以分隔符不会歧义；
+ * `mode` 在插入时定格，之后切换面板的 AND/OR 不影响已有草稿。
+ */
+export function tagSetReference(
+  names: readonly string[],
+  mode: 'all' | 'any',
+  label: string,
+): ReferenceInsert {
+  const ref = `${TAG_SET_PREFIX}${mode}:${names.map(encodeURIComponent).join(',')}`
+  return {
+    source: REF_SOURCE,
+    ref,
+    label,
+    appearance: 'folder',
+    clipboardText: `@${ref}`,
+  }
 }
 
 /**

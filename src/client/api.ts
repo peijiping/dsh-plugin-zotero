@@ -5,11 +5,11 @@
  */
 
 import type {
-  ZoteroCollectionBib,
   ZoteroHealth,
   ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItems,
+  ZoteroTags,
   ZoteroTree,
 } from '../zotero/types'
 
@@ -26,12 +26,20 @@ export class ApiFailure extends Error {
   }
 }
 
-type Query = Record<string, string | number | undefined>
+type QueryValue = string | number | readonly string[] | undefined
+type Query = Record<string, QueryValue>
 
 function buildUrl(action: string, query: Query = {}): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined && value !== '') params.set(key, String(value))
+    if (value === undefined || value === '') continue
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== '') params.append(key, item)
+      }
+    } else {
+      params.set(key, String(value))
+    }
   }
   const search = params.toString()
   return `${BASE}/${action}${search === '' ? '' : `?${search}`}`
@@ -67,18 +75,40 @@ export function fetchItems(
     scope?: ZoteroItemScope
     collectionKey?: string
     q?: string
+    tags?: readonly string[]
+    tagMode?: 'all' | 'any'
     limit?: number
     offset?: number
   } = {},
   signal?: AbortSignal,
 ): Promise<ZoteroItems> {
-  return get<ZoteroItems>('items', query, signal)
+  const { tags, ...rest } = query
+  // Host 侧标签参数名是 `tag`（AND 靠重复出现，OR 由 Host 拼成 `A || B`）。
+  return get<ZoteroItems>('items', { ...rest, ...(tags === undefined ? {} : { tag: tags }) }, signal)
+}
+
+export function fetchTags(signal?: AbortSignal): Promise<ZoteroTags> {
+  return get<ZoteroTags>('tags', {}, signal)
+}
+
+/** 当前范围（分类子树 / 虚拟分类 + 搜索词）内的标签用量。 */
+export function fetchTagUsage(
+  query: {
+    scope?: ZoteroItemScope
+    collectionKeys?: readonly string[]
+    q?: string
+  } = {},
+  signal?: AbortSignal,
+): Promise<ZoteroTags> {
+  const { collectionKeys, ...rest } = query
+  // Host 侧参数名是 `collectionKey`（子树靠重复出现传多个 key）。
+  return get<ZoteroTags>(
+    'tag-usage',
+    { ...rest, ...(collectionKeys === undefined ? {} : { collectionKey: collectionKeys }) },
+    signal,
+  )
 }
 
 export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Promise<ZoteroItemDetail> {
   return get<ZoteroItemDetail>('item', { key, style }, signal)
-}
-
-export function fetchCollectionBib(key: string, style = 'apa'): Promise<ZoteroCollectionBib> {
-  return get<ZoteroCollectionBib>('collection-bib', { key, style })
 }

@@ -23,7 +23,12 @@ function line(t: Translate, key: string, value: string): string {
   return tpl(t(key), { value })
 }
 
-/** 单条目的引用文本。 */
+/**
+ * 单条目的引用文本。
+ *
+ * 不含摘要与标签：一次选中多条时这两段会把草稿撑得很长，模型拿着 itemKey
+ * 就能取回全文元数据，不必在引用里重复。
+ */
 export function itemText(t: Translate, detail: ZoteroItemDetail): string {
   const head = tpl(t('cmp.item.header'), { key: detail.key, title: detail.title })
   const lines = [head]
@@ -32,8 +37,6 @@ export function itemText(t: Translate, detail: ZoteroItemDetail): string {
   if (detail.publicationTitle !== '') lines.push(line(t, 'cmp.item.source', detail.publicationTitle))
   if (detail.doi !== '') lines.push(line(t, 'cmp.item.doi', detail.doi))
   if (detail.url !== '') lines.push(line(t, 'cmp.item.url', detail.url))
-  if (detail.tags.length > 0) lines.push(line(t, 'cmp.item.tags', detail.tags.join('、')))
-  if (detail.abstract !== '') lines.push(line(t, 'cmp.item.abstract', detail.abstract))
   return lines.join('\n')
 }
 
@@ -143,7 +146,9 @@ export function noteHtmlToText(html: string): string {
     .trim()
 }
 
-/** 单条笔记的引用文本：所属条目 + 正文纯文本 + 截断提示 + 更新日期 + 笔记 key。 */
+/**
+ * 单条笔记的引用文本：所属条目 + 正文纯文本 + 截断提示 + 更新日期 + 笔记 key。
+ */
 export function noteText(t: Translate, detail: ZoteroItemDetail, note: ZoteroNote): string {
   const head = tpl(t('cmp.note.header'), { title: detail.title, key: detail.key })
   const body = noteHtmlToText(note.html)
@@ -154,6 +159,12 @@ export function noteText(t: Translate, detail: ZoteroItemDetail, note: ZoteroNot
   if (date !== '') lines.push(tpl(t('cmp.note.date'), { value: date }))
   lines.push(tpl(t('cmp.note.key'), { value: note.key }))
   return lines.join('\n')
+}
+
+/** 条目清单里的一行（目录引用与标签引用共用）。 */
+function itemLine(t: Translate, item: ZoteroItemSummary): string {
+  const meta = [item.creators, item.year].filter((part) => part !== '').join(', ')
+  return tpl(t('cmp.collection.line'), { title: item.title, meta })
 }
 
 /** 整目录的引用文本（标题清单 + 稳定标识）。 */
@@ -169,12 +180,80 @@ export function collectionText(
     n: total,
   })
   const preview = items.slice(0, COLLECTION_PREVIEW_LIMIT)
-  const lines = preview.map((item) => {
-    const meta = [item.creators, item.year].filter((part) => part !== '').join(', ')
-    return tpl(t('cmp.collection.line'), { title: item.title, meta })
-  })
+  const lines = preview.map((item) => itemLine(t, item))
   if (total > preview.length) {
     lines.push(tpl(t('cmp.collection.more'), { n: preview.length }))
   }
   return [head, ...lines].join('\n')
+}
+
+/** 标签名的展示形式。 */
+const TAG_JOINER = '、'
+
+/** 模式文案（全部 / 任一）。 */
+function tagModeLabel(t: Translate, mode: 'all' | 'any'): string {
+  return t(mode === 'any' ? 'tags.matchAny' : 'tags.matchAll')
+}
+
+/** 单个标签的引用文本：标签头 + 全库该标签下的条目清单。 */
+export function tagText(
+  t: Translate,
+  name: string,
+  items: ZoteroItemSummary[],
+  total: number,
+): string {
+  const head = tpl(t('cmp.tag.header'), { name, n: total })
+  const preview = items.slice(0, COLLECTION_PREVIEW_LIMIT)
+  const lines = preview.map((item) => itemLine(t, item))
+  if (total > preview.length) lines.push(tpl(t('cmp.tag.more'), { n: preview.length }))
+  return [head, ...lines].join('\n')
+}
+
+/**
+ * 多个标签的引用文本：标签头（含模式）+ 每个标签的计数 + 条目清单 + 缺失提示。
+ *
+ * `counts` 只含文库里仍存在的标签；`missing` 单列一行，不阻断其余内容。
+ */
+export function tagSetText(
+  t: Translate,
+  names: readonly string[],
+  mode: 'all' | 'any',
+  counts: ReadonlyMap<string, number>,
+  missing: readonly string[],
+  items: ZoteroItemSummary[],
+  total: number,
+): string {
+  const head = tpl(t('cmp.tagSet.header'), {
+    tags: names.join(TAG_JOINER),
+    mode: tagModeLabel(t, mode),
+    n: total,
+  })
+  const lines = [head]
+  for (const name of names) {
+    const count = counts.get(name)
+    if (count !== undefined) lines.push(tpl(t('cmp.tagSet.tags'), { name, n: count }))
+  }
+  if (missing.length > 0) {
+    lines.push(tpl(t('cmp.tagSet.missingSome'), { names: missing.join(TAG_JOINER) }))
+  }
+  const preview = items.slice(0, COLLECTION_PREVIEW_LIMIT)
+  for (const item of preview) lines.push(itemLine(t, item))
+  if (total > preview.length) lines.push(tpl(t('cmp.tagSet.more'), { n: preview.length }))
+  return lines.join('\n')
+}
+
+/**
+ * 标签组 chip 的标签：`标签：A、B（全部）`，过长时截断。
+ *
+ * chip 宽度有限，标签多时只保留开头，完整清单在提交后的展开文本里。
+ */
+export function tagSetChipLabel(t: Translate, names: readonly string[], mode: 'all' | 'any'): string {
+  const label = tpl(t('cmp.tagSet.label'), {
+    tags: names.join(TAG_JOINER),
+    mode: tagModeLabel(t, mode),
+  })
+  const chars = Array.from(label)
+  return chars.length > CHIP_LABEL_LIMIT
+    ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…`
+    : label
 }

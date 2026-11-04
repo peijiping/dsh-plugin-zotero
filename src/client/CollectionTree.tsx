@@ -1,25 +1,22 @@
 /**
- * 左栏：文库分类树 + 条目叶子（Zotero 风格）。
+ * 左栏：文库分类树（只显示分类，条目在右侧列表）。
  *
- * - 行首常显三角箭头（按住拖动/点击）只管开合；点行体则选中该分类，折叠时顺带展开。
- * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin，避免深层错位。
- * - 分类行右侧显示条目数；展开时其子分类与条目都缩进一层，条目带文档图标。
- * - 「我的文库」根节点**不再平铺全库条目**（这些条目本就挂在各分类下，平铺会造成重复）；
- *   其下额外挂三个虚拟分类：我的出版物 / 未分类条目 / 回收站，与 Zotero 左侧栏一致。
- * - 分类 / 条目右键 → 「添加到会话」。
- * - 展开集合与各节点条目都放在 {@link paneStore}：右侧栏切 tab 时面板正文会被卸载
- *   重挂，局部 state 会丢，只有模块级 store 能让树保持原样。
+ * - 行首三角箭头只管开合，且只在有子分类的行出现；点行体选中该范围。
+ * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin。
+ * - 真实分类行右侧显示条目数；右键 → 「添加整目录引用」。
+ * - 「我的文库」根节点是可选中的全库范围；其下挂三个虚拟分类
+ *   （我的出版物 / 未分类条目 / 回收站），与 Zotero 左侧栏一致。
+ * - 展开状态放在 {@link paneStore}：右侧栏切 tab 时正文会被卸载重挂，
+ *   只有模块级 store 能让树保持原样。
  */
 
 import { useState, type ReactElement, type ReactNode } from 'react'
 
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroItemScope, ZoteroItemSummary } from '../zotero/types'
-import { ItemTypeIcon } from './itemType'
+import type { ZoteroCollection, ZoteroItemScope } from '../zotero/types'
 import type { Translate } from './locales'
-import { expandTreeNode, retryNode, toggleTreeNode, TREE_ROOT_ID, usePaneState, type TreeNodeTarget } from './paneStore'
-import { isRead, itemTooltip, readTitleStyle } from './readState'
+import { toggleTreeNode, TREE_ROOT_ID, usePaneState } from './paneStore'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -29,9 +26,6 @@ const BASE_INDENT = 8
 
 /** 行高（px）。 */
 const ROW_HEIGHT = 24
-
-/** 一次加载节点条目所需的定位信息。 */
-type LoadOpts = TreeNodeTarget
 
 /** 虚拟分类定义（顺序与 Zotero 左侧栏一致，排在真实分类之后）。 */
 interface VirtualNode {
@@ -55,32 +49,18 @@ interface CollectionNode {
 interface TreeCtx {
   t: Translate
   expanded: ReadonlySet<string>
-  itemsByNode: Record<string, ZoteroItemSummary[]>
-  totalsByNode: Record<string, number>
-  /** 条目加载失败的节点 → 错误消息。 */
-  nodeErrors: Readonly<Record<string, string>>
-  selectedItemKey: string | null
   selectedCollectionKey: string | null
-  /** 三角箭头：只开合，不动选中态。 */
-  toggle(nodeId: string, collection?: ZoteroCollection): void
-  /** 行体：选中该分类（已折叠则顺带展开并拉取条目）。 */
+  toggle(nodeId: string): void
   select(collection: ZoteroCollection): void
-  /** 行内「重试」：重新拉取该节点条目。 */
-  retry(nodeId: string): void
-  onSelectItem(key: string): void
-  /** chip 的 label 用标题，故整条摘要传出去。 */
-  onInsertItem(item: ZoteroItemSummary): void
   onInsertCollection(collection: ZoteroCollection): void
 }
 
 interface Props {
   t: Translate
+  libraryName: string
   collections: ZoteroCollection[]
-  selectedItemKey: string | null
   selectedCollectionKey: string | null
-  onSelectItem(key: string): void
   onSelectCollection(collection: ZoteroCollection): void
-  onInsertItem(item: ZoteroItemSummary): void
   onInsertCollection(collection: ZoteroCollection): void
 }
 
@@ -133,11 +113,6 @@ function buildForest(collections: ZoteroCollection[]): CollectionNode[] {
   return roots
 }
 
-/** 由分类对象推出加载用的定位信息：虚拟分类走 scope，真实分类走 collectionKey。 */
-function loadOpts(collection: ZoteroCollection): LoadOpts {
-  return collection.scope === undefined ? { collectionKey: collection.key } : { scope: collection.scope }
-}
-
 // ---- 样式 -------------------------------------------------------------------
 
 const rowStyle: React.CSSProperties = {
@@ -179,43 +154,12 @@ const titleStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const metaStyle: React.CSSProperties = {
-  flexShrink: 0,
-  maxWidth: '48%',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  opacity: 0.5,
-  fontSize: 11.5,
-}
-
 const countStyle: React.CSSProperties = {
   flexShrink: 0,
   minWidth: 14,
   textAlign: 'right',
   fontSize: 11.5,
   opacity: 0.5,
-}
-
-function hintStyle(depth: number): React.CSSProperties {
-  return {
-    opacity: 0.55,
-    fontSize: 12,
-    lineHeight: `${ROW_HEIGHT}px`,
-    paddingLeft: BASE_INDENT + depth * INDENT + 22,
-  }
-}
-
-/** 行内「重试」按钮：失败提示旁的小按钮。 */
-const retryButtonStyle: React.CSSProperties = {
-  padding: '0 6px',
-  fontSize: 11.5,
-  lineHeight: '18px',
-  color: 'inherit',
-  background: 'transparent',
-  border: '1px solid rgba(127,127,127,0.35)',
-  borderRadius: 5,
-  cursor: 'pointer',
 }
 
 // ---- 展开箭头 ---------------------------------------------------------------
@@ -242,72 +186,14 @@ function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): R
   )
 }
 
-// ---- 条目叶子 ---------------------------------------------------------------
-
-function ItemRow({ ctx, item, depth }: { ctx: TreeCtx; item: ZoteroItemSummary; depth: number }): ReactElement {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const meta = [item.creators, item.year].filter((part) => part !== '').join(' · ')
-  const read = isRead(item)
-  return (
-    <Menu
-      open={menuOpen}
-      onClose={() => setMenuOpen(false)}
-      onSelect={(id) => {
-        setMenuOpen(false)
-        if (id === 'insert-item') ctx.onInsertItem(item)
-      }}
-      align="end"
-      portal
-      items={[{ id: 'insert-item', label: ctx.t('action.insertItem') }]}
-      anchor={(
-        <div
-          title={itemTooltip(ctx.t, item)}
-          onClick={() => ctx.onSelectItem(item.key)}
-          onContextMenu={(event) => {
-            event.preventDefault()
-            setMenuOpen(true)
-          }}
-          style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedItemKey === item.key) }}
-        >
-          <span style={iconBox} />
-          <span style={iconBox}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
-          <span style={{ ...titleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-          {meta !== '' && <span style={metaStyle}>{meta}</span>}
-        </div>
-      )}
-    />
-  )
-}
-
-function renderItems(ctx: TreeCtx, nodeId: string, depth: number): ReactElement[] {
-  // 加载失败的行单独提示，避免和「分类为空」混淆。
-  if (ctx.nodeErrors[nodeId] !== undefined) {
-    return [
-      <div key="error" style={{ ...hintStyle(depth), display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ color: '#d29922' }}>{ctx.t('tree.loadFailed')}</span>
-        <button type="button" onClick={() => ctx.retry(nodeId)} style={retryButtonStyle}>
-          {ctx.t('action.retry')}
-        </button>
-      </div>,
-    ]
-  }
-  const items = ctx.itemsByNode[nodeId]
-  if (items === undefined) {
-    return [<div key="loading" style={hintStyle(depth)}>{ctx.t('status.loading')}</div>]
-  }
-  if (items.length === 0) {
-    return []
-  }
-  return items.map((item) => <ItemRow key={item.key} ctx={ctx} item={item} depth={depth} />)
-}
-
 // ---- 分类节点（扁平化渲染：每行自带缩进，天然成树） -------------------------
 
 function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNode; depth: number }): ReactElement {
   const nodeId = node.collection.key
   const open = ctx.expanded.has(nodeId)
   const [menuOpen, setMenuOpen] = useState(false)
-  const count = ctx.totalsByNode[nodeId] ?? node.collection.itemCount
+  /** 没有子分类就不给折叠箭头（只留同宽空位，图标仍对齐）。 */
+  const hasChildren = node.children.length > 0
 
   return (
     <>
@@ -330,18 +216,20 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
             }}
             style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
           >
-            <Chevron open={open} onToggle={() => ctx.toggle(nodeId, node.collection)} />
+            {hasChildren
+              ? <Chevron open={open} onToggle={() => ctx.toggle(nodeId)} />
+              : <span style={iconBox} />}
             <span style={iconBox}>{glyph(FOLDER_ICON)}</span>
             <span style={titleStyle} title={node.collection.name}>{node.collection.name}</span>
-            {count !== undefined && <span style={countStyle}>{count}</span>}
+            {node.collection.itemCount !== undefined && (
+              <span style={countStyle}>{node.collection.itemCount}</span>
+            )}
           </div>
         )}
       />
-      {open &&
-        node.children.map((child) => (
-          <CollectionRows key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
-        ))}
-      {open && renderItems(ctx, nodeId, depth + 1)}
+      {open && node.children.map((child) => (
+        <CollectionRows key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
+      ))}
     </>
   )
 }
@@ -354,42 +242,16 @@ function virtualCollection(node: VirtualNode, t: Translate): ZoteroCollection {
 
 function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; depth: number }): ReactElement {
   const collection = virtualCollection(node, ctx.t)
-  const nodeId = collection.key
-  const open = ctx.expanded.has(nodeId)
-  const [menuOpen, setMenuOpen] = useState(false)
-  // 虚拟分类的条目数只有展开（拉取过）后才知道，未拉取时不显示。
-  const count = ctx.totalsByNode[nodeId]
-
+  const selected = ctx.selectedCollectionKey === collection.key
   return (
-    <>
-      <Menu
-        open={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onSelect={(id) => {
-          setMenuOpen(false)
-          if (id === 'insert-collection') ctx.onInsertCollection(collection)
-        }}
-        align="end"
-        portal
-        items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection') }]}
-        anchor={(
-          <div
-            onClick={() => ctx.select(collection)}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              setMenuOpen(true)
-            }}
-            style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
-          >
-            <Chevron open={open} onToggle={() => ctx.toggle(nodeId, collection)} />
-            <span style={iconBox}>{glyph(VIRTUAL_ICON[node.icon] ?? FOLDER_ICON)}</span>
-            <span style={titleStyle} title={collection.name}>{collection.name}</span>
-            {count !== undefined && <span style={countStyle}>{count}</span>}
-          </div>
-        )}
-      />
-      {open && renderItems(ctx, nodeId, depth + 1)}
-    </>
+    <div
+      onClick={() => ctx.select(collection)}
+      style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(selected) }}
+    >
+      <span style={iconBox} />
+      <span style={iconBox}>{glyph(VIRTUAL_ICON[node.icon] ?? FOLDER_ICON)}</span>
+      <span style={titleStyle} title={collection.name}>{collection.name}</span>
+    </div>
   )
 }
 
@@ -398,57 +260,35 @@ function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; de
 export function CollectionTree(props: Props): ReactElement {
   const {
     t,
+    libraryName,
     collections,
-    selectedItemKey,
     selectedCollectionKey,
-    onSelectItem,
     onSelectCollection,
-    onInsertItem,
     onInsertCollection,
   } = props
 
-  /** 展开集合与各节点条目都在 store 里（默认展开根节点），重挂面板后原样恢复。 */
-  const { expanded, nodeItems, nodeTotals, nodeErrors } = usePaneState()
-
-  /** 按需拉取：条目一律由 toggle / select 触发，根节点不再预取全库条目。 */
-  function open(nodeId: string, collection: ZoteroCollection): void {
-    expandTreeNode(nodeId, loadOpts(collection))
-  }
-
-  function toggle(nodeId: string, collection?: ZoteroCollection): void {
-    toggleTreeNode(nodeId, collection === undefined ? undefined : loadOpts(collection))
-  }
-
-  function select(collection: ZoteroCollection): void {
-    onSelectCollection(collection)
-    if (!expanded.has(collection.key)) open(collection.key, collection)
-  }
+  /** 展开集合在 store 里（默认展开根节点），重挂面板后原样恢复。 */
+  const { expanded } = usePaneState()
 
   const ctx: TreeCtx = {
     t,
     expanded,
-    itemsByNode: nodeItems,
-    totalsByNode: nodeTotals,
-    nodeErrors,
-    selectedItemKey,
     selectedCollectionKey,
-    toggle,
-    select,
-    retry: retryNode,
-    onSelectItem,
-    onInsertItem,
+    toggle: toggleTreeNode,
+    select: onSelectCollection,
     onInsertCollection,
   }
 
   const rootOpen = expanded.has(TREE_ROOT_ID)
+  const root: ZoteroCollection = { key: TREE_ROOT_ID, name: libraryName === '' ? t('tree.library') : libraryName, parentKey: false }
 
   return (
     <div style={{ padding: '8px 6px', display: 'flex', flexDirection: 'column' }}>
       <div
-        onClick={() => toggle(TREE_ROOT_ID)}
-        style={{ ...rowStyle, ...rowIndent(0) }}
+        onClick={() => onSelectCollection(root)}
+        style={{ ...rowStyle, ...rowIndent(0), ...rowBackground(selectedCollectionKey === TREE_ROOT_ID) }}
       >
-        <Chevron open={rootOpen} onToggle={() => toggle(TREE_ROOT_ID)} />
+        <Chevron open={rootOpen} onToggle={() => toggleTreeNode(TREE_ROOT_ID)} />
         <span style={iconBox}>{glyph(LIBRARY_ICON)}</span>
         <span style={titleStyle}>{t('tree.library')}</span>
       </div>

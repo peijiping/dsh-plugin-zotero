@@ -12,13 +12,15 @@
 
 import type { Translate } from './locales'
 import { tpl } from './locales'
-import { ApiFailure, fetchItem, fetchItems, fetchTree } from './api'
+import { ApiFailure, fetchItem, fetchItems, fetchTags, fetchTree } from './api'
 import {
   COLLECTION_PREVIEW_LIMIT,
   annotationText,
   collectionText,
   itemText,
   noteText,
+  tagSetText,
+  tagText,
 } from './compose'
 
 /** 文库里已经没有这个对象（与「连不上 Zotero」区分开）。 */
@@ -117,4 +119,76 @@ export async function annotationCitation(
   const annotation = detail.annotations.find((child) => child.key === childKey)
   if (annotation === undefined) return tpl(t('cmp.missing.annotation'), { key: childKey })
   return annotationText(t, detail, annotation)
+}
+
+/** 解码标签名；ref 结构坏了直接抛出（不是「对象已删除」）。 */
+function decodeTagName(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded)
+  } catch {
+    throw new Error(`无法识别的 Zotero 标签引用：${encoded}`)
+  }
+}
+
+/**
+ * 单个标签的引用（全库范围）。
+ *
+ * 标签引用与「筛选跟随当前分类」不同：同一 chip 在任何分类下提交都展开为全库
+ * 带该标签的条目，保证引用稳定。
+ */
+export async function tagCitation(
+  t: Translate,
+  body: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const name = decodeTagName(body)
+  const data = await fetchItems({
+    tags: [name],
+    tagMode: 'all',
+    limit: COLLECTION_PREVIEW_LIMIT,
+  }, signal)
+  if (data.total > 0) return tagText(t, name, data.items, data.total)
+  // 0 条：区分「标签已从文库消失」与「标签存在但没有条目」。
+  const tags = await fetchTags(signal)
+  return tags.tags.some((tag) => tag.name === name)
+    ? tpl(t('cmp.tag.empty'), { name })
+    : tpl(t('cmp.missing.tag'), { name })
+}
+
+/** 解析 `tags:` 的 body：`<all|any>:<enc1>,<enc2>,…`。 */
+function parseTagSet(body: string): { mode: 'all' | 'any'; names: string[] } {
+  const at = body.indexOf(':')
+  const rawMode = at < 0 ? '' : body.slice(0, at)
+  const rest = at < 0 ? '' : body.slice(at + 1)
+  const names = rest.split(',').filter((part) => part !== '').map(decodeTagName)
+  if ((rawMode !== 'all' && rawMode !== 'any') || names.length === 0) {
+    throw new Error(`无法识别的 Zotero 标签组引用：${body}`)
+  }
+  return { mode: rawMode, names }
+}
+
+/**
+ * 多个标签的引用（全库范围，AND/OR 按 ref 里定格的模式）。
+ *
+ * 同时取标签计数：既用于展开文本，也用来识别提交前被删掉的标签。
+ */
+export async function tagSetCitation(
+  t: Translate,
+  body: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { mode, names } = parseTagSet(body)
+  const [data, tags] = await Promise.all([
+    fetchItems({ tags: names, tagMode: mode, limit: COLLECTION_PREVIEW_LIMIT }, signal),
+    fetchTags(signal),
+  ])
+  const counts = new Map<string, number>()
+  for (const tag of tags.tags) {
+    if (names.includes(tag.name)) counts.set(tag.name, tag.count)
+  }
+  const missing = names.filter((name) => !counts.has(name))
+  if (missing.length === names.length) {
+    return tpl(t('cmp.missing.tagSet'), { names: names.join('、') })
+  }
+  return tagSetText(t, names, mode, counts, missing, data.items, data.total)
 }

@@ -1,30 +1,45 @@
 /**
- * 右侧栏面板容器：头部状态栏 + 左分类树 + 右详情。
+ * 右侧栏面板容器：头部状态栏 + 左侧分类树 / 标签面板 + 右侧条目列表。
+ *
+ * 与 Zotero 一致：左侧只有分类与标签，条目一律在右侧列表；列表行单击选中、
+ * 双击才在本面板顶层开独立 tab（`onOpenItem`），详情不再占列表位置。
+ * 标签面板跟随当前目录：选中目录只列该目录自身的标签，切目录清空已选。
  *
  * 两栏之间是可拖动的分隔条（宽度存 localStorage，跨会话/重启都记住）。
  * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）。
- * 「添加到会话」走 ui-conversation 下发的会话级标准 prop：条目、整目录、笔记、
- * 标注都插引用 chip（见 reference.ts），只有摘录仍插纯文本。
+ * 「添加到会话」走 ui-conversation 下发的会话级标准 prop：条目（含多选批量）、
+ * 整目录、标签组都插引用 chip（见 reference.ts），摘录仍插纯文本。
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 
-import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { CollectionTree } from './CollectionTree'
-import { annotationChipLabel, excerptText } from './compose'
-import type { InputActions, InsertOutcome } from './inline'
-import { insertBuilt } from './inline'
-import { ItemDetail } from './ItemDetail'
-import { ItemTypeIcon } from './itemType'
+import type { InputActions } from './inline'
+import { ItemList } from './ItemList'
 import type { Translate } from './locales'
-import { tpl } from './locales'
-import type { ReferenceInsert, SessionsFace } from './reference'
-import { annotationReference, collectionReference, insertChip, itemReference, noteReference } from './reference'
-import { sectionTitleStyle } from './styles'
-import { loadTree, openItem, selectCollection, setQuery, showToast, usePaneState } from './paneStore'
-import { isRead, itemTooltip, readTitleStyle } from './readState'
+import {
+  clearFilters,
+  clearItemSelection,
+  clearTags,
+  loadMoreItems,
+  loadTree,
+  retryItems,
+  retryTags,
+  selectCollection,
+  selectItem,
+  setQuery,
+  setTagMode,
+  setTagQuery,
+  toggleTag,
+  TREE_ROOT_ID,
+  usePaneState,
+} from './paneStore'
+import type { SessionsFace } from './reference'
+import { TagPanel } from './TagPanel'
+import { Toast } from './Toast'
+import { useInsertion } from './useInsertion'
 
 /** 左栏宽度的存储键与取值范围。 */
 const TREE_WIDTH_KEY = 'dsh-plugin-zotero.treeWidth'
@@ -50,10 +65,8 @@ interface Props {
   sessions: SessionsFace
   /** 当前会话 id；chip 只认它自己那一个会话的输入框。 */
   sessionId?: string
-}
-
-function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/gu, '').replace(/\s+/gu, ' ').trim()
+  /** 在右侧栏顶层为条目开独立 tab。 */
+  onOpenItem(key: string, title?: string): void
 }
 
 function StatusDot({ ok, label }: { ok: boolean; label: string }): ReactElement {
@@ -73,29 +86,35 @@ function StatusDot({ ok, label }: { ok: boolean; label: string }): ReactElement 
   )
 }
 
-export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): ReactElement {
+export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }: Props): ReactElement {
   const {
     health,
     libraryName,
     collections,
     treeError,
     treeLoading,
-    query,
-    results,
-    selectedItemKey,
     selectedCollection,
-    detail,
-    detailLoading,
-    detailError,
-    collectionBib,
-    nodeItems,
-    nodeErrors,
-    toast,
+    query,
+    items,
+    itemsTotal,
+    itemsLoading,
+    itemsError,
+    tags,
+    tagsLoading,
+    tagsError,
+    tagQuery,
+    selectedTags,
+    tagMode,
+    tagUsage,
+    tagUsageLoading,
+    selectedItemKeys,
   } = usePaneState()
 
   useEffect(() => {
     void loadTree()
   }, [])
+
+  const insertion = useInsertion(t, sessions, sessionId, inputActions)
 
   const [treeWidth, setTreeWidth] = useState(readTreeWidth)
   const [splitHover, setSplitHover] = useState(false)
@@ -132,53 +151,6 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
     }
   }
 
-  const report = useCallback((outcome: InsertOutcome): void => {
-    if (outcome === 'inserted') showToast(t('toast.inserted'))
-    else if (outcome === 'no-editor') showToast(t('error.noEditor'))
-    else showToast(t('error.draftChanged'))
-  }, [t])
-
-  /**
-   * 插一个引用 chip：草稿里只留 key，完整文本在提交那一刻由引用源的 codec 现取。
-   */
-  const insertReference = useCallback((reference: ReferenceInsert): void => {
-    if (!inputActions) {
-      report('no-editor')
-      return
-    }
-    report(insertChip(sessions, sessionId, reference, inputActions.captureInsertion()) ? 'inserted' : 'draft-changed')
-  }, [inputActions, report, sessionId, sessions])
-
-  const insertItem = useCallback((key: string, title: string): void => {
-    insertReference(itemReference(key, title))
-  }, [insertReference])
-
-  const insertExcerpt = useCallback(async (target: ZoteroItemDetail, quote: string): Promise<void> => {
-    report(await insertBuilt(inputActions, () => excerptText(t, target, quote)))
-  }, [inputActions, report, t])
-
-  const insertAnnotation = useCallback((
-    target: ZoteroItemDetail,
-    annotation: ZoteroAnnotation,
-  ): void => {
-    insertReference(annotationReference(
-      target.key,
-      annotation.key,
-      annotationChipLabel(t, annotation),
-    ))
-  }, [insertReference, t])
-
-  const insertNote = useCallback((target: ZoteroItemDetail, note: ZoteroNote): void => {
-    insertReference(noteReference(target.key, note.key, note.title))
-  }, [insertReference])
-
-  const insertCollection = useCallback((collection: ZoteroCollection): void => {
-    insertReference(collectionReference(collection.key, collection.name))
-  }, [insertReference])
-
-  /** 分类详情里的条目列表：与左侧树共用同一份缓存（选中分类时树已按需拉取）。 */
-  const collectionItems = selectedCollection === null ? undefined : nodeItems[selectedCollection.key]
-
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, fontSize: 13 }}>
       <header
@@ -210,53 +182,41 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
             minHeight: 0,
           }}
         >
-          <div style={{ padding: '8px 8px 4px', flexShrink: 0 }}>
-            <Input
-              value={query}
-              placeholder={t('tree.searchPlaceholder')}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
           <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-            {treeLoading ? (
+            {treeLoading && collections.length === 0 ? (
               <div style={hintStyle}>{t('status.loading')}</div>
             ) : treeError !== null ? (
               <div style={{ ...hintStyle, color: '#d29922' }}>{treeError}</div>
-            ) : results !== null ? (
-              results.length === 0 ? (
-                <div style={hintStyle}>{t('tree.empty')}</div>
-              ) : (
-                <div style={{ padding: '8px 6px' }}>
-                  {results.map((item) => {
-                    const read = isRead(item)
-                    return (
-                      <div
-                        key={item.key}
-                        title={itemTooltip(t, item)}
-                        onClick={() => openItem(item.key)}
-                        style={{ ...resultRowStyle, background: selectedItemKey === item.key ? 'rgba(127,127,127,0.16)' : 'transparent' }}
-                      >
-                        <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
-                        <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-                        <span style={resultMetaStyle}>{[item.creators, item.year].filter((p) => p !== '').join(' · ')}</span>
-                      </div>
-                    )
-                  })}
-                </div>
-              )
             ) : (
               <CollectionTree
                 t={t}
+                libraryName={libraryName}
                 collections={collections}
-                selectedItemKey={selectedItemKey}
                 selectedCollectionKey={selectedCollection?.key ?? null}
-                onSelectItem={openItem}
                 onSelectCollection={selectCollection}
-                onInsertItem={(item) => insertItem(item.key, item.title)}
-                onInsertCollection={insertCollection}
+                onInsertCollection={insertion.insertCollection}
               />
             )}
           </div>
+          <TagPanel
+            t={t}
+            tags={tags}
+            tagsLoading={tagsLoading}
+            tagsError={tagsError}
+            tagQuery={tagQuery}
+            selectedTags={selectedTags}
+            tagMode={tagMode}
+            scoped={selectedCollection !== null && selectedCollection.key !== TREE_ROOT_ID}
+            tagUsage={tagUsage}
+            tagUsageLoading={tagUsageLoading}
+            onTagQuery={setTagQuery}
+            onToggleTag={toggleTag}
+            onClearTags={clearTags}
+            onSetTagMode={setTagMode}
+            onRetry={retryTags}
+            onInsertTag={insertion.insertTag}
+            onInsertTagSet={insertion.insertTagSet}
+          />
         </aside>
 
         <div
@@ -287,127 +247,37 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId }: Props): Rea
           />
         </div>
 
-        <section style={{ flex: 1, minWidth: 0, overflow: 'auto', minHeight: 0 }}>
-          {selectedItemKey !== null ? (
-            detailLoading ? (
-              <div style={hintStyle}>{t('status.loading')}</div>
-            ) : detail === null ? (
-              <div style={{ padding: '12px 14px', fontSize: 12.5, color: '#d29922' }}>
-                <p style={{ margin: '0 0 8px' }}>{tpl(t('detail.loadFailed'), { message: detailError ?? '' })}</p>
-                <Button variant="outline" size="sm" onClick={() => openItem(selectedItemKey)}>
-                  {t('action.retry')}
-                </Button>
-              </div>
-            ) : (
-              <ItemDetail
-                t={t}
-                detail={detail}
-                onInsertItem={() => insertItem(detail.key, detail.title)}
-                onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
-                onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
-                onInsertNote={(note) => insertNote(detail, note)}
-                onOpenItem={openItem}
-              />
-            )
-          ) : selectedCollection !== null ? (
-            <div style={{ padding: '12px 14px' }}>
-              <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>{selectedCollection.name}</h2>
-              {selectedCollection.itemCount !== undefined && (
-                <p style={{ margin: '0 0 10px', opacity: 0.75 }}>
-                  {tpl(t('detail.collectionCount'), { n: selectedCollection.itemCount })}
-                </p>
-              )}
-              <Button variant="outline" size="sm" onClick={() => insertCollection(selectedCollection)}>
-                {t('action.insertCollection')}
-              </Button>
-              {selectedCollection.scope === undefined && (
-                <>
-                  <h3 style={{ ...sectionTitleStyle, margin: '16px 0 6px' }}>{t('detail.bibTitle')}</h3>
-                  {collectionBib === null ? (
-                    <p style={{ margin: 0, opacity: 0.6 }}>{t('status.loading')}</p>
-                  ) : collectionBib === '' ? (
-                    <p style={{ margin: 0, opacity: 0.6 }}>{t('detail.noBib')}</p>
-                  ) : (
-                    <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.7, opacity: 0.85 }}>{stripTags(collectionBib)}</p>
-                  )}
-                </>
-              )}
-              {/* 笔记不产生 CSL 引用，靠这份列表让「笔记目录」也有内容可看可点。 */}
-              {collectionItems !== undefined && collectionItems.length > 0 && (
-                <>
-                  <h3 style={{ ...sectionTitleStyle, margin: '16px 0 6px' }}>{t('detail.items')}</h3>
-                  <div>
-                    {collectionItems.map((item) => {
-                      const read = isRead(item)
-                      return (
-                        <div
-                          key={item.key}
-                          title={itemTooltip(t, item)}
-                          onClick={() => openItem(item.key)}
-                          style={resultRowStyle}
-                        >
-                          <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
-                          <span style={{ ...resultTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-                          <span style={resultMetaStyle}>
-                            {[item.creators, item.year].filter((part) => part !== '').join(' · ')}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <div style={hintStyle}>{t('detail.empty')}</div>
-          )}
+        <section style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <ItemList
+            t={t}
+            libraryName={libraryName}
+            selectedCollection={selectedCollection}
+            query={query}
+            items={items}
+            itemsTotal={itemsTotal}
+            itemsLoading={itemsLoading}
+            itemsError={itemsError}
+            selectedTags={selectedTags}
+            tagMode={tagMode}
+            selectedItemKeys={selectedItemKeys}
+            onSearch={setQuery}
+            onClearFilters={clearFilters}
+            onRemoveTag={toggleTag}
+            onRetry={retryItems}
+            onLoadMore={loadMoreItems}
+            onOpenItem={onOpenItem}
+            onSelectItem={selectItem}
+            onClearSelection={clearItemSelection}
+            onInsertItem={(item) => insertion.insertItem(item.key, item.title)}
+            onInsertItems={insertion.insertItems}
+            onInsertCollection={insertion.insertCollection}
+          />
         </section>
       </div>
 
-      {toast !== null && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: 14,
-            transform: 'translateX(-50%)',
-            padding: '5px 12px',
-            borderRadius: 6,
-            background: 'rgba(40,40,40,0.92)',
-            color: '#fff',
-            fontSize: 12,
-            zIndex: 10,
-          }}
-        >
-          {toast}
-        </div>
-      )}
+      <Toast />
     </div>
   )
 }
 
 const hintStyle: React.CSSProperties = { padding: '14px 12px', opacity: 0.6, fontSize: 12.5 }
-
-const resultRowStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 6,
-  alignItems: 'baseline',
-  padding: '3px 6px 3px 8px',
-  fontSize: 12.5,
-  lineHeight: 1.5,
-  borderRadius: 5,
-  cursor: 'pointer',
-}
-
-const resultTitleStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-}
-
-const resultMetaStyle: React.CSSProperties = { ...resultTitleStyle, flex: '0 0 auto', maxWidth: '48%', opacity: 0.5, fontSize: 11.5 }
-
-/** 列表行首的类型图标：基线对齐的行里改为垂直居中。 */
-const itemIconStyle: React.CSSProperties = { display: 'flex', alignSelf: 'center', flexShrink: 0 }

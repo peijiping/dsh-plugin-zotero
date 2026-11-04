@@ -1,12 +1,13 @@
 /**
  * 面板共享状态。
  *
- * 右侧栏是「每会话一个停靠面」，因此本插件的正文会被各会话各挂一份；把数据与
+ * 右侧栏是「每会话一个停靠面」，本插件的正文会被各会话各挂一份；把数据与
  * 选择状态放在这个模块级单例里，所有会话看到的就是同一块面板（切会话不重拉、
- * 选中项与搜索词都保留）。「添加到会话」仍走各实例自己的 `inputActions`。
+ * 选中分类/搜索词/已选标签都保留）。「添加到会话」仍走各实例自己的 `inputActions`。
  *
- * 状态只在 React 渲染之外更新（异步取数与定时器），所以用 useState + useEffect
- * 订阅即可，不依赖 useSyncExternalStore。
+ * 主面板 = 目录树 + 标签面板 + 条目列表；条目详情在独立 tab 里，状态不在这里。
+ * 列表与标签请求都用「请求序号 + AbortController」防竞态：快速切分类、连续点标签时
+ * 旧响应不能覆盖新结果。
  */
 
 import { useEffect, useState } from 'react'
@@ -14,32 +15,23 @@ import { useEffect, useState } from 'react'
 import type {
   ZoteroCollection,
   ZoteroHealth,
-  ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItemSummary,
+  ZoteroTag,
 } from '../zotero/types'
-import { fetchCollectionBib, fetchHealth, fetchItem, fetchItems, fetchTree } from './api'
+import { fetchHealth, fetchItems, fetchTagUsage, fetchTags, fetchTree } from './api'
 
 /** 搜索防抖时长。 */
 const SEARCH_DEBOUNCE_MS = 250
 
-/** 搜索结果条数上限。 */
-const SEARCH_LIMIT = 100
-
-/** 分类树每个节点一次最多拉取的条目数。 */
-const NODE_LIMIT = 200
+/** 条目列表每页条数。 */
+const ITEMS_PAGE_SIZE = 50
 
 /** 提示条停留时长。 */
 const TOAST_MS = 3000
 
 /** 文库根节点的 id（只存在于客户端，不对应任何 Zotero 分类）。 */
 export const TREE_ROOT_ID = '__library__'
-
-/** 拉取某节点条目所需的定位信息。 */
-export interface TreeNodeTarget {
-  collectionKey?: string
-  scope?: ZoteroItemScope
-}
 
 export interface PaneState {
   health: ZoteroHealth | null
@@ -49,28 +41,36 @@ export interface PaneState {
   treeLoading: boolean
   /** 分类树是否已成功拉取过；用于避免切会话时重复取数。 */
   loaded: boolean
-  /** 分类树中已展开的节点 id；放在 store 里，面板被重新挂载后仍然保留。 */
+  /** 分类树中已展开的节点 id（只控制分类开合，不承载条目）。 */
   expanded: ReadonlySet<string>
-  /** 已拉取条目的节点缓存（节点 id → 条目列表）。 */
-  nodeItems: Record<string, ZoteroItemSummary[]>
-  /** 已拉取节点的条目总数（节点 id → 总数）。 */
-  nodeTotals: Record<string, number>
-  /**
-   * 条目加载失败的节点（节点 id → 错误消息）。
-   *
-   * 失败不写空列表：空列表会被当成「这个分类没有条目」永久缓存，
-   * 用户只能重启面板才能恢复。错误单独记录，展开或点「重试」可再拉。
-   */
-  nodeErrors: Record<string, string>
-  query: string
-  results: ZoteroItemSummary[] | null
-  selectedItemKey: string | null
+
+  /** 当前选择：文库根（key = TREE_ROOT_ID）/ 真实分类 / 虚拟分类。 */
   selectedCollection: ZoteroCollection | null
-  detail: ZoteroItemDetail | null
-  detailLoading: boolean
-  /** 条目详情加载失败的原因；与 {@link PaneState.detailLoading} 一起避免一直停在「加载中」。 */
-  detailError: string | null
-  collectionBib: string | null
+  /** 当前范围的条目列表（已按搜索词与标签筛选）。 */
+  items: ZoteroItemSummary[]
+  itemsTotal: number
+  itemsLoading: boolean
+  itemsError: string | null
+  /** 列表里被点选的条目（单击选中、ctrl/cmd 加选，整目录引用按这批插 chip）。 */
+  selectedItemKeys: ReadonlySet<string>
+
+  /** 文库级标签；`null` 表示还没成功拉取过。 */
+  tags: ZoteroTag[] | null
+  tagsLoading: boolean
+  tagsError: string | null
+  /** 标签面板内的名称过滤词（纯客户端）。 */
+  tagQuery: string
+  selectedTags: ReadonlySet<string>
+  tagMode: 'all' | 'any'
+  /**
+   * 当前范围（分类子树 + 搜索词）内的标签用量：名称 → 范围内条目数。
+   * `null` = 不分范围（选中文库根，或用量拉取失败），此时列出全库标签。
+   */
+  tagUsage: ReadonlyMap<string, number> | null
+  /** 范围标签用量是否在途；切换分类时清空旧集合前先置 true。 */
+  tagUsageLoading: boolean
+
+  query: string
   toast: string | null
 }
 
@@ -83,17 +83,21 @@ function initialState(): PaneState {
     treeLoading: true,
     loaded: false,
     expanded: new Set([TREE_ROOT_ID]),
-    nodeItems: {},
-    nodeTotals: {},
-    nodeErrors: {},
-    query: '',
-    results: null,
-    selectedItemKey: null,
     selectedCollection: null,
-    detail: null,
-    detailLoading: false,
-    detailError: null,
-    collectionBib: null,
+    items: [],
+    itemsTotal: 0,
+    itemsLoading: false,
+    itemsError: null,
+    selectedItemKeys: new Set(),
+    tags: null,
+    tagsLoading: false,
+    tagsError: null,
+    tagQuery: '',
+    selectedTags: new Set(),
+    tagMode: 'all',
+    tagUsage: null,
+    tagUsageLoading: false,
+    query: '',
     toast: null,
   }
 }
@@ -105,22 +109,24 @@ function errorMessage(error: unknown): string {
 let state: PaneState = initialState()
 const listeners = new Set<() => void>()
 let treeInflight: Promise<void> | null = null
-const nodeInflight = new Set<string>()
-/** 各节点最近一次加载用的定位信息；刷新时用来重拉已展开的分支。 */
-const nodeTargets = new Map<string, TreeNodeTarget>()
+let tagsInflight: Promise<void> | null = null
 let searchTimer: number | null = null
 let toastTimer: number | null = null
+/** 条目列表请求序号与在途请求。 */
+let itemsSeq = 0
+let itemsAbort: AbortController | null = null
+/** 标签用量请求序号与在途请求。 */
+let usageSeq = 0
+let usageAbort: AbortController | null = null
 
 function patch(next: Partial<PaneState>): void {
   state = { ...state, ...next }
   for (const listener of listeners) listener()
 }
 
-/** 返回去掉某个 key 的记录；没有该 key 时原样返回，避免无意义的新对象。 */
-function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
-  if (!(key in record)) return record
-  const { [key]: _removed, ...rest } = record
-  return rest
+/** 文库根节点的伪分类对象。 */
+function libraryRoot(name: string): ZoteroCollection {
+  return { key: TREE_ROOT_ID, name, parentKey: false }
 }
 
 /** 订阅整份面板状态（任一字段变化都会触发重渲染）。 */
@@ -128,6 +134,13 @@ export function usePaneState(): PaneState {
   const [snapshot, setSnapshot] = useState(getPaneState)
   useEffect(() => subscribePane(() => setSnapshot(getPaneState())), [])
   return snapshot
+}
+
+/** 只订阅提示条：条目 tab 没有理由跟着列表/标签状态重渲染。 */
+export function useToast(): string | null {
+  const [toast, setToast] = useState(() => getPaneState().toast)
+  useEffect(() => subscribePane(() => setToast(getPaneState().toast)), [])
+  return toast
 }
 
 export function getPaneState(): PaneState {
@@ -147,8 +160,24 @@ export function showToast(message: string): void {
   toastTimer = window.setTimeout(() => patch({ toast: null }), TOAST_MS)
 }
 
+// ---- 分类树 -----------------------------------------------------------------
+
+/** 当前选择指向的查询范围参数（文库根不带 key/scope）。 */
+function selectionQuery(): {
+  scope?: ZoteroItemScope
+  collectionKey?: string
+} {
+  const collection = state.selectedCollection
+  if (collection === null || collection.key === TREE_ROOT_ID) return {}
+  if (collection.scope !== undefined) return { scope: collection.scope }
+  return { collectionKey: collection.key }
+}
+
 /**
  * 拉取状态与分类树。
+ *
+ * 成功后按 key 保留原选择（真实分类被删则回到文库根），再重拉条目列表；
+ * 标签独立拉取，标签失败不拖垮树。
  *
  * @param force 手动刷新；默认只在首次成功前取数（共享 store 已加载就不再重拉）
  */
@@ -156,28 +185,33 @@ export function loadTree(force = false): Promise<void> {
   if (treeInflight !== null) return treeInflight
   if (!force && state.loaded) return Promise.resolve()
   patch({ treeLoading: true })
-  if (force) {
-    // 手动刷新：清掉节点缓存（失败留下的空结果也在这里一并清掉），
-    // 再把已展开的分支和当前详情按最新数据重拉。
-    const expanded = [...state.expanded]
-    patch({ nodeItems: {}, nodeTotals: {}, nodeErrors: {}, collectionBib: null })
-    for (const nodeId of expanded) {
-      const target = nodeTargets.get(nodeId)
-      if (target !== undefined) loadNodeItems(nodeId, target, true)
-    }
-    if (state.selectedItemKey !== null) openItem(state.selectedItemKey)
-    else if (state.selectedCollection !== null) selectCollection(state.selectedCollection)
-  }
+  void loadTags(force)
+
   const run = (async (): Promise<void> => {
     try {
       const [healthData, tree] = await Promise.all([fetchHealth(), fetchTree()])
+      const previous = state.selectedCollection
+      let selected: ZoteroCollection = libraryRoot(tree.libraryName)
+      if (previous !== null) {
+        if (previous.key === TREE_ROOT_ID) {
+          selected = libraryRoot(tree.libraryName)
+        } else if (previous.scope !== undefined) {
+          selected = previous
+        } else {
+          selected = tree.collections.find((node) => node.key === previous.key)
+            ?? libraryRoot(tree.libraryName)
+        }
+      }
       patch({
         health: healthData,
         collections: tree.collections,
         libraryName: tree.libraryName,
         treeError: null,
         loaded: true,
+        selectedCollection: selected,
       })
+      reloadItems({ reset: true })
+      loadTagUsage()
     } catch (error) {
       patch({ treeError: errorMessage(error) })
     } finally {
@@ -189,119 +223,262 @@ export function loadTree(force = false): Promise<void> {
   return run
 }
 
-/** 按需拉取某节点的条目；已拉取或正在拉取时直接返回（force 时清缓存重拉）。 */
-function loadNodeItems(nodeId: string, target: TreeNodeTarget, force = false): void {
-  nodeTargets.set(nodeId, target)
-  if (nodeInflight.has(nodeId)) return
-  if (!force && state.nodeItems[nodeId] !== undefined) return
-  nodeInflight.add(nodeId)
-  if (force) {
-    patch({
-      nodeItems: withoutKey(state.nodeItems, nodeId),
-      nodeTotals: withoutKey(state.nodeTotals, nodeId),
-    })
-  }
-  patch({ nodeErrors: withoutKey(state.nodeErrors, nodeId) })
-  fetchItems({ ...target, limit: NODE_LIMIT })
-    .then((data) => {
-      patch({
-        nodeItems: { ...state.nodeItems, [nodeId]: data.items },
-        nodeTotals: { ...state.nodeTotals, [nodeId]: data.total },
-      })
-    })
-    .catch((error: unknown) => {
-      // 失败不写空列表：否则会被当成「这个分类没有条目」一直挂着，只能重启恢复。
-      patch({
-        nodeItems: withoutKey(state.nodeItems, nodeId),
-        nodeTotals: withoutKey(state.nodeTotals, nodeId),
-        nodeErrors: { ...state.nodeErrors, [nodeId]: errorMessage(error) },
-      })
-    })
-    .finally(() => {
-      nodeInflight.delete(nodeId)
-    })
-}
-
-/** 重试某个加载失败的节点（树行内「重试」）。 */
-export function retryNode(nodeId: string): void {
-  const target = nodeTargets.get(nodeId)
-  if (target !== undefined) loadNodeItems(nodeId, target, true)
-}
-
-/** 三角箭头：只开合节点，展开时按需拉取条目（根节点没有条目，不传 target）。 */
-export function toggleTreeNode(nodeId: string, target?: TreeNodeTarget): void {
-  const willOpen = !state.expanded.has(nodeId)
+/** 三角箭头：只开合分类。 */
+export function toggleTreeNode(nodeId: string): void {
   const expanded = new Set(state.expanded)
-  if (willOpen) expanded.add(nodeId)
-  else expanded.delete(nodeId)
+  if (expanded.has(nodeId)) expanded.delete(nodeId)
+  else expanded.add(nodeId)
   patch({ expanded })
-  if (willOpen && target !== undefined) loadNodeItems(nodeId, target)
 }
 
-/** 选中分类时调用：确保节点展开且条目已拉取。 */
-export function expandTreeNode(nodeId: string, target: TreeNodeTarget): void {
-  if (!state.expanded.has(nodeId)) patch({ expanded: new Set(state.expanded).add(nodeId) })
-  loadNodeItems(nodeId, target)
+/**
+ * 选中分类（文库根 / 真实分类 / 虚拟分类）：重拉列表与范围标签。
+ *
+ * 切换范围时标签集也换了，已选标签与标签面板里的名称过滤一并清空，
+ * 否则旧筛选会作用到新目录（多数情况下变成空列表）。
+ */
+export function selectCollection(collection: ZoteroCollection): void {
+  const name = collection.key === TREE_ROOT_ID ? state.libraryName : collection.name
+  const selected = collection.key === TREE_ROOT_ID
+    ? libraryRoot(name === '' ? '我的文库' : name)
+    : collection
+  if (state.selectedCollection?.key === selected.key) return
+  patch({
+    selectedCollection: selected,
+    items: [],
+    itemsTotal: 0,
+    itemsError: null,
+    selectedTags: new Set(),
+    tagQuery: '',
+  })
+  reloadItems({ reset: true })
+  loadTagUsage()
 }
 
-/** 更新搜索词并按防抖取数；清空时回到分类树。 */
+// ---- 搜索 -------------------------------------------------------------------
+
+/** 更新搜索词并按防抖重拉当前范围（含标签用量）；清空时立即重拉。 */
 export function setQuery(next: string): void {
   patch({ query: next })
   if (searchTimer !== null) window.clearTimeout(searchTimer)
-  const trimmed = next.trim()
-  if (trimmed === '') {
+  if (next.trim() === '') {
     searchTimer = null
-    patch({ results: null })
+    reloadItems({ reset: true })
+    loadTagUsage()
     return
   }
   searchTimer = window.setTimeout(() => {
     searchTimer = null
-    void fetchItems({ q: trimmed, limit: SEARCH_LIMIT })
-      .then((data) => patch({ results: data.items }))
-      .catch(() => patch({ results: [] }))
+    reloadItems({ reset: true })
+    loadTagUsage()
   }, SEARCH_DEBOUNCE_MS)
 }
 
-/** 打开条目详情。失败时记录原因，由详情区就地显示「重试」。 */
-export function openItem(key: string): void {
-  patch({ selectedItemKey: key, detail: null, detailLoading: true, detailError: null })
-  void fetchItem(key)
-    .then((data) => patch({ detail: data }))
-    .catch((error: unknown) => patch({ detailError: errorMessage(error) }))
-    .finally(() => patch({ detailLoading: false }))
+// ---- 标签 -------------------------------------------------------------------
+
+/** 拉取全库标签；失败只记错误，不影响树与列表。 */
+export function loadTags(force = false): Promise<void> {
+  if (tagsInflight !== null) return tagsInflight
+  if (!force && state.tags !== null) return Promise.resolve()
+  patch({ tagsLoading: true })
+  const run = (async (): Promise<void> => {
+    try {
+      const data = await fetchTags()
+      patch({ tags: data.tags, tagsError: null })
+    } catch (error) {
+      patch({ tagsError: errorMessage(error) })
+    } finally {
+      patch({ tagsLoading: false })
+      tagsInflight = null
+    }
+  })()
+  tagsInflight = run
+  return run
 }
 
-/** 选中分类并拉取该目录的引用（APA）；虚拟分类（出版物/未分类/回收站）不导出引用。 */
-export function selectCollection(collection: ZoteroCollection): void {
-  if (collection.scope !== undefined) {
-    patch({
-      selectedItemKey: null,
-      detail: null,
-      selectedCollection: collection,
-      collectionBib: '',
+/** 点标签：切换选中并重拉列表（保留当前分类与搜索词）。 */
+export function toggleTag(name: string): void {
+  const selected = new Set(state.selectedTags)
+  if (selected.has(name)) selected.delete(name)
+  else selected.add(name)
+  patch({ selectedTags: selected })
+  reloadItems({ reset: true })
+}
+
+export function clearTags(): void {
+  if (state.selectedTags.size === 0) return
+  patch({ selectedTags: new Set() })
+  reloadItems({ reset: true })
+}
+
+export function setTagMode(mode: 'all' | 'any'): void {
+  if (state.tagMode === mode) return
+  patch({ tagMode: mode })
+  if (state.selectedTags.size > 0) reloadItems({ reset: true })
+}
+
+/** 清除搜索词与全部已选标签。 */
+export function clearFilters(): void {
+  if (searchTimer !== null) window.clearTimeout(searchTimer)
+  searchTimer = null
+  if (state.selectedTags.size === 0 && state.query === '') return
+  const hadQuery = state.query.trim() !== ''
+  patch({ selectedTags: new Set(), query: '' })
+  reloadItems({ reset: true })
+  if (hadQuery) loadTagUsage()
+}
+
+/** 标签面板的名称过滤（纯客户端）。 */
+export function setTagQuery(text: string): void {
+  if (state.tagQuery === text) return
+  patch({ tagQuery: text })
+}
+
+export function retryTags(): void {
+  void loadTags(true)
+}
+
+// ---- 条目列表 ---------------------------------------------------------------
+
+/**
+ * 重拉条目列表。
+ *
+ * 重置（切分类 / 改筛选）时连带清空选中项：列表都换了，留着旧选中会让
+ * 「引用已选」插进不在眼前的条目。
+ *
+ * @param options.reset 清空当前列表与选中项
+ * @param options.append 追加下一页（加载更多）
+ */
+export function reloadItems(options: { reset: boolean; append?: boolean }): void {
+  if (itemsAbort !== null) itemsAbort.abort()
+  const controller = new AbortController()
+  itemsAbort = controller
+  const current = ++itemsSeq
+  const append = options.append === true && !options.reset
+  const offset = append ? state.items.length : 0
+  if (!append) patch({ items: [], itemsTotal: 0, itemsError: null, selectedItemKeys: new Set() })
+  patch({ itemsLoading: true })
+
+  const tags = [...state.selectedTags]
+  fetchItems({
+    ...selectionQuery(),
+    q: state.query.trim(),
+    tags: tags.length === 0 ? undefined : tags,
+    tagMode: tags.length === 0 ? undefined : state.tagMode,
+    limit: ITEMS_PAGE_SIZE,
+    offset,
+  }, controller.signal)
+    .then((data) => {
+      if (current !== itemsSeq) return
+      patch({
+        items: append ? [...state.items, ...data.items] : data.items,
+        itemsTotal: data.total,
+        itemsError: null,
+      })
     })
+    .catch((error: unknown) => {
+      if (current !== itemsSeq || controller.signal.aborted) return
+      patch({ itemsError: errorMessage(error) })
+    })
+    .finally(() => {
+      if (current !== itemsSeq) return
+      patch({ itemsLoading: false })
+      if (itemsAbort === controller) itemsAbort = null
+    })
+}
+
+/** 加载下一页；到底或正在加载时不触发。 */
+export function loadMoreItems(): void {
+  if (state.itemsLoading || state.items.length >= state.itemsTotal) return
+  reloadItems({ reset: false, append: true })
+}
+
+export function retryItems(): void {
+  reloadItems({ reset: true })
+}
+
+/**
+ * 列表行选中。
+ *
+ * 普通点击替换选中项（与 Zotero 一致，打开详情靠双击）；带 ctrl/cmd 时切换该项，
+ * 支持跨行多选。
+ */
+export function selectItem(key: string, append: boolean): void {
+  const selected = new Set(state.selectedItemKeys)
+  if (append) {
+    if (selected.has(key)) selected.delete(key)
+    else selected.add(key)
+  } else {
+    if (selected.size === 1 && selected.has(key)) return
+    selected.clear()
+    selected.add(key)
+  }
+  patch({ selectedItemKeys: selected })
+}
+
+/** 清空列表选中项（点列表空白处）。 */
+export function clearItemSelection(): void {
+  if (state.selectedItemKeys.size === 0) return
+  patch({ selectedItemKeys: new Set() })
+}
+
+/**
+ * 拉取当前分类（不含子目录）/ 虚拟分类 + 搜索词内的标签用量。
+ *
+ * 只统计所选分类自身的条目：父分类的列表也只展示自身条目，若把子目录标签
+ * 并进来，点标签过滤后会是空列表。文库根不分范围（直接置 null，标签面板回
+ * 落到全库标签）；拉取失败也按 null 处理——退化成「列出全库标签」即可。
+ */
+function loadTagUsage(): void {
+  const current = ++usageSeq
+  if (usageAbort !== null) usageAbort.abort()
+  usageAbort = null
+  const collection = state.selectedCollection
+  if (collection === null || collection.key === TREE_ROOT_ID) {
+    patch({ tagUsage: null, tagUsageLoading: false })
     return
   }
-  patch({
-    selectedItemKey: null,
-    detail: null,
-    selectedCollection: collection,
-    collectionBib: null,
-  })
-  void fetchCollectionBib(collection.key)
-    .then((data) => patch({ collectionBib: data.bib }))
-    .catch(() => patch({ collectionBib: '' }))
+  const controller = new AbortController()
+  usageAbort = controller
+  const query = state.query.trim()
+  const scope = collection.scope
+  // 先清掉上一个分类的标签集，避免新结果回来前闪一下旧标签。
+  patch({ tagUsage: null, tagUsageLoading: true })
+  fetchTagUsage(
+    {
+      ...(scope !== undefined
+        ? { scope }
+        : { collectionKeys: [collection.key] }),
+      ...(query === '' ? {} : { q: query }),
+    },
+    controller.signal,
+  )
+    .then((data) => {
+      if (current === usageSeq) patch({ tagUsage: new Map(data.tags.map((tag) => [tag.name, tag.count])) })
+    })
+    .catch(() => {
+      if (current === usageSeq) patch({ tagUsage: null })
+    })
+    .finally(() => {
+      if (current === usageSeq) patch({ tagUsageLoading: false })
+      if (usageAbort === controller) usageAbort = null
+    })
 }
 
 /** 插件卸载时清空，避免热重载后残留上一轮的选中项。 */
 export function resetPaneStore(): void {
   if (searchTimer !== null) window.clearTimeout(searchTimer)
   if (toastTimer !== null) window.clearTimeout(toastTimer)
+  if (itemsAbort !== null) itemsAbort.abort()
+  if (usageAbort !== null) usageAbort.abort()
   searchTimer = null
   toastTimer = null
   treeInflight = null
-  nodeInflight.clear()
-  nodeTargets.clear()
+  tagsInflight = null
+  itemsAbort = null
+  usageAbort = null
+  itemsSeq = 0
+  usageSeq = 0
   state = initialState()
   for (const listener of listeners) listener()
 }

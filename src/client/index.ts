@@ -20,6 +20,7 @@ import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { ZoteroCard, ZoteroCardController, ROW_CONFIG_KEY, ROW_ID } from './ZoteroCard'
+import { ITEM_ADDRESS_PREFIX, ZoteroItemPane } from './ZoteroItemPane'
 import { ZoteroPane } from './ZoteroPane'
 
 /** locale 服务中本插件用到的那部分。 */
@@ -40,13 +41,22 @@ interface GuideEntry {
 interface TabDefinition {
   id: string
   kind: string
-  title: () => string
+  title: (address: string) => string
+  multiple?: boolean
+  keepMounted?: boolean
+  patterns?: readonly string[]
+  priority?: 'extension' | 'builtin' | 'fallback'
   guide?: readonly GuideEntry[]
 }
 
 /** 右侧栏 tab 类型注册表。 */
 interface SidebarRightTabsService {
   register(definition: TabDefinition): unknown
+}
+
+/** 右侧栏导航服务（只用到按资源地址打开）。 */
+interface SidebarRightService {
+  openResource(address: string, options?: { params?: unknown }): void
 }
 
 /** slots 服务。 */
@@ -78,6 +88,7 @@ interface ClientContext {
   locale: LocaleService
   slots: SlotsService
   sidebarRightTabs: SidebarRightTabsService
+  sidebarRight: SidebarRightService
   configForms: ConfigFormsService
   inputTriggers: InputTriggersService
   sessions: SessionsFace
@@ -86,8 +97,19 @@ interface ClientContext {
 /** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
 const TAB_ID = 'zotero'
 
+/** 条目 tab 的类型 id / kind；正文与标题席位也按这个 key 注册。 */
+const ITEM_TAB_ID = 'zotero-item'
+
 export const name = 'dsh-plugin-zotero'
-export const inject = ['slots', 'locale', 'sidebarRightTabs', 'configForms', 'inputTriggers', 'sessions']
+export const inject = [
+  'slots',
+  'locale',
+  'sidebarRightTabs',
+  'sidebarRight',
+  'configForms',
+  'inputTriggers',
+  'sessions',
+]
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-zotero: dictionaries')
@@ -108,6 +130,28 @@ export function apply(ctx: ClientContext): void {
     'dsh-plugin-zotero: sidebar tab',
   )
 
+  // 每个条目一个资源 tab：地址稳定（内容 id 即地址），同条目再次打开只聚焦已有 tab。
+  ctx.effect(
+    () => ctx.sidebarRightTabs.register({
+      id: ITEM_TAB_ID,
+      kind: ITEM_TAB_ID,
+      title: () => t('itemTab.title'),
+      patterns: ['dsh-resource://zotero-item/**'],
+      priority: 'extension',
+      keepMounted: true,
+    }),
+    'dsh-plugin-zotero: item tab',
+  )
+
+  /** 打开 / 聚焦某条目的 tab；标题先给一个，布局恢复后由标题席位读 params。 */
+  const openItem = (key: string, title?: string): void => {
+    const address = `${ITEM_ADDRESS_PREFIX}${encodeURIComponent(key)}`
+    ctx.sidebarRight.openResource(
+      address,
+      title === undefined || title === '' ? undefined : { params: { title } },
+    )
+  }
+
   // 引用 chip 的展开器：面板插的 chip 只带 key，提交时由这个 codec 现取文本。
   ctx.effect(
     () => ctx.inputTriggers.registerSource(createZoteroSource(t)),
@@ -122,6 +166,7 @@ export function apply(ctx: ClientContext): void {
       sessions: ctx.sessions,
       inputActions: props.inputActions,
       sessionId: props.sessionId,
+      onOpenItem: openItem,
     })
 
   ctx.effect(
@@ -130,6 +175,53 @@ export function apply(ctx: ClientContext): void {
       Body as ComponentType<never>,
     ),
     'dsh-plugin-zotero: pane body',
+  )
+
+  type ItemPaneProps = Parameters<typeof ZoteroItemPane>[0]
+
+  const ItemBody = (props: {
+    inputActions?: InputActions
+    sessionId?: string
+    useTabInfo: ItemPaneProps['useTabInfo']
+  }): ReactElement =>
+    createElement(ZoteroItemPane, {
+      t,
+      useTabInfo: props.useTabInfo,
+      sessions: ctx.sessions,
+      inputActions: props.inputActions,
+      sessionId: props.sessionId,
+      onOpenItem: openItem,
+    })
+
+  const ItemTitle = (props: { useTabInfo: ItemPaneProps['useTabInfo'] }): ReactElement => {
+    const info = props.useTabInfo()
+    const params = info.tab.navigation?.params as { title?: unknown } | undefined
+    const title = typeof params?.title === 'string' && params.title !== ''
+      ? params.title
+      : t('itemTab.title')
+    return createElement(
+      'span',
+      { title, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+      title,
+    )
+  }
+
+  ctx.effect(
+    () => ctx.slots.inject('sidebar.right.pane.tab', () =>
+      ctx.slots.register(
+        { name: 'sidebar.right.pane.tab', key: ITEM_TAB_ID },
+        ItemBody as ComponentType<never>,
+      )),
+    'dsh-plugin-zotero: item body',
+  )
+
+  ctx.effect(
+    () => ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+      ctx.slots.register(
+        { name: 'sidebar.right.pane.tab.title', key: ITEM_TAB_ID },
+        ItemTitle as ComponentType<never>,
+      )),
+    'dsh-plugin-zotero: item title',
   )
 
   // 共享面板状态是模块级单例，插件卸载时清空。

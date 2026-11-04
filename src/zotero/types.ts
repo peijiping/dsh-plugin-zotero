@@ -149,6 +149,20 @@ export interface ZoteroItems {
   items: ZoteroItemSummary[]
 }
 
+/** 文库级标签（计数是全库的）。 */
+export interface ZoteroTag {
+  name: string
+  count: number
+  /** 0 自动标签，1 手动标签。 */
+  type: number
+}
+
+/** 标签列表数据。 */
+export interface ZoteroTags {
+  total: number
+  tags: ZoteroTag[]
+}
+
 /** 分类引用导出数据。 */
 export interface ZoteroCollectionBib {
   bib: string

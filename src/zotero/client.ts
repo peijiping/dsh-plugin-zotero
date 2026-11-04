@@ -33,6 +33,8 @@ import type {
   ZoteroItemScope,
   ZoteroItemSummary,
   ZoteroNote,
+  ZoteroTag,
+  ZoteroTags,
 } from './types.js'
 
 /** 归一化后的 Zotero 访问错误。 */
@@ -57,6 +59,13 @@ interface RawCreator {
 
 interface RawTag {
   tag?: string
+  /** 条目 `data.tags` 上的类型（0 自动标签，1 手动标签）；`/tags` 端点在 `meta.type`。 */
+  type?: number
+  meta?: {
+    /** 0 自动标签，1 手动标签。 */
+    type?: number
+    numItems?: number
+  }
 }
 
 interface RawItemData {
@@ -493,6 +502,113 @@ export async function listCollections(): Promise<ZoteroCollection[]> {
   })
 }
 
+// ---- 标签 -------------------------------------------------------------------
+
+/** 标签分页大小（本地 API 上限 1000）与总量上限。 */
+const TAG_PAGE_SIZE = 1000
+const TAG_MAX = 5000
+
+/**
+ * 文库级标签列表。
+ *
+ * 本地 API 没有「按分类的标签」端点（`/tags` 上的 `collectionKey` / `q` 实测被忽略），
+ * 所以计数是**全库**的；范围用量另走 {@link listTagUsage}。
+ * 按名称去重（同名标签只可能来自分页重复），`meta.type` / `numItems` 缺失时
+ * 分别按手动标签与 0 处理，避免 UI 出现 `NaN`。
+ */
+export async function listTags(): Promise<ZoteroTags> {
+  const seen = new Map<string, ZoteroTag>()
+  let total = 0
+  for (let start = 0; start < TAG_MAX; start += TAG_PAGE_SIZE) {
+    const { body, total: pageTotal } = await requestJson<RawTag[]>(
+      `${libraryBase()}/tags?limit=${TAG_PAGE_SIZE}&start=${start}`,
+    )
+    const page = Array.isArray(body) ? body : []
+    if (pageTotal !== null) total = pageTotal
+    for (const raw of page) {
+      const name = raw.tag?.trim() ?? ''
+      if (name === '' || seen.has(name)) continue
+      seen.set(name, {
+        name,
+        count: raw.meta?.numItems ?? 0,
+        type: raw.meta?.type ?? 1,
+      })
+    }
+    if (page.length < TAG_PAGE_SIZE) break
+    if (total > 0 && start + page.length >= total) break
+  }
+  return { total: total || seen.size, tags: [...seen.values()] }
+}
+
+/** 标签用量扫描的分页大小（本地 API 单页上限 100）与扫描条目上限。 */
+const USAGE_PAGE_SIZE = 100
+const USAGE_SCAN_MAX = 3000
+
+export interface ListTagUsageOptions {
+  /** 虚拟分类范围；缺省或 `library` 走真实分类/全库。 */
+  scope?: ZoteroItemScope
+  /**
+   * 真实分类 key 列表（可含子目录）；空/缺省 = 全库。
+   * 分类本身不含子分类条目，子树集合由调用方展开后传进来。
+   */
+  collectionKeys?: readonly string[]
+  /** 与条目列表同一个搜索词，标签可用性才跟列表口径一致。 */
+  q?: string
+}
+
+/**
+ * 当前范围（分类 / 虚拟分类 + 搜索词）内的标签用量。
+ *
+ * 只能扫条目现算：逐页取范围内的顶层条目，读每条的 `data.tags` 累加计数。
+ * 传多个 `collectionKeys` 时分目录扫描，并按条目 key 去重——同一篇条目可能
+ * 同时挂在父分类与子分类里，不能重复计数。超过 `USAGE_SCAN_MAX` 条的大范围
+ * 按前若干页截断，超大目录可能漏掉靠后的标签（本地 API 没有按分类列标签的端点）。
+ */
+export async function listTagUsage(options: ListTagUsageOptions): Promise<ZoteroTags> {
+  const search = options.q?.trim() ?? ''
+  const counts = new Map<string, ZoteroTag>()
+  const seenItems = new Set<string>()
+
+  const bases =
+    options.scope === 'publications'
+      ? [`${libraryBase()}/publications/items`]
+      : options.scope === 'trash'
+        ? [`${libraryBase()}/items/trash`]
+        : (options.collectionKeys ?? []).length > 0
+          ? options.collectionKeys!.map((key) => `${libraryBase()}/collections/${encode(key)}/items/top`)
+          : [`${libraryBase()}/items/top`]
+
+  let scanned = 0
+  for (const base of bases) {
+    for (let start = 0; scanned < USAGE_SCAN_MAX; start += USAGE_PAGE_SIZE) {
+      const params = new URLSearchParams({ limit: String(USAGE_PAGE_SIZE), start: String(start) })
+      if (search !== '') params.set('q', search)
+      const { body } = await requestJson<RawItem[]>(`${base}?${params.toString()}`)
+      const page = Array.isArray(body) ? body : []
+      if (page.length === 0) break
+      scanned += page.length
+      for (const raw of page) {
+        if (seenItems.has(raw.key)) continue
+        seenItems.add(raw.key)
+        // 「未分类条目」没有专用端点，与列表一样靠 data.collections 筛。
+        if (options.scope === 'unfiled' && (raw.data?.collections ?? []).length > 0) continue
+        for (const tag of raw.data?.tags ?? []) {
+          const name = tag.tag?.trim() ?? ''
+          if (name === '') continue
+          const existing = counts.get(name)
+          if (existing === undefined) counts.set(name, { name, count: 1, type: tag.type ?? 1 })
+          else existing.count += 1
+        }
+      }
+      if (page.length < USAGE_PAGE_SIZE) break
+    }
+    if (scanned >= USAGE_SCAN_MAX) break
+  }
+
+  const tags = [...counts.values()]
+  return { total: tags.length, tags }
+}
+
 // ---- 条目 -------------------------------------------------------------------
 
 export interface ListItemsOptions {
@@ -500,6 +616,9 @@ export interface ListItemsOptions {
   scope?: ZoteroItemScope
   collectionKey?: string
   q?: string
+  /** 标签过滤：AND（默认）逐个 `tag=`，OR 合并成 `tag=A || B`。 */
+  tags?: readonly string[]
+  tagMode?: 'all' | 'any'
   limit: number
   offset: number
 }
@@ -553,22 +672,37 @@ async function itemLastRead(key: string): Promise<number | null> {
   }
 }
 
+/** 把 `q` 与标签过滤写进查询参数（列表与未分类扫描共用）。 */
+function appendItemFilters(params: URLSearchParams, options: ListItemsOptions): void {
+  if (options.q && options.q.trim() !== '') params.set('q', options.q.trim())
+  const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
+  if (tags.length === 0) return
+  if (options.tagMode === 'any') {
+    params.set('tag', tags.join(' || '))
+  } else {
+    for (const tag of tags) params.append('tag', tag)
+  }
+}
+
+/** 范围内的顶层条目端点基址（条目列表与标签用量共用同一套范围规则）。 */
+function itemListBase(options: { scope?: ZoteroItemScope; collectionKey?: string }): string {
+  return options.scope === 'publications'
+    ? `${libraryBase()}/publications/items`
+    : options.scope === 'trash'
+      ? `${libraryBase()}/items/trash`
+      : options.collectionKey
+        ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items/top`
+        : `${libraryBase()}/items/top`
+}
+
 /** 把 options 折成「顶层条目」端点基址 + 查询参数。 */
 function itemListQuery(options: ListItemsOptions): { base: string; params: URLSearchParams } {
-  const base =
-    options.scope === 'publications'
-      ? `${libraryBase()}/publications/items`
-      : options.scope === 'trash'
-        ? `${libraryBase()}/items/trash`
-        : options.collectionKey
-          ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items/top`
-          : `${libraryBase()}/items/top`
   const params = new URLSearchParams({
     limit: String(options.limit),
     start: String(options.offset),
   })
-  if (options.q && options.q.trim() !== '') params.set('q', options.q.trim())
-  return { base, params }
+  appendItemFilters(params, options)
+  return { base: itemListBase(options), params }
 }
 
 /**
@@ -576,13 +710,14 @@ function itemListQuery(options: ListItemsOptions): { base: string; params: URLSe
  * （`data.collections` 非空即已归类），分页在筛完后作用于结果集。
  */
 async function listUnfiled(
-  offset: number,
-  limit: number,
+  options: ListItemsOptions,
 ): Promise<{ total: number; items: ZoteroItemSummary[] }> {
   const all: RawItem[] = []
   for (let start = 0; start < UNFILED_SCAN_MAX; start += PAGE_SIZE) {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), start: String(start) })
+    appendItemFilters(params, options)
     const { body } = await requestJson<RawItem[]>(
-      `${libraryBase()}/items/top?limit=${PAGE_SIZE}&start=${start}`,
+      `${libraryBase()}/items/top?${params.toString()}`,
     )
     if (!Array.isArray(body) || body.length === 0) break
     for (const raw of body) {
@@ -590,7 +725,7 @@ async function listUnfiled(
     }
     if (body.length < PAGE_SIZE) break
   }
-  const page = all.slice(offset, offset + limit)
+  const page = all.slice(options.offset, options.offset + options.limit)
   return { total: all.length, items: await toSummaries(page) }
 }
 
@@ -598,7 +733,7 @@ async function listUnfiled(
 export async function listItems(
   options: ListItemsOptions,
 ): Promise<{ total: number; items: ZoteroItemSummary[] }> {
-  if (options.scope === 'unfiled') return listUnfiled(options.offset, options.limit)
+  if (options.scope === 'unfiled') return listUnfiled(options)
 
   const { base, params } = itemListQuery(options)
   const { body, total } = await requestJson<RawItem[]>(`${base}?${params.toString()}`)

@@ -20,6 +20,7 @@ import type {
   ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItems,
+  ZoteroTags,
   ZoteroTree,
 } from '../zotero/types.js'
 
@@ -143,16 +144,43 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
   }
   const collectionKey = params.get('collectionKey') ?? undefined
   const q = params.get('q') ?? undefined
+  const tags = params.getAll('tag').map((tag) => tag.trim()).filter((tag) => tag !== '')
+  const tagMode = params.get('tagMode') === 'any' ? 'any' : 'all'
   const limit = clampLimit(params.get('limit'))
   const offset = parseOffset(params.get('offset'))
   const result = await zotero.listItems({
     scope: scopeParam === null ? undefined : scopeParam,
     collectionKey,
     q,
+    tags,
+    tagMode,
     limit,
     offset,
   })
   const data: ZoteroItems = { total: result.total, items: result.items }
+  ok(res, data)
+}
+
+async function handleTags(res: ServerResponse): Promise<void> {
+  const data: ZoteroTags = await zotero.listTags()
+  ok(res, data)
+}
+
+/** 当前范围内的标签用量（供标签面板列出范围标签）。 */
+async function handleTagUsage(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const scopeParam = params.get('scope')
+  if (scopeParam !== null && !isScope(scopeParam)) {
+    fail(res, 400, 'bad_request', `未知 scope ${scopeParam}`)
+    return
+  }
+  const collectionKeys = params.getAll('collectionKey')
+    .map((key) => key.trim())
+    .filter((key) => key !== '')
+  const data: ZoteroTags = await zotero.listTagUsage({
+    scope: scopeParam === null ? undefined : scopeParam,
+    collectionKeys: collectionKeys.length === 0 ? undefined : collectionKeys,
+    q: params.get('q') ?? undefined,
+  })
   ok(res, data)
 }
 
@@ -209,6 +237,12 @@ export function createHandler(
           return
         case 'items':
           await handleItems(res, url.searchParams)
+          return
+        case 'tags':
+          await handleTags(res)
+          return
+        case 'tag-usage':
+          await handleTagUsage(res, url.searchParams)
           return
         case 'item':
           await handleItem(res, url.searchParams)
