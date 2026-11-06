@@ -22,6 +22,7 @@ import type { ZoteroAnnotation } from '../../zotero/types'
 import { buildSegments, type Segment } from '../annotationRuns'
 import type { Translate } from '../locales'
 import { NOTE_CSS } from '../NoteList'
+import { SelectionBar } from './SelectionBar'
 import type { DocumentRendererProps } from './types'
 
 const FLASH_CLASS = 'dsh-zotero-ann-flash'
@@ -168,18 +169,14 @@ export function TextViewer({
         </div>
       )}
       {selection !== null && (
-        <button
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            onInsertExcerpt(selection.text)
-            window.getSelection()?.removeAllRanges()
-            setSelection(null)
-          }}
-          style={{ ...selectionButtonStyle, left: selection.x, top: selection.y }}
-        >
-          {t('action.insertExcerpt')}
-        </button>
+        <SelectionBar
+          t={t}
+          text={selection.text}
+          x={selection.x}
+          y={selection.y}
+          onInsert={onInsertExcerpt}
+          onDismiss={() => setSelection(null)}
+        />
       )}
     </div>
   )
@@ -214,20 +211,6 @@ const emptyStyle = {
 const truncatedStyle = { marginTop: 6, opacity: 0.6 } as const
 
 const fallbackStyle = { margin: '0 0 6px', opacity: 0.6, fontSize: 12 } as const
-
-const selectionButtonStyle = {
-  position: 'absolute',
-  transform: 'translate(-50%, -130%)',
-  padding: '3px 8px',
-  fontSize: 12,
-  borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.35)',
-  background: 'Canvas',
-  color: 'CanvasText',
-  cursor: 'pointer',
-  zIndex: 5,
-  whiteSpace: 'nowrap',
-} as const
 
 const TEXT_CSS = `
 .dsh-zotero-ann { color: inherit; padding: 0; border-radius: 2px; }

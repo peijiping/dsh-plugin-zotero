@@ -36,11 +36,18 @@ export const PDF_CSS = `
   background: #fff;
   box-shadow: 0 1px 5px rgba(0,0,0,0.22);
   overflow: hidden;
+  /* 把高亮层的混合模式关在页面内，避免合成器跨页重算整个滚动容器。 */
+  isolation: isolate;
+  contain: paint;
+}
+.dsh-zotero-pdf-canvas-host {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
 }
 .dsh-zotero-pdf-canvas {
   display: block;
-  position: relative;
-  z-index: 0;
+  background: #fff;
 }
 .dsh-zotero-pdf-text {
   position: absolute;
@@ -81,6 +88,13 @@ export const PDF_CSS = `
 .dsh-zotero-pdf-text ::selection {
   background: rgba(0, 100, 255, 0.28);
   color: transparent;
+}
+/* 换行占位（由 moveLineBreaksOffscreen 生成）：只提供 \n，不参与绘制。 */
+.dsh-zotero-pdf-text .dsh-zotero-pdf-eol {
+  left: -9999px;
+  top: 0;
+  font-size: 0;
+  line-height: 0;
 }
 .dsh-zotero-pdf-overlay {
   position: absolute;
