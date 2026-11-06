@@ -13,7 +13,9 @@
  * - `?include=bib` 会让响应**丢掉 `data`**，因此条目详情与 bib 必须分两次请求。
  */
 
+import { lstat } from 'node:fs/promises'
 import { connect } from 'node:net'
+import { fileURLToPath } from 'node:url'
 
 import { anchorAnnotations, type RawAnnotation } from './annotations.js'
 import {
@@ -26,6 +28,7 @@ import type {
   ApiErrorCode,
   ZoteroAnnotation,
   ZoteroAttachment,
+  ZoteroAttachmentFile,
   ZoteroCollection,
   ZoteroFulltext,
   ZoteroHealth,
@@ -93,6 +96,8 @@ interface RawItemData {
   annotationColor?: string
   annotationPageLabel?: string
   annotationSortIndex?: string
+  /** JSON 字符串：`{pageIndex, rects}`；缺失或墨迹标注没有。 */
+  annotationPosition?: string
   dateModified?: string
 }
 
@@ -192,6 +197,7 @@ function toAttachment(raw: RawItem): ZoteroAttachment {
   return {
     key: raw.key,
     title: attachmentTitle(raw),
+    filename: raw.data?.filename ?? '',
     contentType: raw.data?.contentType ?? '',
     // 本地 API 只在 links.enclosure.length 上暴露大小；缺失时记 0。
     size: raw.links?.enclosure?.length ?? 0,
@@ -502,6 +508,37 @@ export async function listCollections(): Promise<ZoteroCollection[]> {
   })
 }
 
+/** 条目详情里解析分类路径用；60s 内复用，避免每开一条文献都多打一次 Zotero。 */
+let collectionCache: { at: number; collections: ZoteroCollection[] } | null = null
+const COLLECTION_CACHE_MS = 60_000
+
+async function cachedCollections(): Promise<ZoteroCollection[]> {
+  if (collectionCache !== null && Date.now() - collectionCache.at < COLLECTION_CACHE_MS) {
+    return collectionCache.collections
+  }
+  const collections = await listCollections()
+  collectionCache = { at: Date.now(), collections }
+  return collections
+}
+
+/** 分类 key → 完整路径名（父分类在前，用 ` / ` 连接）。 */
+function collectionPaths(collections: ZoteroCollection[], keys: string[]): string[] {
+  const byKey = new Map(collections.map((collection) => [collection.key, collection] as const))
+  const paths: string[] = []
+  for (const key of keys) {
+    const parts: string[] = []
+    const seen = new Set<string>()
+    let current = byKey.get(key)
+    while (current !== undefined && !seen.has(current.key)) {
+      seen.add(current.key)
+      parts.unshift(current.name)
+      current = current.parentKey === false ? undefined : byKey.get(current.parentKey)
+    }
+    if (parts.length > 0) paths.push(parts.join(' / '))
+  }
+  return paths
+}
+
 // ---- 标签 -------------------------------------------------------------------
 
 /** 标签分页大小（本地 API 上限 1000）与总量上限。 */
@@ -747,14 +784,40 @@ export async function getItemChildren(key: string): Promise<RawItem[]> {
   return Array.isArray(body) ? body : []
 }
 
-/** 展示的标注类型：高亮与划线（Zotero 支持两者互转）。 */
-const ANNOTATION_TYPES = new Set(['highlight', 'underline'])
+/**
+ * 展示的标注类型。`ink` 没有 rects，只能进列表；其余类型都可在 PDF 上叠加。
+ */
+const ANNOTATION_TYPES = new Set(['highlight', 'underline', 'note', 'text', 'image', 'ink'])
 
 /** 标注分页大小（本地 API 单页上限 100）与总量上限。 */
 const ANNOTATION_PAGE_SIZE = 100
 const ANNOTATION_MAX = 1000
 
-/** 原始标注 → 展示用标注；非高亮/划线返回 null。 */
+function isRect(value: unknown): value is [number, number, number, number] {
+  return Array.isArray(value)
+    && value.length === 4
+    && value.every((item) => typeof item === 'number' && Number.isFinite(item))
+}
+
+/** `annotationPosition` 是 JSON 字符串；结构不符按「无位置」处理。 */
+function toPosition(value: unknown): RawAnnotation['position'] {
+  if (typeof value !== 'string' || value === '') return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const { pageIndex, rects } = parsed as { pageIndex?: unknown; rects?: unknown }
+  if (typeof pageIndex !== 'number' || !Number.isInteger(pageIndex) || pageIndex < 0) return null
+  if (!Array.isArray(rects)) return null
+  const valid = rects.filter(isRect)
+  if (valid.length === 0) return null
+  return { pageIndex, rects: valid }
+}
+
+/** 原始标注 → 展示用标注；未知类型返回 null。 */
 function toAnnotation(raw: RawItem): RawAnnotation | null {
   const data = raw.data ?? {}
   const type = data.annotationType ?? ''
@@ -769,11 +832,12 @@ function toAnnotation(raw: RawItem): RawAnnotation | null {
     color: data.annotationColor ?? '',
     pageLabel: data.annotationPageLabel ?? '',
     sortIndex: data.annotationSortIndex ?? '',
+    position: toPosition(data.annotationPosition),
   }
 }
 
 /**
- * 条目下所有 PDF 附件上的高亮与划线。
+ * 条目下所有 PDF 附件上的标注。
  *
  * 必须显式带 `itemType=annotation`：实测 `/children` 不带参数时不返回标注。
  * 失败降级为空数组——标注是详情的附加信息，不能拖垮整个条目。
@@ -825,6 +889,47 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
 }
 
 /**
+ * 解析附件在磁盘上的真实路径。
+ *
+ * 路径只来自 Zotero 条目 JSON 的 `links.enclosure.href`（`file://` URL），
+ * 客户端传来的任何路径都不接受。`lstat` 拒绝目录与非普通文件；
+ * 链接附件（`linkMode: linked_file`）同样走这里，不限制必须在 storage 下。
+ */
+export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFile> {
+  const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
+  const data = raw.data ?? {}
+  if (data.itemType !== 'attachment') {
+    throw new ZoteroError('bad_request', `条目 ${key} 不是附件`)
+  }
+  const href = raw.links?.enclosure?.href ?? ''
+  if (href === '') {
+    throw new ZoteroError('zotero_not_found', `附件 ${key} 没有可读取的本地文件`)
+  }
+  let path: string
+  try {
+    path = fileURLToPath(href)
+  } catch {
+    throw new ZoteroError('zotero_not_found', `附件 ${key} 的文件地址无法解析`)
+  }
+  let stats
+  try {
+    stats = await lstat(path)
+  } catch {
+    throw new ZoteroError('zotero_not_found', `附件文件不存在：${path}`)
+  }
+  if (!stats.isFile()) {
+    throw new ZoteroError('zotero_not_found', `附件路径不是普通文件：${path}`)
+  }
+  return {
+    key,
+    path,
+    size: stats.size,
+    contentType: data.contentType ?? '',
+    filename: data.filename ?? attachmentTitle(raw),
+  }
+}
+
+/**
  * 依次尝试候选附件的全文，返回第一份可用的。
  *
  * 条目常同时挂原文与中文译本：译本若尚未建索引（`/fulltext` 404），
@@ -859,9 +964,10 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
   const isAttachment = itemType === 'attachment'
 
   // 顶层条目可能是附件本身（直接导入的 PDF），此时把自己也算作附件。
-  const [children, rawAnnotations] = await Promise.all([
+  const [children, rawAnnotations, collections] = await Promise.all([
     isAttachment ? Promise.resolve<RawItem[]>([]) : getItemChildren(key),
     itemType === 'note' ? Promise.resolve<RawAnnotation[]>([]) : getItemAnnotations(key),
+    cachedCollections().catch(() => [] as ZoteroCollection[]),
   ])
   const childAttachments = children.filter((c) => c.data?.itemType === 'attachment')
   const attachments =
@@ -900,6 +1006,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     comment: annotation.comment,
     color: annotation.color,
     pageLabel: annotation.pageLabel,
+    position: annotation.position,
     range: annotation.range,
   }))
 
@@ -915,6 +1022,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     abstract: data.abstractNote ?? '',
     tags: (data.tags ?? []).map((tag) => tag.tag ?? '').filter((tag) => tag !== ''),
     collections: data.collections ?? [],
+    collectionNames: collectionPaths(collections, data.collections ?? []),
     attachments,
     notes,
     annotations,

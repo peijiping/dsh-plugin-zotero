@@ -41,8 +41,6 @@ interface Props {
   inputActions?: InputActions
   sessions: SessionsFace
   sessionId?: string
-  /** 附件行点击：继续开一个新条目 tab。 */
-  onOpenItem(key: string, title?: string): void
 }
 
 /** 从资源地址解析条目 key；结构不符返回 null。 */
@@ -65,7 +63,7 @@ function errorMessage(error: unknown): string {
 const hintStyle: React.CSSProperties = { padding: '14px 12px', opacity: 0.6, fontSize: 12.5 }
 
 export function ZoteroItemPane(props: Props): ReactElement {
-  const { t, useTabInfo, inputActions, sessions, sessionId, onOpenItem } = props
+  const { t, useTabInfo, inputActions, sessions, sessionId } = props
   const info = useTabInfo()
   const itemKey = parseItemKey(info)
   const signal = info.tab.signal
@@ -127,7 +125,6 @@ export function ZoteroItemPane(props: Props): ReactElement {
           onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
           onInsertNote={(note) => insertNote(detail, note)}
-          onOpenItem={onOpenItem}
         />
       )}
       <Toast />

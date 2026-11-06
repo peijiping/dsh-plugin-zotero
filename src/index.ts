@@ -19,6 +19,7 @@ import Schema from '@deepseek-ai/schemastery'
 
 import { McpToolBridge } from './host/mcp-bridge.js'
 import { createHandler, type WebServerLike } from './host/router.js'
+import { createStaticHandler } from './host/static.js'
 import { listMcpTools } from './zotero/client.js'
 import {
   DEFAULT_LIMIT,
@@ -28,6 +29,7 @@ import {
   REQUEST_TIMEOUT_MS,
   ROUTE_MATCH,
   setSettingsReader,
+  STATIC_ROUTE_MATCH,
   ZOTERO_BASE,
 } from './zotero/config.js'
 
@@ -93,6 +95,14 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     hostCtx.effect(
       () => webServer.register({ kind: 'prefix', path: ROUTE_MATCH, handler }),
       'dsh-plugin-zotero: http routes',
+    )
+    hostCtx.effect(
+      () => webServer.register({
+        kind: 'prefix',
+        path: STATIC_ROUTE_MATCH,
+        handler: createStaticHandler(),
+      }),
+      'dsh-plugin-zotero: static assets',
     )
   })
 }

@@ -13,7 +13,8 @@ const FALLBACK_TINT = 'rgba(255,212,0,0.32)'
 /** 标注没填颜色时的展示色（色块 / 下划线）。 */
 export const DEFAULT_ANNOTATION_COLOR = '#aaaaaa'
 
-export type AnnotationTypeFilter = 'all' | 'highlight' | 'underline'
+/** `'all'` 为哨兵，其余是 Zotero 的标注类型（highlight / underline / note / text / image / ink）。 */
+export type AnnotationTypeFilter = 'all' | string
 
 export interface AnnotationFilter {
   type: AnnotationTypeFilter
@@ -68,6 +69,8 @@ interface Span {
 function spansOf(annotations: ZoteroAnnotation[]): Span[] {
   const spans: Span[] = []
   for (const annotation of annotations) {
+    // 只有高亮 / 划线能落在正文文字上；笔记、截图、墨迹没有可着色的区间。
+    if (annotation.type !== 'highlight' && annotation.type !== 'underline') continue
     const range = annotation.range
     if (range === null || range.end <= range.start) continue
     spans.push({

@@ -1,12 +1,12 @@
 /**
- * 右栏：条目详情「标注」tab 里的高亮与划线列表。
+ * 条目详情里的标注列表（高亮 / 划线 / 笔记 / 文本 / 截图 / 墨迹）。
  *
- * 标注是 PDF 附件的子条目（`itemType: "annotation"`），只展示高亮与划线。
- * 数据里的 `range` 由 Host 在全文上算好；没有 range 说明全文里找不到这段原文
- * （全文截断 / OCR 噪声），行会置灰但仍可加入会话。
+ * 标注是 PDF 附件的子条目（`itemType: "annotation"`）。是否可定位看两处：
+ * PDF 叠加视图用 `position`，文本兜底用 Host 在全文上算好的 `range`；
+ * 两者都没有时行会置灰，但仍可加入会话。
  *
- * 顶部两行筛选：类型（全部 / 高亮 / 划线）与颜色，两者 AND 组合。
- * 点原文行会让正文档滚动到对应位置并闪烁（见 ItemDetail 的 locate）。
+ * 顶部两行筛选：类型与颜色，两者 AND 组合。类型按当前条目的实际种类生成，
+ * 不会出现空分类。
  */
 
 import { Fragment, type ReactElement, type ReactNode } from 'react'
@@ -28,9 +28,12 @@ interface Props {
   /** 类型 + 颜色筛选；由详情持有，正文内联跟着一起过滤。 */
   filter: AnnotationFilter
   onFilterChange(filter: AnnotationFilter): void
-  onLocate(key: string): void
+  onLocate(annotation: ZoteroAnnotation): void
   onInsert(annotation: ZoteroAnnotation): void
 }
+
+/** 类型 chip 的固定顺序；未出现的类型不渲染。 */
+const TYPE_ORDER = ['highlight', 'underline', 'note', 'text', 'image', 'ink'] as const
 
 interface ColorChip {
   hex: string
@@ -38,15 +41,37 @@ interface ColorChip {
 }
 
 function typeLabel(t: Translate, type: string): string {
-  return type === 'underline' ? t('annotation.type.underline') : t('annotation.type.highlight')
+  const key = `annotation.type.${type}`
+  const label = t(key)
+  return label === key ? type : label
 }
 
-/** 行首色块：高亮为实心，划线为一条横线。 */
+/** 行首标记：高亮实心、划线横线、截图虚线框，其余为小圆点。 */
 function Swatch({ color, type }: { color: string; type: string }): ReactElement {
   if (type === 'underline') {
     return (
       <span style={{ width: 10, height: 10, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
         <span style={{ width: 10, height: 2, borderRadius: 1, background: color }} />
+      </span>
+    )
+  }
+  if (type === 'image') {
+    return (
+      <span
+        style={{
+          width: 10,
+          height: 10,
+          flexShrink: 0,
+          borderRadius: 2,
+          border: `1px dashed ${color}`,
+        }}
+      />
+    )
+  }
+  if (type !== 'highlight') {
+    return (
+      <span style={{ width: 10, height: 10, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
       </span>
     )
   }
@@ -120,11 +145,12 @@ export function AnnotationList({
 }: Props): ReactElement | null {
   if (annotations.length === 0) return null
 
-  const counts = {
-    all: annotations.length,
-    highlight: annotations.filter((annotation) => annotation.type !== 'underline').length,
-    underline: annotations.filter((annotation) => annotation.type === 'underline').length,
+  const counts = new Map<string, number>()
+  for (const annotation of annotations) {
+    counts.set(annotation.type, (counts.get(annotation.type) ?? 0) + 1)
   }
+  const types: string[] = TYPE_ORDER.filter((type) => (counts.get(type) ?? 0) > 0)
+  for (const type of counts.keys()) if (!types.includes(type)) types.push(type)
 
   const byType = annotations.filter((annotation) => filter.type === 'all' || annotation.type === filter.type)
   const colors: ColorChip[] = []
@@ -137,7 +163,9 @@ export function AnnotationList({
   // 切换类型后原来的颜色可能不存在了，直接视为「全部色」。
   const activeColor = filter.color !== null && colors.some((chip) => chip.hex === filter.color) ? filter.color : null
   const visible = filterAnnotations(annotations, { type: filter.type, color: activeColor })
-  const anchored = annotations.filter((annotation) => annotation.range !== null).length
+  const anchored = annotations.filter(
+    (annotation) => annotation.position !== null || annotation.range !== null,
+  ).length
 
   function unanchoredTitle(): string {
     if (!hasFulltext) return t('detail.annotationNotAnchoredNoFulltext')
@@ -152,16 +180,18 @@ export function AnnotationList({
       <div style={filterRowStyle} aria-label={t('detail.annotationFilterType')}>
         <Chip active={filter.type === 'all'} onClick={() => onFilterChange({ type: 'all', color: filter.color })}>
           {t('detail.annotationAll')}
-          <span style={{ opacity: 0.6 }}>{counts.all}</span>
+          <span style={{ opacity: 0.6 }}>{annotations.length}</span>
         </Chip>
-        <Chip active={filter.type === 'highlight'} onClick={() => onFilterChange({ type: 'highlight', color: filter.color })}>
-          {t('annotation.type.highlight')}
-          <span style={{ opacity: 0.6 }}>{counts.highlight}</span>
-        </Chip>
-        <Chip active={filter.type === 'underline'} onClick={() => onFilterChange({ type: 'underline', color: filter.color })}>
-          {t('annotation.type.underline')}
-          <span style={{ opacity: 0.6 }}>{counts.underline}</span>
-        </Chip>
+        {types.map((type) => (
+          <Chip
+            key={type}
+            active={filter.type === type}
+            onClick={() => onFilterChange({ type, color: filter.color })}
+          >
+            {typeLabel(t, type)}
+            <span style={{ opacity: 0.6 }}>{counts.get(type) ?? 0}</span>
+          </Chip>
+        ))}
       </div>
 
       {colors.length > 1 && (
@@ -187,7 +217,7 @@ export function AnnotationList({
       ) : (
         visible.map((annotation) => {
           const key = annotation.key
-          const located = annotation.range !== null
+          const located = annotation.position !== null || annotation.range !== null
           const text = annotation.text.trim()
           const canInsert = text !== '' || hasComment(annotation.comment)
           return (
@@ -201,6 +231,15 @@ export function AnnotationList({
                   </span>
                 )}
                 <div style={{ flex: 1 }} />
+                {located && text === '' && (
+                  <button
+                    type="button"
+                    onClick={() => onLocate(annotation)}
+                    style={locateButtonStyle}
+                  >
+                    {t('detail.annotationLocate')}
+                  </button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -213,15 +252,17 @@ export function AnnotationList({
                 </Button>
               </div>
 
-              <button
-                type="button"
-                disabled={!located || text === ''}
-                onClick={() => onLocate(key)}
-                title={located ? undefined : unanchoredTitle()}
-                style={{ ...textButtonStyle, cursor: located ? 'pointer' : 'default' }}
-              >
-                {text}
-              </button>
+              {text !== '' && (
+                <button
+                  type="button"
+                  disabled={!located}
+                  onClick={() => onLocate(annotation)}
+                  title={located ? undefined : unanchoredTitle()}
+                  style={{ ...textButtonStyle, cursor: located ? 'pointer' : 'default' }}
+                >
+                  {text}
+                </button>
+              )}
 
               {hasComment(annotation.comment) && <CommentBody comment={annotation.comment} />}
             </div>
@@ -248,6 +289,20 @@ const insertButtonStyle = {
   padding: '0 6px',
   fontSize: 11,
   lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+} as const
+
+const locateButtonStyle = {
+  flexShrink: 0,
+  height: 20,
+  padding: '0 6px',
+  fontSize: 11,
+  lineHeight: 1.2,
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: 'transparent',
+  color: 'inherit',
+  cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const
 

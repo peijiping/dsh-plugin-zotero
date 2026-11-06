@@ -112,3 +112,31 @@ export function fetchTagUsage(
 export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Promise<ZoteroItemDetail> {
   return get<ZoteroItemDetail>('item', { key, style }, signal)
 }
+
+/** 附件文件地址；直接交给 PDF.js / Word 渲染器按 Range 取流。 */
+export function fileUrl(key: string): string {
+  return buildUrl('file', { key })
+}
+
+/** 用系统 Zotero 打开条目或附件页。 */
+export async function openInZotero(
+  input: { key: string; kind: 'item' | 'attachment'; page?: number },
+): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(buildUrl('open-in-zotero'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new ApiFailure('network_error', `无法访问 Host 端点：${message}`)
+  }
+  const payload = (await res.json().catch(() => null)) as
+    | { ok: true }
+    | { ok: false; error: { code: string; message: string } }
+    | null
+  if (payload === null) throw new ApiFailure('internal_error', `Host 返回了非 JSON 响应（HTTP ${res.status}）`)
+  if (!payload.ok) throw new ApiFailure(payload.error.code, payload.error.message)
+}

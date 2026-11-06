@@ -190,7 +190,6 @@ export function apply(ctx: ClientContext): void {
       sessions: ctx.sessions,
       inputActions: props.inputActions,
       sessionId: props.sessionId,
-      onOpenItem: openItem,
     })
 
   const ItemTitle = (props: { useTabInfo: ItemPaneProps['useTabInfo'] }): ReactElement => {

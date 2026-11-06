@@ -43,6 +43,12 @@ export const ROUTE_PREFIX = '/dsh-zotero/api/'
  */
 export const ROUTE_MATCH = '/dsh-zotero/api'
 
+/** PDF.js 静态资产路由；与 API 路由分开注册。 */
+export const STATIC_ROUTE_MATCH = '/dsh-zotero/static'
+
+/** 静态资产路由的剥离基准（带尾斜杠）。 */
+export const STATIC_ROUTE_PREFIX = `${STATIC_ROUTE_MATCH}/`
+
 // ---- 运行时设置（可由插件页配置覆盖） ---------------------------------------
 
 /** 可在 dsh「插件」页里编辑的字段；默认值即上面的常量。 */

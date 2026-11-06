@@ -8,7 +8,7 @@
 
 import type { ZoteroFulltext } from './types.js'
 
-/** Host 侧归一化后的标注（已过滤为非高亮/划线之外的条目）。 */
+/** Host 侧归一化后的标注。 */
 export interface RawAnnotation {
   key: string
   attachmentKey: string
@@ -19,7 +19,12 @@ export interface RawAnnotation {
   pageLabel: string
   /** 零填充的 `annotationSortIndex`，可按字典序比较。 */
   sortIndex: string
+  /** PDF 页位置；缺失或墨迹标注为 null。 */
+  position: { pageIndex: number; rects: [number, number, number, number][] } | null
 }
+
+/** 可以锚定到全文纯文本的标注类型（其余类型只用于 PDF 坐标叠加）。 */
+const TEXT_TYPES = new Set(['highlight', 'underline'])
 
 /** 原文中的一个字符在折叠串里的位置映射。 */
 interface Folded {
@@ -92,7 +97,12 @@ export function anchorAnnotations(
   let prevEnd = 0
 
   return annotations.map((annotation) => {
-    if (folded === null || annotation.attachmentKey !== attachmentKey || annotation.text === '') {
+    if (
+      folded === null
+      || !TEXT_TYPES.has(annotation.type)
+      || annotation.attachmentKey !== attachmentKey
+      || annotation.text === ''
+    ) {
       return { ...annotation, range: null }
     }
     const query = fold(annotation.text).text

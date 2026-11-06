@@ -45,8 +45,19 @@ export interface ZoteroItemSummary {
 export interface ZoteroAttachment {
   key: string
   title: string
+  /** 磁盘文件名，如 `paper.pdf`；缺失时为空串。 */
+  filename: string
   contentType: string
   size: number
+}
+
+/** Host 侧解析出的附件文件（路径只来自 Zotero 条目 JSON）。 */
+export interface ZoteroAttachmentFile {
+  key: string
+  path: string
+  size: number
+  contentType: string
+  filename: string
 }
 
 /** 条目下的一条笔记（子条目 `itemType: "note"`）。 */
@@ -64,13 +75,13 @@ export interface ZoteroNote {
 /**
  * 条目下的一条 PDF 标注（子条目 `itemType: "annotation"`）。
  *
- * 只取高亮与划线：Zotero 支持两者互转，展示时以当前类型为准。
+ * 覆盖 Zotero 的六种标注类型；高亮与划线可互转，展示时以当前类型为准。
  */
 export interface ZoteroAnnotation {
   key: string
   /** 所属附件 key；用于判断标注是否落在当前展示全文的那份 PDF 上。 */
   attachmentKey: string
-  /** `highlight` 或 `underline`。 */
+  /** `highlight | underline | note | text | image | ink`。 */
   type: string
   /** PDF 中选中的原文。 */
   text: string
@@ -83,6 +94,11 @@ export interface ZoteroAnnotation {
   color: string
   /** PDF 印刷页码标签；可能为空串。 */
   pageLabel: string
+  /**
+   * PDF 中的位置：`pageIndex` 从 0 开始，`rects` 为 PDF 用户空间（左下原点）的
+   * `[x1, y1, x2, y2]`。旧版 Zotero 未提供或墨迹标注时为 `null`。
+   */
+  position: { pageIndex: number; rects: [number, number, number, number][] } | null
   /** 在 `fulltext.content` 中的 UTF-16 区间；`null` 表示未能在全文里定位。 */
   range: { start: number; end: number } | null
 }
@@ -101,6 +117,8 @@ export interface ZoteroItemDetail {
   tags: string[]
   /** 所属分类 key 列表。 */
   collections: string[]
+  /** 所属分类的完整路径（如「博士论文 / 方法」），由 Host 解析好。 */
+  collectionNames: string[]
   attachments: ZoteroAttachment[]
   /** 该条目下的笔记（子条目 `itemType: "note"`）。 */
   notes: ZoteroNote[]
