@@ -109,7 +109,7 @@ const TOOL_DEFINITIONS: WriteToolDefinition[] = [
   },
   {
     name: 'zotero_update_note',
-    description: `${AUTH_HINT}\n\n整篇替换一条 Zotero 笔记的正文。含引文或标注锚点的笔记不能改（改了指针会失联），只能删除。`,
+    description: `${AUTH_HINT}\n\n整篇替换一条 Zotero 笔记的正文。含引文或标注锚点的笔记也能改，但必须把 \`data-citation\` / \`data-annotation\` 这些属性原样带回去，删了指针就失联。`,
     parameters: {
       type: 'object',
       properties: {

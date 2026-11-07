@@ -311,16 +311,15 @@ function parentKeyOf(raw: RawItem): string {
  * 正文里是否含 Zotero 的结构锚点。
  *
  * 引文（`class="citation"` / `data-citation-items`）与「添加至笔记」生成的标注反链
- * （`data-annotation`）都靠这些属性回指库里的对象。插件的编辑器只能读写纯 HTML 文本，
- * 保存时若属性有任何损失，Zotero 侧的引文就变成死链——因此这类笔记只允许删除。
+ * （`data-annotation`）都靠这些属性回指库里的对象。插件的编辑器读写的是**原始 HTML**
+ * 且不做规范化，只要用户不动这些标签就完好；这个判定用来在编辑器里提示一句风险。
  */
 const NOTE_ANCHOR = /\b(?:data-(?:citation|annotation|pid)\b|class="citation")/u
 
 /**
  * 正文是否含 Zotero 的结构锚点。
  *
- * 导出给写侧复用：判定「这条笔记能不能编辑」只能有一处口径，列表面板与写入口
- * 各写一份正则，早晚会漂移到「面板放行了、库里坏了」。
+ * 导出给界面复用：判定口径只能有一处，不同地方各写一份正则，早晚会漂移。
  */
 export function hasZoteroAnchors(html: string): boolean {
   return NOTE_ANCHOR.test(html)
@@ -339,7 +338,7 @@ function toNote(raw: RawItem): ZoteroNote {
     truncated,
     version: versionOf(raw),
     parentItem: parentKeyOf(raw),
-    editable: !hasZoteroAnchors(source),
+    anchored: hasZoteroAnchors(source),
   }
 }
 

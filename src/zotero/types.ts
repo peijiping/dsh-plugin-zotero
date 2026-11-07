@@ -82,13 +82,13 @@ export interface ZoteroNote {
   /** 所属父条目 key；独立笔记（无父条目）为空串。 */
   parentItem: string
   /**
-   * 是否允许在插件里编辑。
+   * 正文是否含 Zotero 的结构锚点（引文 `data-citation`、标注反链 `data-annotation`）。
    *
-   * 正文含 Zotero 的结构锚点（引文 `data-citation`、标注反链 `data-annotation`）时为
-   * `false`：编辑要走「读原始 HTML → 改 → 写回」，而这类笔记的 HTML 一旦经过任何
-   * 规范化就会失联，宁可只给删除。
+   * 早期据此禁掉编辑按钮，现已放开：编辑器读的是**原始 HTML**、写回也原样落库，
+   * 中间不做任何规范化，锚点只要没被手改就完好。这个标记现在只用于在编辑器里
+   * 挂一句提醒（改动这些标签会让 Zotero 侧的引文失联）。
    */
-  editable: boolean
+  anchored: boolean
 }
 
 /**

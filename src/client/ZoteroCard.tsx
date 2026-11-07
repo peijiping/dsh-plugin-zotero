@@ -16,7 +16,7 @@
  * `cordis.patch.yml` 的行 id 保持同步。
  */
 
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
 
 import {
   Button,
@@ -308,7 +308,7 @@ const TOOL_DESC_STYLE = { fontSize: 11, opacity: 0.66, display: 'block', marginT
  * 写权限操作卡：整块描边 + 浅底，把「必须点按钮」这件事从一片灰字里拎出来。
  * 颜色走主题变量，light/dark 都成立。
  */
-const WRITE_PANEL_STYLE = {
+const WRITE_PANEL_STYLE: CSSProperties = {
   border: '1px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.35))',
   borderRadius: 10,
   padding: '12px 14px 14px',
@@ -319,9 +319,9 @@ const WRITE_PANEL_STYLE = {
   marginTop: 4,
 }
 /** 卡片内的步骤标题（「步骤 ①」那种小标签）。 */
-const WRITE_STEP_STYLE = { fontSize: 11, fontWeight: 600, opacity: 0.6, margin: 0 }
+const WRITE_STEP_STYLE: CSSProperties = { fontSize: 11, fontWeight: 600, opacity: 0.6, margin: 0 }
 /** 状态徽标行：加粗显示「未授权 / 已授权」。 */
-const WRITE_STATUS_STYLE = {
+const WRITE_STATUS_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
@@ -329,15 +329,15 @@ const WRITE_STATUS_STYLE = {
   fontWeight: 600,
 }
 /** 按钮行：主按钮在前，紧挨次要按钮。 */
-const WRITE_ACTIONS_STYLE = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }
+const WRITE_ACTIONS_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }
 /** 警示行（未授权 / 需先保存），用 warn 色，但不抢按钮的视觉重心。 */
-const WRITE_WARN_STYLE = {
+const WRITE_WARN_STYLE: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   color: 'var(--dsw-alias-state-warn-primary, #b26a00)',
 }
 /** 常规说明行。 */
-const WRITE_NOTE_STYLE = { fontSize: 12, lineHeight: 1.5, opacity: 0.72 }
+const WRITE_NOTE_STYLE: CSSProperties = { fontSize: 12, lineHeight: 1.5, opacity: 0.72 }
 
 /** 设置页正文：三大组 + MCP 工具开关。 */
 export function ZoteroSettingsSection(props: CardProps): ReactElement {
@@ -441,7 +441,8 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
     }
   }
 
-  const renderWrite = (): ReactElement => {
+  /** 卡片正文：状态 + 两个按钮 + 说明。开关行在 {@link renderWrite} 里，常驻。 */
+  const renderWriteBody = (): ReactElement => {
     if (write.kind === 'loading') return <div style={HINT_STYLE}>{t('write.loading')}</div>
     if (write.kind === 'error') {
       return (
@@ -461,24 +462,7 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
           : t('write.singleUse')
     const blocked = locked || authorizing || !enabled
     return (
-      <div style={WRITE_PANEL_STYLE}>
-        <div style={TOOL_ROW_STYLE}>
-          <div style={TOOL_INFO_STYLE}>
-            <span style={{ ...TOOL_NAME_STYLE, fontSize: 13, fontWeight: 600 }}>{t('write.toggle')}</span>
-            <span style={TOOL_DESC_STYLE}>{t('write.toggleHint')}</span>
-          </div>
-          <Switch
-            checked={state.writeEnabled.text === 'true'}
-            disabled={locked}
-            label={t('write.toggle')}
-            title={state.writeEnabled.text === 'true' ? t('write.on') : t('write.off')}
-            onChange={(next) => {
-              props.edit(WRITE_FIELD, next ? 'true' : 'false')
-              setAuthNotice(null)
-            }}
-          />
-        </div>
-
+      <>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <p style={WRITE_STEP_STYLE}>{t('write.steps')}</p>
           <div style={WRITE_STATUS_STYLE}>
@@ -519,10 +503,33 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
           </div>
         )}
         {authNotice !== null && <div style={WRITE_NOTE_STYLE}>{authNotice}</div>}
-        <div style={WRITE_NOTE_STYLE}>{t('write.alwaysAllow')}</div>
-      </div>
+        {/* 已经稳定授权后就不必再念叨「始终允许」了。 */}
+        {!(hasKey && remembered) && <div style={WRITE_NOTE_STYLE}>{t('write.alwaysAllow')}</div>}
+      </>
     )
   }
+
+  const renderWrite = (): ReactElement => (
+    <div style={WRITE_PANEL_STYLE}>
+      <div style={TOOL_ROW_STYLE}>
+        <div style={TOOL_INFO_STYLE}>
+          <span style={{ ...TOOL_NAME_STYLE, fontSize: 13, fontWeight: 600 }}>{t('write.toggle')}</span>
+          <span style={TOOL_DESC_STYLE}>{t('write.toggleHint')}</span>
+        </div>
+        <Switch
+          checked={state.writeEnabled.text === 'true'}
+          disabled={locked}
+          label={t('write.toggle')}
+          title={state.writeEnabled.text === 'true' ? t('write.on') : t('write.off')}
+          onChange={(next) => {
+            props.edit(WRITE_FIELD, next ? 'true' : 'false')
+            setAuthNotice(null)
+          }}
+        />
+      </div>
+      {renderWriteBody()}
+    </div>
+  )
 
   return (
     <SettingsForm

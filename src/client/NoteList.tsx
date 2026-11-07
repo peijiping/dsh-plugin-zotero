@@ -11,11 +11,15 @@
  *
  * 开了写入开关后，这里还是笔记的新建 / 编辑 / 删除入口，三条约定：
  * - 编辑取的是**原始 HTML**（`note-raw`），不是列表里那份清洗过的展示文本；
- * - 含引文 / 标注锚点的笔记只给删除、不给编辑（`note.editable`）；
+ * - 所有笔记都可编辑。含引文 / 标注锚点的（`note.anchored`）在编辑器里挂一句提醒，
+ *   但不再禁掉按钮：写回是原样落库，不动那些标签，锚点就完好；
  * - 删除是硬删（不进 Zotero 回收站），因此必须点两次。
+ *
+ * 「新建」的入口不在这里——它挂在「笔记」区块标题行的加号上，由 {@link InfoPanel}
+ * 渲染，所以开合状态用 `composing` / `onComposingChange` 受控传入。
  */
 
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -33,6 +37,9 @@ interface Props {
   canWrite: boolean
   /** 当前详情本身就是一条独立笔记：没有可挂载的父条目，不提供新建。 */
   selfNote: boolean
+  /** 新建框是否打开（入口在区块标题行的加号上，状态由父级持有）。 */
+  composing: boolean
+  onComposingChange(open: boolean): void
   onInsert(note: ZoteroNote): void
   /** 写成功后重取整份详情：Zotero 是唯一真相，本地不猜结果。 */
   onChanged(): void
@@ -64,19 +71,34 @@ function textToHtml(text: string): string {
   return blocks.map((block) => `<p>${escapeHtml(block).replace(/\n/gu, '<br>')}</p>`).join('')
 }
 
-export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onChanged }: Props): ReactElement {
+export function NoteList({
+  t,
+  notes,
+  itemKey,
+  canWrite,
+  selfNote,
+  composing,
+  onComposingChange,
+  onInsert,
+  onChanged,
+}: Props): ReactElement {
   // 展开的笔记 key 集合；默认全部折叠。
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   /** 正在编辑的笔记：原始 HTML 与其草稿。 */
   const [editing, setEditing] = useState<{ key: string; html: string } | null>(null)
-  /** 新建草稿（纯文本）；`null` 表示新建框没打开。 */
-  const [composing, setComposing] = useState<string | null>(null)
+  /** 新建草稿（纯文本）；是否显示由 `composing` 决定。 */
+  const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   /** 已点过一次「删除」、正在等第二次确认的笔记 key。 */
   const [armed, setArmed] = useState<string | null>(null)
 
   const busy = pending !== null
+
+  // 关掉新建框就把草稿清掉，下次点加号是干净的一张白纸。
+  useEffect(() => {
+    if (!composing) setDraft('')
+  }, [composing])
 
   function toggle(key: string): void {
     setExpanded((prev) => {
@@ -113,7 +135,7 @@ export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onCh
 
   function startEdit(note: ZoteroNote): void {
     setArmed(null)
-    setComposing(null)
+    onComposingChange(false)
     if (editing?.key === note.key) {
       setEditing(null)
       return
@@ -132,9 +154,9 @@ export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onCh
         <Button
           variant="outline"
           size="sm"
-          disabled={busy || !note.editable}
+          disabled={busy}
           onClick={() => startEdit(note)}
-          title={note.editable ? t('note.edit') : t('note.lockedHint')}
+          title={note.anchored ? t('note.anchorWarn') : t('note.edit')}
           style={insertButtonStyle}
         >
           {editingThis ? t('note.cancel') : t('note.edit')}
@@ -176,32 +198,13 @@ export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onCh
     <div>
       <style>{NOTE_CSS}</style>
 
-      {canWrite && !selfNote && composing === null && (
-        <div style={toolRowStyle}>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => {
-              setArmed(null)
-              setEditing(null)
-              setNotice(null)
-              setComposing('')
-            }}
-            title={t('note.newHint')}
-          >
-            {t('note.new')}
-          </Button>
-        </div>
-      )}
-
-      {composing !== null && (
+      {canWrite && !selfNote && composing && (
         <div style={editorStyle}>
           <textarea
-            value={composing}
+            value={draft}
             placeholder={t('note.bodyPlaceholder')}
             disabled={busy}
-            onChange={(event) => setComposing(event.target.value)}
+            onChange={(event) => setDraft(event.target.value)}
             style={textareaStyle}
             aria-label={t('note.new')}
           />
@@ -209,17 +212,17 @@ export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onCh
             <Button
               variant="outline"
               size="sm"
-              disabled={busy || composing.trim() === ''}
+              disabled={busy || draft.trim() === ''}
               onClick={() => {
-                const draft = composing
-                void run('create', () => createNote({ parentItem: itemKey, note: textToHtml(draft) })).then((done) => {
-                  if (done) setComposing(null)
+                const body = draft
+                void run('create', () => createNote({ parentItem: itemKey, note: textToHtml(body) })).then((done) => {
+                  if (done) onComposingChange(false)
                 })
               }}
             >
               {pending === 'create' ? t('note.saving') : t('note.save')}
             </Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setComposing(null)}>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => onComposingChange(false)}>
               {t('note.cancel')}
             </Button>
           </div>
@@ -267,7 +270,9 @@ export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onCh
                   aria-label={t('note.htmlHint')}
                 />
                 <div style={editorFootStyle}>
-                  <span style={editorHintStyle}>{t('note.htmlHint')}</span>
+                  <span style={note.anchored ? anchorHintStyle : editorHintStyle}>
+                    {note.anchored ? t('note.anchorWarn') : t('note.htmlHint')}
+                  </span>
                   <Button
                     variant="outline"
                     size="sm"
@@ -376,12 +381,6 @@ const noteBodyStyle = {
   overflowWrap: 'break-word',
 } as const
 
-const toolRowStyle = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  padding: '2px 0 8px',
-} as const
-
 const editorStyle = {
   marginTop: 6,
 } as const
@@ -397,6 +396,14 @@ const editorHintStyle = {
   flex: 1,
   fontSize: 11,
   opacity: 0.6,
+} as const
+
+/** 锚点提示：比普通提示更显眼，但别做成错误色——它只是「别手改这些标签」。 */
+const anchorHintStyle = {
+  flex: 1,
+  fontSize: 11,
+  lineHeight: 1.5,
+  color: '#d29922',
 } as const
 
 const textareaStyle = {

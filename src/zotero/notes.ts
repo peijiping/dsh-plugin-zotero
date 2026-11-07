@@ -5,14 +5,13 @@
  *
  * 1. **只发 PATCH**。PUT 会把 `data` 里未提交的既有字段静默移除（本地 API 参考 §更新），
  *    笔记虽然只有一个正文字段，但作者、日期、key 都由 Zotero 维护，不值得冒险。
- * 2. **含结构锚点的笔记拒绝编辑**。引文（`class="citation"`）与「添加至笔记」生成的
- *    标注反链（`data-annotation`）靠属性回指库里的对象；任何一进一出的规范化都可能
- *    让它们失联，所以在写入口再挡一次，而不只靠面板隐藏按钮。删除不受影响。
- * 3. **并发前置条件用调用方给的版本**。编辑前确实会重读一次当前正文（为了查锚点），
- *    但拿那个新版本去写等于覆盖 Zotero 侧刚发生的改动，因此只读不采信。
+ * 2. **不做正文规范化**。含引文（`class="citation"`）与标注反链（`data-annotation`）的
+ *    笔记也能编辑：调用方给什么就写什么，锚点原样往返。风险提示交给界面（`note.anchored`），
+ *    写入口不再一刀切拒绝——那会让「只想改一句话」的笔记连门都进不去。
+ * 3. **并发前置条件用调用方给的版本**。比版本号新旧更靠谱的是 Zotero 自己的 412。
  */
 
-import { getNoteRaw, hasZoteroAnchors, ZoteroError } from './client.js'
+import { ZoteroError } from './client.js'
 import { createItems, deleteItem, patchItem } from './write.js'
 import type { ZoteroWriteRef } from './types.js'
 
@@ -56,17 +55,9 @@ export async function createNote(input: { parentItem: string; note: string }): P
   return { key: created.key, version: created.version }
 }
 
-/** 替换一条笔记的正文。锚点笔记在这里会被挡下。 */
+/** 替换一条笔记的正文。正文原样落库，锚点不做任何改写。 */
 export async function updateNote(input: { key: string; version: number; note: string }): Promise<void> {
   assertNoteBody(input.note)
-  // 目标已不存在时这里就抛 404，不会白跑一次 PATCH。
-  const current = await getNoteRaw(input.key)
-  if (hasZoteroAnchors(current.html)) {
-    throw new ZoteroError(
-      'bad_request',
-      '该笔记含 Zotero 的引文或标注锚点，改正文会让它们失联；可以删除，但不能在这里编辑。',
-    )
-  }
   await patchItem(input.key, { note: input.note }, input.version)
 }
 

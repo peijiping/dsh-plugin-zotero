@@ -4,6 +4,9 @@
  * 文档占满整版面，元数据类内容收进这个按钮背后的浮层，每块都可折叠。
  * 浮层用系统色 `Canvas` / `CanvasText`，盖在白色 PDF 上深浅主题都能读。
  * 点击浮层外或按 Esc 关闭；点标注定位后也关闭，让文档重新成为焦点。
+ *
+ * 各区块的开合全局记一份（见 {@link useInfoSections}）：用户按自己的习惯折过
+ * 一次之后，换文献、关浮层、重启都保持原样，不用每篇重新折。
  */
 
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
@@ -13,6 +16,12 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
+import {
+  setInfoSection,
+  toggleInfoSection,
+  useInfoSections,
+  type InfoSectionId,
+} from './infoSectionStore'
 import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { NoteList } from './NoteList'
@@ -42,17 +51,26 @@ interface BlockProps {
   hint?: string
   open: boolean
   onToggle(): void
+  /**
+   * 标题行右侧的独立操作（如「笔记」的加号新建）。
+   *
+   * 不能塞进标题按钮里：那会变成 `<button>` 套 `<button>`，点一下既触发操作又开合区块。
+   */
+  action?: ReactNode
   children: ReactNode
 }
 
-function Block({ label, hint, open, onToggle, children }: BlockProps): ReactElement {
+function Block({ label, hint, open, onToggle, action, children }: BlockProps): ReactElement {
   return (
     <section style={blockStyle}>
-      <button type="button" onClick={onToggle} aria-expanded={open} style={blockHeaderStyle}>
-        <span style={blockChevronStyle}>{open ? '▾' : '▸'}</span>
-        <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
-        {hint !== undefined && <span style={blockHintStyle}>{hint}</span>}
-      </button>
+      <div style={blockHeaderRowStyle}>
+        <button type="button" onClick={onToggle} aria-expanded={open} style={blockHeaderStyle}>
+          <span style={blockChevronStyle}>{open ? '▾' : '▸'}</span>
+          <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+          {hint !== undefined && <span style={blockHintStyle}>{hint}</span>}
+        </button>
+        {action}
+      </div>
       {open && <div style={blockBodyStyle}>{children}</div>}
     </section>
   )
@@ -80,14 +98,15 @@ export function InfoPanel({
   onAnnotationFilterChange,
 }: Props): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const [sections, setSections] = useState<Record<string, boolean>>({
-    metadata: true,
-    abstract: true,
-    annotations: true,
-    notes: false,
-    attachments: true,
-    bib: false,
-  })
+  /** 各区块开合来自全局持久状态，不放在组件里：换条目/重开都是同一份。 */
+  const sections = useInfoSections()
+  /** 「笔记」新建框是否打开：加号在区块标题行，编辑器在区块内，状态只能放在这里。 */
+  const [composingNote, setComposingNote] = useState(false)
+
+  // 换条目 / 收起浮层时丢掉半截的新建草稿，免得带到下一条文献上。
+  useEffect(() => {
+    setComposingNote(false)
+  }, [detail.key, open])
 
   useEffect(() => {
     if (!open) return
@@ -106,8 +125,8 @@ export function InfoPanel({
     }
   }, [open, onClose])
 
-  function toggle(id: string): void {
-    setSections((previous) => ({ ...previous, [id]: !previous[id] }))
+  function toggle(id: InfoSectionId): void {
+    toggleInfoSection(id)
   }
 
   const metaRows: { label: string; value: string }[] = []
@@ -150,7 +169,7 @@ export function InfoPanel({
             )}
           </div>
 
-          <Block label={t('detail.metadata')} open={sections.metadata ?? false} onToggle={() => toggle('metadata')}>
+          <Block label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
             {metaRows.map((row) => (
               <div key={row.label} style={metaRowStyle}>
                 <span style={metaLabelStyle}>{row.label}</span>
@@ -162,7 +181,7 @@ export function InfoPanel({
           {detail.abstract !== '' && (
             <Block
               label={t('detail.abstract')}
-              open={sections.abstract ?? false}
+              open={sections.abstract}
               onToggle={() => toggle('abstract')}
             >
               <p style={paragraphStyle}>{detail.abstract}</p>
@@ -173,7 +192,7 @@ export function InfoPanel({
             <Block
               label={t('detail.annotations')}
               hint={String(detail.annotations.length)}
-              open={sections.annotations ?? false}
+              open={sections.annotations}
               onToggle={() => toggle('annotations')}
             >
               <AnnotationList
@@ -195,8 +214,29 @@ export function InfoPanel({
             <Block
               label={t('detail.notes')}
               hint={String(notes.length)}
-              open={sections.notes ?? false}
+              open={sections.notes}
               onToggle={() => toggle('notes')}
+              action={
+                detail.writeEnabled && !selfNote ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // 区块收着就先摊开再出新笔记框，别让用户点了没反应。
+                      if (!sections.notes) {
+                        setInfoSection('notes', true)
+                        setComposingNote(true)
+                        return
+                      }
+                      setComposingNote((previous) => !previous)
+                    }}
+                    title={composingNote ? t('note.cancel') : t('note.new')}
+                    aria-label={t('note.new')}
+                    style={blockActionStyle}
+                  >
+                    {composingNote ? '×' : '+'}
+                  </button>
+                ) : undefined
+              }
             >
               <NoteList
                 t={t}
@@ -204,6 +244,8 @@ export function InfoPanel({
                 itemKey={detail.key}
                 canWrite={detail.writeEnabled}
                 selfNote={selfNote}
+                composing={composingNote}
+                onComposingChange={setComposingNote}
                 onInsert={onInsertNote}
                 onChanged={onChanged}
               />
@@ -214,7 +256,7 @@ export function InfoPanel({
             <Block
               label={t('detail.attachments')}
               hint={String(detail.attachments.length)}
-              open={sections.attachments ?? false}
+              open={sections.attachments}
               onToggle={() => toggle('attachments')}
             >
               {detail.attachments.map((attachment) => {
@@ -242,7 +284,7 @@ export function InfoPanel({
           )}
 
           {detail.bib !== null && (
-            <Block label={t('detail.bibTitle')} open={sections.bib ?? false} onToggle={() => toggle('bib')}>
+            <Block label={t('detail.bibTitle')} open={sections.bib} onToggle={() => toggle('bib')}>
               <p style={paragraphStyle}>{stripTags(detail.bib)}</p>
             </Block>
           )}
@@ -335,13 +377,36 @@ const blockHeaderStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 5,
-  width: '100%',
+  flex: 1,
+  minWidth: 0,
   padding: '3px 0',
   fontSize: 12.5,
   fontWeight: 700,
   color: ACCENT,
   background: 'transparent',
   border: 'none',
+  cursor: 'pointer',
+} as const
+
+const blockHeaderRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+} as const
+
+/** 标题行上的图标按钮（当前只有「笔记」的加号 / 取消）。 */
+const blockActionStyle = {
+  flexShrink: 0,
+  width: 16,
+  height: 16,
+  padding: 0,
+  marginRight: 2,
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.45)',
+  background: 'transparent',
+  color: ACCENT,
+  fontSize: 12,
+  lineHeight: 1,
   cursor: 'pointer',
 } as const
 
