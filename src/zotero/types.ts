@@ -348,6 +348,21 @@ export interface ZoteroAuthResult {
   remembered: boolean
 }
 
+/**
+ * 一篇文献在**本插件里**「读到哪」。
+ *
+ * 只存在插件自己的存储里，与 Zotero 的阅读位置互不相干：用户可能在两边各读一段，
+ * 硬把 Zotero 的页码搬过来只会跳到别处。Zotero 的 `dataDir` 又可能是任意位置，
+ * 插件拿不到可靠路径，所以干脆不读。
+ */
+export interface ZoteroReadPosition {
+  key: string
+  /** 0 基页码；Client 展示时要 +1。 */
+  pageIndex: number
+  /** 记录时间（ISO 8601）。 */
+  updatedAt: string
+}
+
 /** 错误码。 */
 export type ApiErrorCode =
   | 'zotero_unreachable'

@@ -12,6 +12,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ZoteroItemDetail } from '../zotero/types'
 import { fetchItem } from './api'
 import type { InputActions } from './inline'
+import { rememberItemTitle } from './itemTitles'
 import { ItemDetail } from './ItemDetail'
 import type { Translate } from './locales'
 import { tpl } from './locales'
@@ -44,9 +45,13 @@ interface Props {
   sessionId?: string
 }
 
-/** 从资源地址解析条目 key；结构不符返回 null。 */
-function parseItemKey(info: TabInfoLike): string | null {
-  const address = info.tab.navigation?.address || info.tab.contentId || ''
+/**
+ * 从资源地址解析条目 key；结构不符返回 null。
+ *
+ * 标题席位与正文都只用这一个解析口：key 只认地址（`contentId` 与
+ * `navigation.address` 一致），不依赖 `navigation.params` 是否还在。
+ */
+export function itemKeyFromAddress(address: string): string | null {
   if (!address.startsWith(ITEM_ADDRESS_PREFIX)) return null
   const encoded = address.slice(ITEM_ADDRESS_PREFIX.length)
   if (encoded === '' || encoded.includes('/')) return null
@@ -55,6 +60,11 @@ function parseItemKey(info: TabInfoLike): string | null {
   } catch {
     return null
   }
+}
+
+/** 从 tab 信息解析条目 key；结构不符返回 null。 */
+function parseItemKey(info: TabInfoLike): string | null {
+  return itemKeyFromAddress(info.tab.navigation?.address || info.tab.contentId || '')
 }
 
 function errorMessage(error: unknown): string {
@@ -88,6 +98,8 @@ export function ZoteroItemPane(props: Props): ReactElement {
     fetchItem(itemKey, 'apa', signal)
       .then((data) => {
         if (current !== seq.current) return
+        // 正文拿到详情就顺手补齐 tab 标题：布局恢复后 params 已丢，标题席位靠这份缓存。
+        rememberItemTitle(data.key, data.title)
         setDetail(data)
         setLoading(false)
       })
@@ -111,6 +123,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
     fetchItem(itemKey, 'apa', signal)
       .then((data) => {
         if (current !== seq.current) return
+        rememberItemTitle(data.key, data.title)
         setDetail(data)
       })
       .catch((err: unknown) => {

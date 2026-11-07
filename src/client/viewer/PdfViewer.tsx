@@ -48,6 +48,7 @@ import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import { enqueueRender, markScrollActivity, waitForScrollIdle } from './renderQueue'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import type { DocumentRendererProps } from './types'
+import { useReadPosition } from './useReadPosition'
 
 const MIN_SCALE = 0.5
 const MAX_SCALE = 3
@@ -510,6 +511,12 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
 
   const url = source?.url ?? ''
 
+  const { resumePage, notePage } = useReadPosition(source?.attachmentKey ?? null)
+  /** 已经为哪个 url 做过续读跳转（同一个 url 只跳一次，避免和用户滚动打架）。 */
+  const resumedUrlRef = useRef('')
+  /** 用户是否真的滚动过：没滚动就不写进度，免得「打开又关掉」盖掉 Zotero 的位置。 */
+  const scrolledRef = useRef(false)
+
   useEffect(() => {
     if (url === '') {
       setPdf(null)
@@ -603,6 +610,44 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     onPageChange(currentPage, pageCount)
   }, [currentPage, pageCount, onPageChange])
 
+  /**
+   * 续读：PDF 就绪后滚到上次那页。
+   *
+   * 页面 wrapper 先按估算尺寸占位，`offsetTop` 一提交就能算，所以不必等 canvas
+   * 画完；用 rAF 轮询等占位出现（最多约两秒），超时就算了 —— 定位失败比卡在
+   * 空白页好。
+   */
+  useEffect(() => {
+    if (url === '' || pageCount === 0 || resumePage === null) return
+    if (resumedUrlRef.current === url) return
+    const target = resumePage + 1
+    if (target < 1 || target > pageCount) {
+      resumedUrlRef.current = url
+      return
+    }
+    let frames = 0
+    let cancelled = false
+    const apply = (): void => {
+      if (cancelled) return
+      if (!scrollToPage(target)) {
+        if (frames++ < 120) window.requestAnimationFrame(apply)
+        return
+      }
+      resumedUrlRef.current = url
+      if (target > 1) showToast(tpl(t('viewer.resumed'), { n: target }))
+    }
+    window.requestAnimationFrame(apply)
+    return () => {
+      cancelled = true
+    }
+  }, [url, pageCount, resumePage, t])
+
+  /** 翻页就记。防抖与去重都在 hook 里，这里只喂当前页。 */
+  useEffect(() => {
+    if (!scrolledRef.current || pageCount === 0) return
+    notePage(currentPage)
+  }, [currentPage, pageCount, notePage])
+
   const applyZoom = (next: number): void => {
     setFitWidth(false)
     setManualScale(clampScale(next))
@@ -674,6 +719,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   )
 
   function onScroll(): void {
+    scrolledRef.current = true
     markScrollActivity()
     if (rafRef.current !== null) return
     rafRef.current = window.requestAnimationFrame(() => {
@@ -806,9 +852,31 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     applyZoom(next)
   }
 
+  /**
+   * 把某一页（1 基）滚到视口顶部。
+   *
+   * 页面占位还没提交（`data-zp-page` 不在）时返回 false，调用方据此重试 —— 续读与
+   * 页码跳转都要等这一步。
+   */
+  function scrollToPage(page: number): boolean {
+    const element = scrollRef.current
+    const target = element?.firstElementChild?.children[page - 1] as HTMLElement | undefined
+    if (element === null || target === undefined) return false
+    element.scrollTop = target.offsetTop
+    setCurrentPage(page)
+    markScrollActivity()
+    return true
+  }
+
+  function goToPage(page: number): void {
+    if (page < 1 || page > pageCount) return
+    scrollToPage(page)
+  }
+
   useImperativeHandle(viewerRef, () => ({
     locate,
     currentPage: () => currentPageRef.current,
+    goToPage,
     zoomIn,
     zoomOut,
     setZoom: (percent: number) => applyZoom(percent / 100),

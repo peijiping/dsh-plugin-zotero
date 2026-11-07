@@ -13,6 +13,7 @@ import type {
   ZoteroItemScope,
   ZoteroItems,
   ZoteroNoteRaw,
+  ZoteroReadPosition,
   ZoteroTags,
   ZoteroTree,
   ZoteroWriteRef,
@@ -182,6 +183,22 @@ export function fetchWriteStatus(signal?: AbortSignal): Promise<ZoteroWriteStatu
  */
 export function authorizeWrites(signal?: AbortSignal): Promise<ZoteroAuthResult> {
   return post<ZoteroAuthResult>('authorize', {})
+}
+
+// ---- 阅读位置 ---------------------------------------------------------------
+
+/**
+ * 某附件上次读到第几页（0 基）；两边都没记录时为 `null`。
+ *
+ * Host 会合并「Zotero 自己记的」与「本插件记的」，取较新的那份。
+ */
+export function fetchReadPosition(key: string, signal?: AbortSignal): Promise<ZoteroReadPosition | null> {
+  return get<ZoteroReadPosition | null>('read-position', { key }, signal)
+}
+
+/** 记下本插件读到第几页（0 基）。写不回 Zotero，只在插件自己的存储里留一份。 */
+export function saveReadPosition(input: { key: string; pageIndex: number }): Promise<ZoteroReadPosition> {
+  return post<ZoteroReadPosition>('read-position-save', input)
 }
 
 // ---- 笔记 -------------------------------------------------------------------

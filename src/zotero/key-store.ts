@@ -18,6 +18,8 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
+import { profileDirs } from './profile.js'
+
 /** Zotero 生成的 key 是 32 位字母数字；不合形状的一律不认。 */
 const KEY_PATTERN = /^[A-Za-z0-9]{32}$/u
 
@@ -67,55 +69,7 @@ export async function forgetKey(): Promise<void> {
 
 // ---- 从 Zotero 自己的密钥库导入 ---------------------------------------------
 
-/** Zotero 的 profiles.ini 所在目录（各平台固定，Zotero 未提供查询接口）。 */
-function dataRoots(): string[] {
-  const home = homedir()
-  if (process.platform === 'darwin') {
-    return [join(home, 'Library', 'Application Support', 'Zotero')]
-  }
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA
-    return appData === undefined ? [] : [join(appData, 'Zotero', 'Zotero')]
-  }
-  return [join(home, '.zotero', 'zotero')]
-}
-
-/**
- * 解析 `profiles.ini`，拿到所有 profile 目录。
- *
- * 只认 `[Profile*]` 段里的 `Path` / `IsRelative`，其余键（`Name`、`Default`…）与
- * 本用途无关；解析失败就当没有 profile。
- */
-function parseProfilesIni(text: string, root: string): string[] {
-  const dirs: string[] = []
-  let section = ''
-  let path = ''
-  let relative = true
-  const flush = (): void => {
-    if (section.startsWith('Profile') && path !== '') {
-      dirs.push(relative ? resolve(root, path) : resolve(path))
-    }
-    path = ''
-    relative = true
-  }
-  for (const raw of text.split(/\r?\n/u)) {
-    const line = raw.trim()
-    if (line === '' || line.startsWith(';') || line.startsWith('#')) continue
-    if (line.startsWith('[') && line.endsWith(']')) {
-      flush()
-      section = line.slice(1, -1)
-      continue
-    }
-    const eq = line.indexOf('=')
-    if (eq === -1) continue
-    const name = line.slice(0, eq).trim()
-    const value = line.slice(eq + 1).trim()
-    if (name === 'Path') path = value
-    else if (name === 'IsRelative') relative = value !== '0'
-  }
-  flush()
-  return dirs
-}
+/** Zotero 的 profile 目录解析见 {@link ./profile.ts}（数据目录那边也要用同一套）。 */
 
 interface ZoteroKeyEntry {
   key?: unknown
@@ -154,17 +108,9 @@ async function rememberedKeysIn(dir: string, appName: string): Promise<string[]>
  * 不需要再弹一次框。找不到就返回 `null`（再点一次授权即可）。
  */
 export async function readZoteroRememberedKey(appName: string): Promise<string | null> {
-  for (const root of dataRoots()) {
-    let ini: string
-    try {
-      ini = await readFile(join(root, 'profiles.ini'), 'utf8')
-    } catch {
-      continue
-    }
-    for (const dir of parseProfilesIni(ini, root)) {
-      const [key] = await rememberedKeysIn(dir, appName)
-      if (key !== undefined) return key
-    }
+  for (const dir of await profileDirs()) {
+    const [key] = await rememberedKeysIn(dir, appName)
+    if (key !== undefined) return key
   }
   return null
 }

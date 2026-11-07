@@ -20,6 +20,7 @@ import { ZoteroError } from '../zotero/client.js'
 import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
 import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
+import { loadPosition, savePosition } from '../zotero/read-position.js'
 import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type {
   ApiEnvelope,
@@ -86,6 +87,7 @@ const WRITE_ACTIONS = new Set([
   'annotation-patch',
   'annotation-delete',
   'annotation-create',
+  'read-position-save',
 ])
 
 /** 自定义写头 + JSON content-type：让任何跨源写都变成需要预检的非简单请求。 */
@@ -429,6 +431,39 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
   ok(res, { opened: true })
 }
 
+// ---- 阅读位置 ---------------------------------------------------------------
+
+/**
+ * 某个附件在**本插件里**上次读到第几页；没记过时数据为 `null`。
+ *
+ * 与 Zotero 无关：不读它的数据目录、不读它的库文件（Zotero 运行期对
+ * `zotero.sqlite` 持独占锁，而 `dataDir` 又可能是任意位置，靠不住）。
+ */
+async function handleReadPosition(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const key = params.get('key') ?? ''
+  if (!KEY_PATTERN.test(key)) {
+    fail(res, 400, 'bad_request', '附件 key 格式不合法')
+    return
+  }
+  ok(res, await loadPosition(key))
+}
+
+/** 记下本插件读到第几页（0 基）。与 Zotero 不同步，只记在自己这儿。 */
+async function handleReadPositionSave(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, 4096)
+  const key = requireKey(record, 'key')
+  const pageIndex = record.pageIndex
+  if (
+    typeof pageIndex !== 'number'
+    || !Number.isInteger(pageIndex)
+    || pageIndex < 0
+    || pageIndex > 100_000
+  ) {
+    throw new ZoteroError('bad_request', 'pageIndex 必须是从 0 开始的整数页码')
+  }
+  ok(res, await savePosition(key, pageIndex))
+}
+
 // ---- 笔记读写 ---------------------------------------------------------------
 
 /**
@@ -575,6 +610,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['file', 'GET'],
   ['mcp-tools', 'GET'],
   ['auth-status', 'GET'],
+  ['read-position', 'GET'],
   ['note-raw', 'GET'],
   ['open-in-zotero', 'POST'],
   ['authorize', 'POST'],
@@ -584,6 +620,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['annotation-patch', 'POST'],
   ['annotation-delete', 'POST'],
   ['annotation-create', 'POST'],
+  ['read-position-save', 'POST'],
 ])
 
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
@@ -652,6 +689,9 @@ export function createHandler(
         case 'auth-status':
           await handleAuthStatus(res)
           return
+        case 'read-position':
+          await handleReadPosition(res, url.searchParams)
+          return
         case 'authorize':
           await handleAuthorize(res)
           return
@@ -675,6 +715,9 @@ export function createHandler(
           return
         case 'annotation-create':
           await handleAnnotationCreate(req, res)
+          return
+        case 'read-position-save':
+          await handleReadPositionSave(req, res)
           return
         default:
           fail(res, 404, 'bad_request', `未知 action ${action}`)

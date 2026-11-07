@@ -117,6 +117,7 @@ export function TextViewer({
   useImperativeHandle(viewerRef, () => ({
     locate,
     currentPage: () => 1,
+    goToPage: () => undefined,
     zoomIn: () => undefined,
     zoomOut: () => undefined,
     setZoom: () => undefined,

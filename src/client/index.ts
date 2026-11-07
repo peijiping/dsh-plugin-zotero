@@ -13,14 +13,15 @@
  * 因此这里用数组式 inject。
  */
 
-import { createElement, type ComponentType, type ReactElement } from 'react'
+import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
 import type { InputActions } from './inline'
+import { ensureItemTitle, rememberItemTitle, useItemTitle } from './itemTitles'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { ZoteroCardController, ROW_ID, ZoteroSettingsSection } from './ZoteroCard'
-import { ITEM_ADDRESS_PREFIX, ZoteroItemPane } from './ZoteroItemPane'
+import { ITEM_ADDRESS_PREFIX, itemKeyFromAddress, ZoteroItemPane } from './ZoteroItemPane'
 import { ZoteroPane } from './ZoteroPane'
 
 /** locale 服务中本插件用到的那部分。 */
@@ -146,9 +147,10 @@ export function apply(ctx: ClientContext): void {
     'dsh-plugin-zotero: item tab',
   )
 
-  /** 打开 / 聚焦某条目的 tab；标题先给一个，布局恢复后由标题席位读 params。 */
+  /** 打开 / 聚焦某条目的 tab；标题先记进缓存，布局恢复后才不靠 params 也能显示。 */
   const openItem = (key: string, title?: string): void => {
     const address = `${ITEM_ADDRESS_PREFIX}${encodeURIComponent(key)}`
+    if (title !== undefined) rememberItemTitle(key, title)
     ctx.sidebarRight.openResource(
       address,
       title === undefined || title === '' ? undefined : { params: { title } },
@@ -195,12 +197,29 @@ export function apply(ctx: ClientContext): void {
       sessionId: props.sessionId,
     })
 
+  /**
+   * tab 标题。
+   *
+   * 标题**不能只读 `navigation.params`**：布局持久化只存
+   * `{ id, kind, contentId, title }`，不存 params；刷新页面或切会话后框架用
+   * `params: undefined` 重建 occurrence，标题就退回兜底文案。所以这里按地址里的
+   * 条目 key 读缓存，缺了再补取一次（见 itemTitles.ts）。
+   */
   const ItemTitle = (props: { useTabInfo: ItemPaneProps['useTabInfo'] }): ReactElement => {
     const info = props.useTabInfo()
-    const params = info.tab.navigation?.params as { title?: unknown } | undefined
-    const title = typeof params?.title === 'string' && params.title !== ''
+    const navigation = info.tab.navigation
+    const key = itemKeyFromAddress(navigation?.address || info.tab.contentId || '')
+    const params = navigation?.params as { title?: unknown } | undefined
+    const openedTitle = typeof params?.title === 'string' && params.title !== ''
       ? params.title
-      : t('itemTab.title')
+      : undefined
+    const cached = useItemTitle(key)
+
+    useEffect(() => {
+      if (key !== null && cached === undefined) ensureItemTitle(key)
+    }, [key, cached])
+
+    const title = cached ?? openedTitle ?? t('itemTab.title')
     return createElement(
       'span',
       { title, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
