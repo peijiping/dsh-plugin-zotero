@@ -10,7 +10,7 @@ import { useCallback, useRef, useState, type MutableRefObject, type ReactElement
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import { tpl, type Translate } from '../locales'
 import { pickRenderer } from './registry'
-import type { DocumentSource, ViewerHandle, ZoomState } from './types'
+import type { DocumentOutlineItem, DocumentSource, ViewerHandle, ZoomState } from './types'
 
 interface Props {
   t: Translate
@@ -23,6 +23,8 @@ interface Props {
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   onChanged(): void
+  /** 渲染器报上来的目录（PDF 书签），交给左上角的目录浮层。 */
+  onOutlineChange(outline: DocumentOutlineItem[]): void
 }
 
 /**
@@ -97,6 +99,7 @@ export function DocumentView({
   onInsertAnnotation,
   onOpenInZotero,
   onChanged,
+  onOutlineChange,
 }: Props): ReactElement {
   const renderer = pickRenderer(source, detail)
   const Renderer = renderer.Component
@@ -176,19 +179,21 @@ export function DocumentView({
           onInsertAnnotation={onInsertAnnotation}
           onOpenInZotero={onOpenInZotero}
           onChanged={onChanged}
+          onOutlineChange={onOutlineChange}
         />
       </div>
     </div>
   )
 }
 
+/** 左侧留出两个悬浮按钮（目录 + 文献信息）的位置，标题从它们右边开始。 */
 const barStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 4,
   flexShrink: 0,
   height: 30,
-  padding: '0 8px 0 40px',
+  padding: '0 8px 0 66px',
   borderBottom: '1px solid rgba(127,127,127,0.2)',
   background: 'transparent',
 } as const

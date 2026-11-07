@@ -290,11 +290,12 @@ const rootStyle = {
   pointerEvents: 'none',
 } as const
 
+/** 位置让出左边一格给目录按钮（8 起、22 宽、间隔 4），两个按钮并排。 */
 const triggerStyle = {
   position: 'absolute',
   pointerEvents: 'auto',
   top: 4,
-  left: 8,
+  left: 34,
   width: 22,
   height: 22,
   padding: 0,

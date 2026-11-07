@@ -16,9 +16,18 @@ import { fileUrl, openInZotero, snapshotUrl } from './api'
 import { isLocatable, type AnnotationFilter } from './annotationRuns'
 import { InfoPanel } from './InfoPanel'
 import { tpl, type Translate } from './locales'
+import { OutlinePanel } from './OutlinePanel'
 import { showToast } from './paneStore'
 import { DocumentView } from './viewer/DocumentView'
-import { extensionOf, isHtml, isPdf, type DocumentSource, type ViewerHandle } from './viewer/types'
+import { pickRenderer } from './viewer/registry'
+import {
+  extensionOf,
+  isHtml,
+  isPdf,
+  type DocumentOutlineItem,
+  type DocumentSource,
+  type ViewerHandle,
+} from './viewer/types'
 
 interface Props {
   t: Translate
@@ -38,6 +47,18 @@ interface Props {
 /** 定位重试：渲染器刚就绪时页面占位可能还没提交，最多试几次。 */
 const LOCATE_RETRIES = 6
 const LOCATE_RETRY_MS = 60
+
+/**
+ * 目录缓存按附件归属。
+ *
+ * 存 `attachmentKey` 而不是清空：切附件时新渲染器要重新解析书签（约几十毫秒到几百
+ * 毫秒），这段时间面板若拿上一条的目录顶上，就会跳错页。归属对不上就当作「还没读到」。
+ */
+interface OutlineState {
+  attachmentKey: string
+  /** `null` = 还没读到；空数组 = 这份文档没有书签。 */
+  items: DocumentOutlineItem[] | null
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -59,6 +80,8 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
 
 export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onChanged }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const [outline, setOutline] = useState<OutlineState>({ attachmentKey: '', items: null })
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>({ type: 'all', color: null })
   const [stateKey, setStateKey] = useState(detail.key)
@@ -72,6 +95,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
     setSelectedKey(null)
     setAnnotationFilter({ type: 'all', color: null })
     setInfoOpen(false)
+    setOutlineOpen(false)
     pendingLocate.current = null
   }
 
@@ -103,6 +127,15 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
 
   /** 收起信息浮层；`InfoPanel` 内部再用 `useDismiss` 接管「点浮层外 / Esc」。 */
   const closeInfo = useCallback((): void => setInfoOpen(false), [])
+
+  const sourceKey = source?.attachmentKey ?? ''
+  /** 归属对不上的目录一律当「还没读到」，绝不用上一条文献的书签跳页。 */
+  const outlineItems = outline.attachmentKey === sourceKey ? outline.items : null
+  const handleOutlineChange = useCallback((items: DocumentOutlineItem[]): void => {
+    setOutline({ attachmentKey: sourceKey, items })
+  }, [sourceKey])
+  /** 目录按钮只在有分页的文档上出现：跳页是这个浮层唯一的用处。 */
+  const outlineAvailable = pickRenderer(source, detail).capabilities.pageNavigation
 
   const flushPendingLocate = useCallback((key: string, attempt: number): void => {
     if (locateTimer.current !== null) {
@@ -158,6 +191,16 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
     })
   }
 
+  /**
+   * 跳页。
+   *
+   * 跳完就收起目录：浮层压在文档左边，留着会把刚跳过去的那一页挡掉一半。
+   */
+  function jumpToPage(page: number): void {
+    setOutlineOpen(false)
+    viewerRef.current?.goToPage(page)
+  }
+
   return (
     <div style={rootStyle}>
       <DocumentView
@@ -171,13 +214,31 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         onInsertAnnotation={onInsertAnnotation}
         onOpenInZotero={openInZoteroAt}
         onChanged={onChanged}
+        onOutlineChange={handleOutlineChange}
       />
+      {outlineAvailable && (
+        <OutlinePanel
+          t={t}
+          items={outlineItems}
+          open={outlineOpen}
+          onToggle={() => {
+            // 两个浮层同一块位置，开一个就收另一个，否则压在一起互相挡。
+            if (!outlineOpen) setInfoOpen(false)
+            setOutlineOpen(!outlineOpen)
+          }}
+          onClose={() => setOutlineOpen(false)}
+          onJump={jumpToPage}
+        />
+      )}
       <InfoPanel
         t={t}
         detail={detail}
         currentAttachmentKey={source?.attachmentKey ?? null}
         open={infoOpen}
-        onToggle={() => setInfoOpen((open) => !open)}
+        onToggle={() => {
+          if (!infoOpen) setOutlineOpen(false)
+          setInfoOpen(!infoOpen)
+        }}
         onClose={closeInfo}
         onCite={onInsertItem}
         onSelectAttachment={selectAttachment}

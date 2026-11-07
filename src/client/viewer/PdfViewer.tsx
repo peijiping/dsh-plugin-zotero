@@ -47,7 +47,7 @@ import { viewportBox } from './geometry'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import { enqueueRender, markScrollActivity, waitForScrollIdle } from './renderQueue'
 import { SelectionBar, type MarkType } from './SelectionBar'
-import type { DocumentRendererProps } from './types'
+import type { DocumentOutlineItem, DocumentRendererProps } from './types'
 import { useReadPosition } from './useReadPosition'
 
 const MIN_SCALE = 0.5
@@ -65,8 +65,74 @@ const MAX_CANVAS_PIXELS = 5_242_880
 const EMPTY_PAGES: ReadonlySet<number> = new Set()
 const EMPTY_ANNOTATIONS: ZoteroAnnotation[] = []
 
+/** 目录条目数与层级的硬上限：个别 PDF 的书签能上千条，面板画不完也没人看得完。 */
+const OUTLINE_MAX_ITEMS = 800
+const OUTLINE_MAX_DEPTH = 8
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * 一条书签的 `dest` → 1 基页码。
+ *
+ * `dest` 有两种形态：命名目标（字符串，要去 catalog 里查）或显式数组
+ * `[页引用, 视图, ...]`。数组首元素通常是页对象的引用 `{num, gen}`，
+ * 但有的生成器直接写 0 基页号，两种都收；外链书签（只有 `url`）返回 `null`。
+ */
+async function outlinePageOf(pdf: PDFDocumentProxy, dest: unknown): Promise<number | null> {
+  let resolved: unknown = dest
+  if (typeof dest === 'string') {
+    try {
+      resolved = await pdf.getDestination(dest)
+    } catch {
+      return null
+    }
+  }
+  if (!Array.isArray(resolved) || resolved.length === 0) return null
+  const first: unknown = resolved[0]
+  if (typeof first === 'number' && Number.isInteger(first)) return first + 1
+  if (typeof first !== 'object' || first === null) return null
+  try {
+    return (await pdf.getPageIndex(first as { num: number; gen: number })) + 1
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 把 PDF 的书签树拍平成带层级的列表。
+ *
+ * 解析失败按「没有目录」处理：目录是附加阅读入口，不能因为它把文档判成加载失败。
+ * 返回数组而不是 `null` —— 「没有书签」是确定的结果，面板要显示的文案不一样。
+ */
+async function readOutline(pdf: PDFDocumentProxy): Promise<DocumentOutlineItem[]> {
+  type Nodes = Awaited<ReturnType<PDFDocumentProxy['getOutline']>>
+  let tree: Nodes
+  try {
+    tree = await pdf.getOutline()
+  } catch {
+    return []
+  }
+  if (!Array.isArray(tree)) return []
+
+  const out: DocumentOutlineItem[] = []
+  const walk = async (nodes: Nodes, depth: number): Promise<void> => {
+    for (const node of nodes) {
+      if (out.length >= OUTLINE_MAX_ITEMS) return
+      out.push({
+        title: (node.title ?? '').trim() || '(无标题)',
+        page: await outlinePageOf(pdf, node.dest),
+        depth,
+      })
+      const children = node.items as Nodes | undefined
+      if (depth + 1 < OUTLINE_MAX_DEPTH && Array.isArray(children) && children.length > 0) {
+        await walk(children, depth + 1)
+      }
+    }
+  }
+  await walk(tree, 0)
+  return out
 }
 
 function clampScale(value: number): number {
@@ -462,6 +528,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     onInsertAnnotation,
     onOpenInZotero,
     onChanged,
+    onOutlineChange,
   } = props
 
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -479,6 +546,13 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
    */
   const rangeRef = useRef<Range | null>(null)
   const [marking, setMarking] = useState(false)
+
+  /**
+   * 目录回调走 ref：加载 effect 只该随 url / 重试重跑，不该因为父级重渲染换了
+   * 回调身份就重新解析一遍书签（每次解析都要等一个 `getOutline`）。
+   */
+  const outlineRef = useRef(onOutlineChange)
+  outlineRef.current = onOutlineChange
 
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -558,11 +632,17 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         setBaseSize({ width: base.width, height: base.height })
         setLoading(false)
         onReady()
+        // 书签单独解析、不 await：目录晚一两帧没有关系，别拖住首屏。
+        void readOutline(proxy).then((items) => {
+          if (!disposed) outlineRef.current?.(items)
+        })
       })
       .catch((loadError: unknown) => {
         if (disposed) return
         setError(errorText(loadError))
         setLoading(false)
+        // 明确报「没有目录」：不然面板会永远停在「正在读取目录…」。
+        outlineRef.current?.([])
       })
 
     return () => {
