@@ -153,6 +153,15 @@ export function fileUrl(key: string): string {
   return buildUrl('file', { key })
 }
 
+/**
+ * 网页快照的目录形地址，直接作为 iframe 的 `src`。
+ *
+ * 尾斜杠必须在：浏览器按它解析快照里的相对资源。
+ */
+export function snapshotUrl(key: string): string {
+  return `/dsh-zotero/snapshot/${encodeURIComponent(key)}/`
+}
+
 /** 用系统 Zotero 打开条目或附件页。 */
 export async function openInZotero(
   input: { key: string; kind: 'item' | 'attachment'; page?: number },

@@ -1,0 +1,104 @@
+/**
+ * 快照 iframe 与父页面之间的消息协议。
+ *
+ * 子文档的 origin 是 opaque（sandbox 不给 `allow-same-origin`），所以：
+ *   - 父 → 子必须 `targetOrigin: '*'`；
+ *   - 父页面**不能**用 `event.origin` 校验（值是字符串 `"null"`），只能比较
+ *     `event.source === iframe.contentWindow`。
+ *
+ * 子 → 父**没有**写入口：iframe 只上报「选区快照」，真正落库必须由用户在父页面
+ * 点色块触发。这样快照里的脚本即使伪造消息，也最多伪造一个选区。
+ */
+
+export const SNAPSHOT_CHANNEL = 'dsh-zotero/snapshot'
+export const SNAPSHOT_VERSION = 1
+
+/**
+ * 桥接脚本的契约版本，随 `ready` 上报。
+ *
+ * 父页面据此判断「iframe 里跑的是不是新版脚本」：Host 若把脚本缓存在内存里，
+ * 改了脚本但没重启 DSH 就会拿到旧的一份——旧脚本不带点击矩形，编辑卡片只能
+ * 退化成居中显示，界面上要明说，别让用户以为卡片位置是坏的。
+ *
+ * 2：`annotation-click` 携带 `rect`（点击位置）。
+ */
+export const SNAPSHOT_BRIDGE_VERSION = 2
+
+/** iframe 侧的一条标注（只带渲染高亮需要的最小字段）。 */
+export interface SnapshotAnnotationItem {
+  key: string
+  type: string
+  color: string
+  text: string
+  webPosition: { selector: string; start: number; end: number }
+}
+
+/** 父页面 → iframe。 */
+export type SnapshotCommand =
+  | { type: 'annotations'; items: SnapshotAnnotationItem[] }
+  | { type: 'locate'; key: string }
+  | { type: 'clear-selection' }
+
+/** 相对 iframe 视口的矩形。 */
+export interface SnapshotRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** 用户在快照里划出的一段选区，已全部转成纯数据。 */
+export interface SnapshotSelection {
+  text: string
+  selector: string
+  start: number
+  end: number
+  /** 7 位零填充的排序键（近似值，见 runtime.js）。 */
+  sortIndex: string
+  /** 相对 iframe 视口的矩形，父页面据此摆浮条。 */
+  rect: SnapshotRect
+}
+
+/** iframe → 父页面。 */
+export type SnapshotEvent =
+  /** `bridge` 缺省视为 1（没有这个字段的老脚本）。 */
+  | { type: 'ready'; bridge?: number }
+  | { type: 'applied'; total: number; resolved: number; rev: number; error?: string | null }
+  | { type: 'selection'; selection: SnapshotSelection | null }
+  | { type: 'locate-result'; key: string; ok: boolean }
+  /**
+   * 点了网页里的一段高亮。`rect` 是被点元素相对 iframe 视口的矩形，父页面据此
+   * 摆编辑卡片；老版本桥接脚本不带它，所以按可选处理。
+   */
+  | { type: 'annotation-click'; key: string; rect?: SnapshotRect }
+  /**
+   * 网页正文里按下指针。父页面的 `document` 监听不到 iframe 内部的事件，
+   * 收到这条就交给 `notifyDocumentPress()`（见 `dismiss.ts`），让打开着的浮层
+   * 与父页面里的点击走同一套「点别处就收起」。
+   */
+  | { type: 'pointerdown' }
+  | { type: 'open-external'; href: string }
+
+const EVENT_TYPES = new Set([
+  'ready',
+  'applied',
+  'selection',
+  'locate-result',
+  'annotation-click',
+  'pointerdown',
+  'open-external',
+])
+
+/** 给父页面用：把 `MessageEvent.data` 收窄成 {@link SnapshotEvent}。 */
+export function asSnapshotEvent(data: unknown): SnapshotEvent | null {
+  if (typeof data !== 'object' || data === null) return null
+  const record = data as { s?: unknown; v?: unknown; type?: unknown }
+  if (record.s !== SNAPSHOT_CHANNEL || record.v !== SNAPSHOT_VERSION) return null
+  if (typeof record.type !== 'string' || !EVENT_TYPES.has(record.type)) return null
+  return data as SnapshotEvent
+}
+
+/** 父页面发给 iframe 的信封。 */
+export function commandEnvelope(command: SnapshotCommand): Record<string, unknown> {
+  return { s: SNAPSHOT_CHANNEL, v: SNAPSHOT_VERSION, ...command }
+}

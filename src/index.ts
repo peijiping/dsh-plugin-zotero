@@ -19,6 +19,7 @@ import Schema from '@deepseek-ai/schemastery'
 
 import { McpToolBridge } from './host/mcp-bridge.js'
 import { createHandler, type WebServerLike } from './host/router.js'
+import { createSnapshotHandler } from './host/snapshot.js'
 import { createStaticHandler } from './host/static.js'
 import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
@@ -30,6 +31,7 @@ import {
   REQUEST_TIMEOUT_MS,
   ROUTE_MATCH,
   setSettingsReader,
+  SNAPSHOT_ROUTE_MATCH,
   STATIC_ROUTE_MATCH,
   ZOTERO_BASE,
 } from './zotero/config.js'
@@ -129,6 +131,15 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
         handler: createStaticHandler(),
       }),
       'dsh-plugin-zotero: static assets',
+    )
+    // 网页快照：目录形 URL，iframe 直接指过来；HTML 在这里注入桥接脚本。
+    hostCtx.effect(
+      () => webServer.register({
+        kind: 'prefix',
+        path: SNAPSHOT_ROUTE_MATCH,
+        handler: createSnapshotHandler(),
+      }),
+      'dsh-plugin-zotero: web snapshots',
     )
   })
 }

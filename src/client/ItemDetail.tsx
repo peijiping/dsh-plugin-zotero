@@ -12,13 +12,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
-import { fileUrl, openInZotero } from './api'
-import type { AnnotationFilter } from './annotationRuns'
+import { fileUrl, openInZotero, snapshotUrl } from './api'
+import { isLocatable, type AnnotationFilter } from './annotationRuns'
 import { InfoPanel } from './InfoPanel'
 import { tpl, type Translate } from './locales'
 import { showToast } from './paneStore'
 import { DocumentView } from './viewer/DocumentView'
-import { extensionOf, isPdf, type DocumentSource, type ViewerHandle } from './viewer/types'
+import { extensionOf, isHtml, isPdf, type DocumentSource, type ViewerHandle } from './viewer/types'
 
 interface Props {
   t: Translate
@@ -44,13 +44,17 @@ function errorMessage(error: unknown): string {
 }
 
 function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): DocumentSource {
-  return {
+  const ext = extensionOf(attachment.filename || attachment.title)
+  const source: DocumentSource = {
     attachmentKey: attachment.key,
     contentType: attachment.contentType,
-    ext: extensionOf(attachment.filename || attachment.title),
+    ext,
     title: attachment.title,
-    url: fileUrl(attachment.key),
+    url: '',
   }
+  // 网页快照走目录形路由（iframe 直接指过来），其余仍是原始文件流。
+  source.url = isHtml(source) ? snapshotUrl(attachment.key) : fileUrl(attachment.key)
+  return source
 }
 
 export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onChanged }: Props): ReactElement {
@@ -97,6 +101,9 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
           }
         : null
 
+  /** 收起信息浮层；`InfoPanel` 内部再用 `useDismiss` 接管「点浮层外 / Esc」。 */
+  const closeInfo = useCallback((): void => setInfoOpen(false), [])
+
   const flushPendingLocate = useCallback((key: string, attempt: number): void => {
     if (locateTimer.current !== null) {
       window.clearTimeout(locateTimer.current)
@@ -120,7 +127,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
   function locateAnnotation(annotation: ZoteroAnnotation): void {
     setInfoOpen(false)
     const shownKey = source?.attachmentKey ?? null
-    const onOtherAttachment = annotation.position !== null
+    // 网页标注的 `position` 恒为 null，只看它会把「切到快照再定位」整条路堵死。
+    const onOtherAttachment = isLocatable(annotation)
       && annotation.attachmentKey !== shownKey
       && attachments.some((item) => item.key === annotation.attachmentKey)
     if (onOtherAttachment) {
@@ -137,9 +145,14 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
   }
 
   function openInZoteroAt(page: number): void {
-    const input = source !== null
-      ? { key: source.attachmentKey, kind: 'attachment' as const, page }
-      : { key: detail.key, kind: 'item' as const }
+    // `zotero://open-pdf` 只对 PDF 有效；HTML 快照改成「选中这个附件」，
+    // 否则点了没反应，用户会以为插件坏了。
+    const isSnapshot = source !== null && isHtml(source)
+    const input = source === null
+      ? { key: detail.key, kind: 'item' as const }
+      : isSnapshot
+        ? { key: source.attachmentKey, kind: 'item' as const }
+        : { key: source.attachmentKey, kind: 'attachment' as const, page }
     openInZotero(input).catch((error: unknown) => {
       showToast(tpl(t('viewer.openFailed'), { message: errorMessage(error) }))
     })
@@ -165,7 +178,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         currentAttachmentKey={source?.attachmentKey ?? null}
         open={infoOpen}
         onToggle={() => setInfoOpen((open) => !open)}
-        onClose={() => setInfoOpen(false)}
+        onClose={closeInfo}
         onCite={onInsertItem}
         onSelectAttachment={selectAttachment}
         onLocateAnnotation={locateAnnotation}

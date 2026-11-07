@@ -8,11 +8,12 @@
  * 决定了本模块的形状：
  *
  * 1. `POST /api/local/authorize` **每次必弹框**（没有「已记住就免弹」分支），且
- *    每分钟 5 次限流（超限 429 + `Retry-After`）。所以 key 只在内存里持有：
- *    dsh 重启后需重新点一次授权，但绝不会在写操作里变成弹窗风暴。
+ *    每分钟 5 次限流（超限 429 + `Retry-After`）。因此「一次授权、永久可用」靠的是
+ *    **自己把 key 存住**（{@link key-store}）：授权成功即落盘，启动时静默复用，
+ *    写操作里永远不主动申请授权。
  * 2. 只有「始终允许」的 key 可复用；「允许」的 key 被首个成功写请求消耗
- *    （`consumeLocalAPIKey`）。所以一次用户操作尽量压进单个请求，且 **401 只提示
- *    不自动重试** —— 自动重新授权等于替用户点弹窗。
+ *    （`consumeLocalAPIKey`）。所以一次性 key **不落盘**，且一次用户操作尽量压进
+ *    单个请求；**401 只提示不自动重试** —— 自动重新授权等于替用户点弹窗。
  * 3. 写请求必须带 `Zotero-Server-ID`（缺失 428、不匹配 412，正文含 "Server-ID"），
  *    更新/删除必须带版本（body 的 `version` 或 `If-Unmodified-Since-Version`，
  *    缺失 428）。版本对不上 → 412，语义是「Zotero 那边改过了」，与实例变更不同，
@@ -28,6 +29,7 @@ import {
   zoteroProbeUrl,
 } from './config.js'
 import { ZoteroError } from './client.js'
+import { forgetKey, loadStoredKey, readZoteroRememberedKey, storeKey } from './key-store.js'
 
 /** 写通道支持的 HTTP 动词（本地 API 与 Web API 同构）。 */
 export type WriteMethod = 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -55,22 +57,40 @@ export interface WriteResult<T> {
   version: number | null
 }
 
-/** 写通道状态（内存态，不含 key 本体）。 */
+/** 写通道状态（进程内快照，不含 key 本体）。 */
 export interface WriteChannelStatus {
   enabled: boolean
   hasKey: boolean
   remembered: boolean
 }
 
-// ---- 内存态 -----------------------------------------------------------------
+// ---- 凭证态 -----------------------------------------------------------------
+
+/** 一条可用凭证：key 本体 + 它是否可复用 + 是否已落盘（决定 401 时要不要删文件）。 */
+interface Credentials {
+  key: string
+  /** 「始终允许」的 key 可无限复用；一次性 key 用一次就废。 */
+  remembered: boolean
+  /** 落盘过（含从 Zotero 密钥库导入），失效时要把本地副本一并删掉。 */
+  stored: boolean
+}
 
 /**
- * 本地 API key。
+ * 当前凭证。
  *
- * **只放内存**：它无范围限制、等于「可写用户整个库」的凭证，而 dsh 会把 `.volatile()`
- * 配置字段落盘并在配置表单里回显 —— 落盘等于把写库凭证明文摊开。
+ * 首次用到时才去磁盘上找（{@link restoreCredentials}），避免在插件加载时做 IO；
+ * 找到即缓存在内存，读操作与状态查询不会反复读文件。
  */
-let credentials: { key: string; remembered: boolean } | undefined
+let credentials: Credentials | undefined
+
+/** 从 Zotero 密钥库导入只做一次：导入过就不再回读，避免失效 key 被反复捞回来。 */
+let imported = false
+
+/** 已经被 Zotero 判过 401 的 key，不再从磁盘恢复。 */
+let rejectedKey: string | undefined
+
+/** 正在进行的恢复流程（并发调用共享同一次读盘）。 */
+let restoring: Promise<void> | undefined
 
 /**
  * `Zotero-Server-ID` 缓存。
@@ -88,10 +108,40 @@ function invalidateServerId(): void {
   cachedServerId = undefined
 }
 
+/**
+ * 恢复写权限：本插件自己的副本 → Zotero 的密钥库（仅在首次启动迁移时）。
+ *
+ * 三步都失败就当没授权，用户点一次按钮即可 —— 绝不在这里替用户弹 Zotero 的框。
+ */
+async function restoreCredentials(): Promise<void> {
+  if (credentials !== undefined) return
+  restoring ??= (async () => {
+    try {
+      let key = await loadStoredKey()
+      let fromZotero = false
+      if (key === null && !imported) {
+        imported = true
+        key = await readZoteroRememberedKey(AUTHORIZE_APP_NAME)
+        fromZotero = key !== null
+      }
+      if (key === null || key === rejectedKey) return
+      // 用户此前点过「始终允许」，把 Zotero 那份搬进本插件自己的库，之后不再依赖它的文件布局。
+      if (fromZotero) await storeKey(key)
+      credentials = { key, remembered: true, stored: true }
+    } catch (error) {
+      console.warn('[dsh-plugin-zotero] 读取本地写权限凭证失败：', error)
+    } finally {
+      restoring = undefined
+    }
+  })()
+  await restoring
+}
+
 // ---- 状态查询 ---------------------------------------------------------------
 
 /** 当前写通道状态，供配置卡渲染状态徽标与按钮。 */
-export function writeChannelStatus(): WriteChannelStatus {
+export async function writeChannelStatus(): Promise<WriteChannelStatus> {
+  await restoreCredentials()
   return {
     enabled: getSettings().writeEnabled,
     hasKey: credentials !== undefined,
@@ -100,21 +150,23 @@ export function writeChannelStatus(): WriteChannelStatus {
 }
 
 /**
- * 写操作的前置检查：开关打开 + 内存里有 key，否则直接抛错不发请求。
+ * 写操作的前置检查：开关打开 + 手上有 key，否则直接抛错不发请求。
  *
  * 放在 {@link requestWrite} 内部做唯一闸门，面板路由与模型工具因此同受约束。
+ * 手上有 key 就不会再问用户要授权 —— 这是「一次授权永久可用」的落点。
  */
-export function ensureWritable(): void {
+export async function ensureWritable(): Promise<void> {
   if (!getSettings().writeEnabled) {
     throw new ZoteroError(
       'bad_request',
       '本插件的 Zotero 写入未开启：请在插件「配置」页打开「允许写入 Zotero」。',
     )
   }
+  await restoreCredentials()
   if (credentials === undefined) {
     throw new ZoteroError(
       'zotero_need_auth',
-      '尚未取得 Zotero 写权限：请在插件「配置」页点「授权 Zotero 写权限」，并在 Zotero 弹窗里选「始终允许」。',
+      '尚未取得 Zotero 写权限：请在插件「配置」页点一次「授权 Zotero 写权限」，并在 Zotero 弹窗里选「始终允许」——该授权会保存下来，之后不会再问。',
     )
   }
 }
@@ -166,13 +218,18 @@ function brief(text: string): string {
 function toWriteError(status: number, text: string, retryAfter: string | null): ZoteroError {
   const detail = brief(text)
   switch (status) {
-    case 401:
-      // 一次性 key 已耗尽、或用户在 Zotero 里清了授权。不自助重试。
+    case 401: {
+      // 一次性 key 已耗尽、或用户在 Zotero 里清了授权。
+      const dead = credentials
       credentials = undefined
+      rejectedKey = dead?.key
+      // 落过盘的失效 key 顺手删掉，免得下次启动又从磁盘上捞回来。
+      if (dead?.stored === true) void forgetKey()
       return new ZoteroError(
         'zotero_need_auth',
-        'Zotero 拒绝了当前写权限（可能是一次性 key 已用完）：请在插件「配置」页重新授权并选「始终允许」。',
+        'Zotero 拒绝了当前写权限（可能是一次性 key 已用完，或在 Zotero 里撤销了授权）：请在插件「配置」页重新授权并选「始终允许」。',
       )
+    }
     case 403:
       if (/"denied"\s*:\s*true/u.test(text)) {
         return new ZoteroError('zotero_denied', '你在 Zotero 的授权弹窗里点了「拒绝」。')
@@ -233,7 +290,9 @@ function baseHeaders(id: string): Record<string, string> {
  * 申请本地写权限（会弹 Zotero 对话框，等用户点按钮才返回）。
  *
  * 只在用户明确点击配置卡上的授权按钮时调用；写请求收到 401 时**不**自动调它。
- * 已持有 key 时也允许再次调用：Zotero 每次都发新 key，覆盖旧的即可。
+ *
+ * 用户选「始终允许」时**立刻落盘**，从此重启 dsh 也复用同一把 key —— 这正是
+ * 「一次授权、永久使用」。选「允许」（一次性）则不落盘，用完即废。
  */
 export async function authorize(): Promise<{ remembered: boolean }> {
   if (!getSettings().writeEnabled) {
@@ -270,8 +329,12 @@ export async function authorize(): Promise<{ remembered: boolean }> {
     if (typeof payload?.key !== 'string' || payload.key === '') {
       throw new ZoteroError('internal_error', 'Zotero 的授权响应里没有 key，无法继续。')
     }
-    credentials = { key: payload.key, remembered: payload.remember === true }
-    return { remembered: credentials.remembered }
+    const remembered = payload.remember === true
+    // 一次性 key 不落盘：它本来就用一次即废，存下来只会在下次启动时白白失败一次。
+    if (remembered) await storeKey(payload.key)
+    credentials = { key: payload.key, remembered, stored: remembered }
+    rejectedKey = undefined
+    return { remembered }
   }
   throw new ZoteroError('internal_error', '授权请求未能完成。')
 }
@@ -327,7 +390,7 @@ export async function requestWrite<T = unknown>(
   path: string,
   options: WriteOptions = {},
 ): Promise<WriteResult<T>> {
-  ensureWritable()
+  await ensureWritable()
   const first = await attemptWrite<T>(method, path, options, false)
   if (first !== SERVER_ID_STALE) return first
   const second = await attemptWrite<T>(method, path, options, true)

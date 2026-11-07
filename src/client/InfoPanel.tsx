@@ -3,7 +3,8 @@
  *
  * 文档占满整版面，元数据类内容收进这个按钮背后的浮层，每块都可折叠。
  * 浮层用系统色 `Canvas` / `CanvasText`，盖在白色 PDF 上深浅主题都能读。
- * 点击浮层外或按 Esc 关闭；点标注定位后也关闭，让文档重新成为焦点。
+ * 点浮层外或按 Esc 关闭（统一走 {@link useDismiss}，网页快照在 iframe 里的按下也算
+ * 「外」）；点标注定位后也关闭，让文档重新成为焦点。
  *
  * 各区块的开合全局记一份（见 {@link useInfoSections}）：用户按自己的习惯折过
  * 一次之后，换文献、关浮层、重启都保持原样，不用每篇重新折。
@@ -16,6 +17,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
+import { useDismiss } from './dismiss'
 import {
   setInfoSection,
   toggleInfoSection,
@@ -108,22 +110,9 @@ export function InfoPanel({
     setComposingNote(false)
   }, [detail.key, open])
 
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event: PointerEvent): void => {
-      if (rootRef.current?.contains(event.target as Node)) return
-      onClose()
-    }
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('pointerdown', onPointerDown, true)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open, onClose])
+  // 点浮层外 / 按 Esc 收起。根节点同时包着触发按钮，点它不会被判成「外面」，
+  // 交给 `onToggle` 自己开合。
+  useDismiss(open, rootRef, onClose)
 
   function toggle(id: InfoSectionId): void {
     toggleInfoSection(id)

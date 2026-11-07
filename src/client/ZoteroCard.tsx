@@ -461,6 +461,8 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
           ? t('write.remembered')
           : t('write.singleUse')
     const blocked = locked || authorizing || !enabled
+    // 拿到可复用的授权后，主按钮降级为「重新授权」：正常路径下用户不需要再点它。
+    const ready = hasKey && remembered
     return (
       <>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -468,10 +470,10 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
           <div style={WRITE_STATUS_STYLE}>
             <span>{badge}</span>
           </div>
-          {/* 按钮必须自己站出来说话：主按钮实心，重读按钮描边，都是 md 尺寸。 */}
+          {/* 按钮必须自己站出来说话：未授权时主按钮实心，已授权后降级为描边。 */}
           <div style={WRITE_ACTIONS_STYLE}>
             <Button
-              variant="primary"
+              variant={ready ? 'outline' : 'primary'}
               size="md"
               disabled={blocked}
               title={enabled ? t('write.authorizeHint') : t('write.needSave')}
@@ -479,7 +481,7 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
                 void runAuthorize()
               }}
             >
-              {authorizing ? t('write.pending') : t('write.authorize')}
+              {authorizing ? t('write.pending') : ready ? t('write.reauthorize') : t('write.authorize')}
             </Button>
             <Button
               variant="outline"
@@ -503,8 +505,10 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
           </div>
         )}
         {authNotice !== null && <div style={WRITE_NOTE_STYLE}>{authNotice}</div>}
-        {/* 已经稳定授权后就不必再念叨「始终允许」了。 */}
-        {!(hasKey && remembered) && <div style={WRITE_NOTE_STYLE}>{t('write.alwaysAllow')}</div>}
+        {/* 已经拿到长期授权就不再念叨「始终允许」，改成说清它存在哪、怎么撤销。 */}
+        <div style={WRITE_NOTE_STYLE}>
+          {hasKey && remembered ? t('write.persistedNote') : t('write.alwaysAllow')}
+        </div>
       </>
     )
   }

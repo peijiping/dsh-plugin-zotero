@@ -13,6 +13,15 @@ const FALLBACK_TINT = 'rgba(255,212,0,0.32)'
 /** 标注没填颜色时的展示色（色块 / 下划线）。 */
 export const DEFAULT_ANNOTATION_COLOR = '#aaaaaa'
 
+/**
+ * 本插件能改写的标注类型。
+ *
+ * 与 Host 侧 `zotero/annotation-writes.ts` 的口径一致：截图、墨迹、文本框的位置结构
+ * 不同，改坏了在 Zotero 里也难复原，一律只读。列表、PDF 卡片、快照卡片都从这里取，
+ * 新增可写类型只改这一处（Host 那边仍要同步）。
+ */
+export const EDITABLE_TYPES: ReadonlySet<string> = new Set(['highlight', 'underline'])
+
 /** `'all'` 为哨兵，其余是 Zotero 的标注类型（highlight / underline / note / text / image / ink）。 */
 export type AnnotationTypeFilter = 'all' | string
 
@@ -82,6 +91,16 @@ function spansOf(annotations: ZoteroAnnotation[]): Span[] {
     })
   }
   return spans
+}
+
+/**
+ * 这条标注能不能在正文里定位。
+ *
+ * 三种锚点各管一类文档：PDF 的 `position`、网页快照的 `webPosition`、
+ * 纯文本全文的 `range`。任一存在即可，列表据此决定「定位」按钮是否可用。
+ */
+export function isLocatable(annotation: ZoteroAnnotation): boolean {
+  return annotation.position !== null || annotation.webPosition !== null || annotation.range !== null
 }
 
 /** 切出渲染片段；相邻的同样式片段会合并，减少 DOM 节点。 */

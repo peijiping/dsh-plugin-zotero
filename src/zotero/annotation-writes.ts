@@ -4,8 +4,11 @@
  * 四条规矩各有出处：
  *
  * 0. **新建的内容由客户端算，Host 只校验**。位置（`annotationPosition`）与排序键
- *    （`annotationSortIndex`）离不开 pdf.js 的 viewport 与文本层，Host 拿不到；这里
- *    逐字段核对形状，越界一律抛错而不是替他补一个「看起来对」的值。
+ *    （`annotationSortIndex`）离不开真实排版：PDF 要 pdf.js 的 viewport 与文本层，
+ *    网页快照要快照 iframe 里的 DOM。Host 拿不到，于是这里逐字段核对形状，
+ *    越界一律抛错而不是替它补一个「看起来对」的值。
+ *    PDF 的位置是 `{pageIndex, rects}`，网页快照是 `CssSelector` + `TextPositionSelector`，
+ *    两者互斥，按附件类型分流（见 {@link hostKind}）。
  * 1. **只发 PATCH，且只发改动的那几个字段**。PUT 会把 `data` 里未提交的既有字段静默
  *    移除；实测（本机 Zotero 10.0.7）单字段 PATCH 不会冲掉 `annotationText` /
  *    `annotationPosition` / `annotationSortIndex`，所以按字段提交既安全又省流量。
@@ -199,8 +202,17 @@ const TEXT_MAX_CHARS = 20_000
 const RECT_MAX_COUNT = 512
 const COORD_MAX = 1_000_000
 
-/** `00001|000220|00179` —— Zotero 阅读器生成的形态，见 `annotationFactory.ts`。 */
-const SORT_INDEX_PATTERN = /^\d{5}\|\d{6}\|\d{5}$/u
+/** `00001|000220|00179` —— Zotero 阅读器给 PDF 生成的形态，见 `annotationFactory.ts`。 */
+const PDF_SORT_INDEX_PATTERN = /^\d{5}\|\d{6}\|\d{5}$/u
+
+/** `0000549` —— 网页快照的排序键是 7 位纯数字（页码/矩形那套不适用）。 */
+const WEB_SORT_INDEX_PATTERN = /^\d{7}$/u
+
+/** CSS 选择器长度上限：正常路径几十个字符，几千个说明调用方在乱塞。 */
+const SELECTOR_MAX_CHARS = 1000
+
+/** 文本偏移上限：快照全文正常几十万字符，五百万足够且能挡住畸形数据。 */
+const OFFSET_MAX = 5_000_000
 
 /** Zotero 侧标注字段的名前缀，出错文案里直接用它。 */
 const DRAFT_FIELDS = new Set([
@@ -211,6 +223,7 @@ const DRAFT_FIELDS = new Set([
   'annotationSortIndex',
   'annotationComment',
   'position',
+  'webPosition',
 ])
 
 function readString(value: unknown, name: string): string {
@@ -256,11 +269,65 @@ function toPositionField(value: unknown): string {
 }
 
 /**
+ * 校验网页快照的位置并序列化成 Zotero 的 `annotationPosition`。
+ *
+ * 形态照抄 Zotero 自己的写法（实测某个真实网页标注）：
+ * `{type:'CssSelector', value, refinedBy:{type:'TextPositionSelector', start, end}}`。
+ * 这里只核对形状与量级——选择器指向的对不对，只有客户端手里的 DOM 知道。
+ */
+function toWebPositionField(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ZoteroError('bad_request', '网页快照标注的「webPosition」必须是 `{ selector, start, end }` 对象。')
+  }
+  const record = value as Record<string, unknown>
+  const selector = record.selector
+  if (typeof selector !== 'string' || selector.trim() === '') {
+    throw new ZoteroError('bad_request', '网页快照标注的「webPosition.selector」不能为空。')
+  }
+  if (selector.length > SELECTOR_MAX_CHARS) {
+    throw new ZoteroError('bad_request', `选择器有 ${selector.length} 个字符，超出 ${SELECTOR_MAX_CHARS} 上限。`)
+  }
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(selector)) {
+    throw new ZoteroError('bad_request', '选择器里不能有换行或控制字符。')
+  }
+  const { start, end } = record
+  if (typeof start !== 'number' || !Number.isInteger(start) || start < 0 || start > OFFSET_MAX) {
+    throw new ZoteroError('bad_request', '「webPosition.start」必须是从 0 开始的整数偏移。')
+  }
+  if (typeof end !== 'number' || !Number.isInteger(end) || end <= start || end > OFFSET_MAX) {
+    throw new ZoteroError('bad_request', '「webPosition.end」必须大于 start。')
+  }
+  return JSON.stringify({
+    type: 'CssSelector',
+    value: selector.trim(),
+    refinedBy: { type: 'TextPositionSelector', start, end },
+  })
+}
+
+/**
+ * 标注能挂在哪种附件上。
+ *
+ * PDF 用 `{pageIndex, rects}` 的坐标位置，网页快照用 `CssSelector` +
+ * `TextPositionSelector`，两套形状互斥；其余附件类型（Word、EPUB…）Zotero 那边
+ * 也没有可重建的位置，本插件不做。
+ */
+type MarkHost = 'pdf' | 'web'
+
+function hostKind(host: { contentType: string; filename: string }): MarkHost | null {
+  const mime = host.contentType.split(';')[0].trim().toLowerCase()
+  if (mime === 'text/html' || mime === 'application/xhtml+xml' || /\.x?html?$/iu.test(host.filename)) {
+    return 'web'
+  }
+  if (mime === 'application/pdf' || /\.pdf$/iu.test(host.filename)) return 'pdf'
+  return null
+}
+
+/**
  * 一条待写标注 → Zotero 的 annotation 条目。
  *
  * 越界与畸形字段一律抛错：这一份数据会原样进用户的库，静默修正是把脏东西写进去。
  */
-function toAnnotationObject(parentItem: string, value: unknown): Record<string, unknown> {
+function toAnnotationObject(parentItem: string, value: unknown, kind: MarkHost): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new ZoteroError('bad_request', '每条标注都必须是对象。')
   }
@@ -289,9 +356,12 @@ function toAnnotationObject(parentItem: string, value: unknown): Record<string, 
     throw new ZoteroError('bad_request', `「${color.trim()}」不是 Zotero 的标注颜色，请用色板里的值。`)
   }
 
-  const sortIndex = readString(record.annotationSortIndex, 'annotationSortIndex')
-  if (!SORT_INDEX_PATTERN.test(sortIndex.trim())) {
-    throw new ZoteroError('bad_request', '排序键形状不对，应为 `00001|000220|00179` 这样的三段。')
+  const sortIndex = readString(record.annotationSortIndex, 'annotationSortIndex').trim()
+  if (kind === 'pdf' && !PDF_SORT_INDEX_PATTERN.test(sortIndex)) {
+    throw new ZoteroError('bad_request', '排序键形状不对，PDF 应为 `00001|000220|00179` 这样的三段。')
+  }
+  if (kind === 'web' && !WEB_SORT_INDEX_PATTERN.test(sortIndex)) {
+    throw new ZoteroError('bad_request', '排序键形状不对，网页快照应为 7 位数字，如 `0000549`。')
   }
 
   const label = readString(record.annotationPageLabel, 'annotationPageLabel').trim()
@@ -308,6 +378,16 @@ function toAnnotationObject(parentItem: string, value: unknown): Record<string, 
     throw new ZoteroError('bad_request', `评论约 ${Math.round(bytes / 1024)} KB，超出 ${COMMENT_MAX_BYTES / 1024} KB 上限。`)
   }
 
+  // 位置与附件类型必须对得上：给 PDF 附件塞选择器、或给快照塞矩形，落库后是坏数据。
+  const hasPdf = record.position !== undefined
+  const hasWeb = record.webPosition !== undefined
+  if (kind === 'pdf' && (!hasPdf || hasWeb)) {
+    throw new ZoteroError('bad_request', 'PDF 附件只接受「position」（`{ pageIndex, rects }`）。')
+  }
+  if (kind === 'web' && (!hasWeb || hasPdf)) {
+    throw new ZoteroError('bad_request', '网页快照只接受「webPosition」（`{ selector, start, end }`）。')
+  }
+
   return {
     itemType: 'annotation',
     parentItem,
@@ -316,13 +396,13 @@ function toAnnotationObject(parentItem: string, value: unknown): Record<string, 
     annotationColor: color.trim().toLowerCase(),
     annotationComment: comment,
     annotationPageLabel: label,
-    annotationSortIndex: sortIndex.trim(),
-    annotationPosition: toPositionField(record.position),
+    annotationSortIndex: sortIndex,
+    annotationPosition: kind === 'pdf' ? toPositionField(record.position) : toWebPositionField(record.webPosition),
   }
 }
 
 /**
- * 在某个附件下新建标注（一次选区跨页时会有多条）。
+ * 在某个附件下新建标注（PDF 选区跨页时会有多条；网页快照一次一条）。
  *
  * 单个 `POST /items` 数组体提交全部：一次授权可能被首个写请求消耗掉，把用户的这一个
  * 动作压成一次往返，才不会建了一半就断。
@@ -340,18 +420,23 @@ export async function createAnnotations(input: {
   if (input.annotations.length > CREATE_MAX_COUNT) {
     throw new ZoteroError('bad_request', `一次最多新建 ${CREATE_MAX_COUNT} 条标注，现在给了 ${input.annotations.length} 条。`)
   }
-  const objects = input.annotations.map((item) => toAnnotationObject(input.parentItem, item))
-
+  // 先确认挂载点：位置形状取决于附件类型，校验必须知道是 PDF 还是网页快照。
   const host = await getAnnotationHost(input.parentItem)
   if (host.itemType !== 'attachment') {
     throw new ZoteroError(
       'bad_request',
-      `标注要挂在 PDF 附件上，「${host.key}」是${host.itemType === '' ? '不存在的条目' : `「${host.itemType}」`}。请选附件那一层，或直接在 PDF 阅读区里划选。`,
+      `标注要挂在附件上，「${host.key}」是${host.itemType === '' ? '不存在的条目' : `「${host.itemType}」`}。请选附件那一层，或直接在阅读区里划选。`,
     )
   }
-  if (!/pdf/iu.test(host.contentType)) {
-    throw new ZoteroError('bad_request', `附件「${host.title || host.key}」不是 PDF，Zotero 不给它建标注。`)
+  const kind = hostKind(host)
+  if (kind === null) {
+    throw new ZoteroError(
+      'bad_request',
+      `附件「${host.title || host.key}」是 ${host.contentType || '未知类型'}，本插件只给 PDF 与网页快照建标注。`,
+    )
   }
+
+  const objects = input.annotations.map((item) => toAnnotationObject(input.parentItem, item, kind))
 
   return createItems(objects)
 }

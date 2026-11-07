@@ -37,7 +37,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "build:client": "tsdown && node scripts/copy-pdf-assets.mjs",
+    "build:client": "tsdown && node scripts/copy-pdf-assets.mjs && node scripts/copy-snapshot-runtime.mjs",
     "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
     "prepack": "pnpm build && pnpm build:client"
   },

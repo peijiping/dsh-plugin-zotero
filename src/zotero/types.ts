@@ -92,6 +92,21 @@ export interface ZoteroNote {
 }
 
 /**
+ * 网页快照里的标注位置。
+ *
+ * Zotero 对 snapshot / EPUB 用 Web Annotation 的形态：
+ * `{ type: 'CssSelector', value: 'p:nth-child(6)',
+ *    refinedBy: { type: 'TextPositionSelector', start: 7, end: 69 } }`。
+ * `selector` 定位到元素，`start`/`end` 是该元素 `textContent` 内的 UTF-16 区间。
+ * 只在能被 iframe 里的 DOM 直接用时才有意义，所以和 PDF 的 `position` 分开存。
+ */
+export interface ZoteroWebPosition {
+  selector: string
+  start: number
+  end: number
+}
+
+/**
  * 条目下的一条 PDF 标注（子条目 `itemType: "annotation"`）。
  *
  * 覆盖 Zotero 的六种标注类型；高亮与划线可互转，展示时以当前类型为准。
@@ -118,6 +133,14 @@ export interface ZoteroAnnotation {
    * `[x1, y1, x2, y2]`。旧版 Zotero 未提供或墨迹标注时为 `null`。
    */
   position: { pageIndex: number; rects: [number, number, number, number][] } | null
+  /**
+   * 网页快照里的位置。PDF / EPUB 标注为 `null`；两个字段互斥，恰好一个非空。
+   *
+   * 单独开一个字段而不是把 `position` 改成判别联合：后者要同时改 PdfViewer、
+   * AnnotationOverlay、AnnotationList、写入校验四处，而 web 标注的 `position`
+   * 恒为 `null`，现有可选链天然跳过它。
+   */
+  webPosition: ZoteroWebPosition | null
   /** 在 `fulltext.content` 中的 UTF-16 区间；`null` 表示未能在全文里定位。 */
   range: { start: number; end: number } | null
   /** Zotero 条目版本：改色 / 改评论 / 删除要原样带回做并发前置条件。 */
@@ -126,6 +149,7 @@ export interface ZoteroAnnotation {
    * 原始 `annotationSortIndex`（`页码|字符偏移|顶端距` 零填充串）。
    *
    * 列表排序与「同页接续新建」都要用它；Zotero 老数据里可能为空串。
+   * 网页标注的形态是 7 位纯数字（`0000549`），与 PDF 不同但同样可按字典序比较。
    */
   sortIndex: string
   /** 标注自身的标签。写入时整表替换（PATCH 对数组是替换而非追加）。 */
@@ -153,10 +177,13 @@ export interface ZoteroAnnotationPatch {
 }
 
 /**
- * 面板从 PDF 选区算出来、等着写进 Zotero 的一条标注。
+ * 面板从选区算出来、等着写进 Zotero 的一条标注。
  *
  * 字段名刻意贴住 Zotero 的 `annotation*`：这条是「要原样落库的东西」，不是展示契约。
  * 位置与排序键由客户端算（只有它手里有 viewport 和文本层），Host 只做校验和序列化。
+ *
+ * `position` 与 `webPosition` **恰好给一个**：PDF 走前者，网页快照走后者，
+ * 由 Host 按附件类型校验后翻译成 Zotero 的 `annotationPosition`。
  */
 export interface ZoteroAnnotationDraft {
   /** 仅 `highlight` / `underline`。 */
@@ -167,10 +194,12 @@ export interface ZoteroAnnotationDraft {
   annotationColor: string
   /** 印刷页码标签；算不出来时为空串（Zotero 自己会留空）。 */
   annotationPageLabel: string
-  /** `00001|000220|00179` 形态的排序键，见 `annotationFactory.ts`。 */
+  /** `00001|000220|00179` 形态（PDF）或 `0000549`（网页快照）的排序键。 */
   annotationSortIndex: string
   /** PDF 用户空间的位置；`rects` 数值已按 Zotero 的精度截到 3 位小数。 */
-  position: { pageIndex: number; rects: [number, number, number, number][] }
+  position?: { pageIndex: number; rects: [number, number, number, number][] }
+  /** 网页快照的位置；与 `position` 互斥。 */
+  webPosition?: ZoteroWebPosition
   /** 可选评论（Zotero 的字面量标签文本）。 */
   annotationComment?: string
 }
@@ -297,14 +326,19 @@ export interface ZoteroCollectionBib {
 /**
  * 写通道状态（供配置卡渲染状态徽标 + 授权按钮）。
  *
- * key 只存在 Host 进程内存里，因此这里只报「有没有」，绝不外泄 key 本体。
+ * key 只存在 Host 进程内存与本机 `0600` 文件里，因此这里只报「有没有」，绝不外泄
+ * key 本体，也不把 key 的存储路径回传给客户端。
  */
 export interface ZoteroWriteStatus {
   /** 写入总开关（`writeEnabled`）当前是否打开。 */
   enabled: boolean
-  /** 内存里是否持有可用的本地 API key。 */
+  /** 是否持有可用的本地 API key（内存或本机已保存的授权）。 */
   hasKey: boolean
-  /** 当前 key 是否来自「始终允许」（可复用）；`false` 表示一次性，首个写请求即消耗。 */
+  /**
+   * 当前 key 是否可复用；`false` 表示一次性，首个写请求即消耗。
+   *
+   * 从本机保存的授权恢复出来的一定是 `true`（只保存「始终允许」的 key）。
+   */
   remembered: boolean
 }
 

@@ -24,7 +24,13 @@ import type { ZoteroAnnotation, ZoteroAnnotationPatch } from '../zotero/types'
 import { ANNOTATION_COLORS } from '../zotero/palette'
 import { deleteAnnotation, patchAnnotation } from './api'
 import { commentForEditor, hasComment, parseComment } from './annotationComment'
-import { annotationColor, filterAnnotations, type AnnotationFilter } from './annotationRuns'
+import {
+  annotationColor,
+  EDITABLE_TYPES,
+  filterAnnotations,
+  isLocatable,
+  type AnnotationFilter,
+} from './annotationRuns'
 import { tpl, type Translate } from './locales'
 import { showToast } from './paneStore'
 import { ACCENT } from './styles'
@@ -49,9 +55,6 @@ interface Props {
 
 /** 类型 chip 的固定顺序；未出现的类型不渲染。 */
 const TYPE_ORDER = ['highlight', 'underline', 'note', 'text', 'image', 'ink'] as const
-
-/** 本插件可改写的类型：口径与 Host 一致，不一致时以 Host 的报错为准。 */
-const EDITABLE_TYPES = new Set(['highlight', 'underline'])
 
 /** 可互转的类型，编辑区里按这个顺序摆 chip。 */
 const TOGGLE_TYPES = ['highlight', 'underline'] as const
@@ -226,9 +229,7 @@ export function AnnotationList({
   // 切换类型后原来的颜色可能不存在了，直接视为「全部色」。
   const activeColor = filter.color !== null && colors.some((chip) => chip.hex === filter.color) ? filter.color : null
   const visible = filterAnnotations(annotations, { type: filter.type, color: activeColor })
-  const anchored = annotations.filter(
-    (annotation) => annotation.position !== null || annotation.range !== null,
-  ).length
+  const anchored = annotations.filter(isLocatable).length
 
   function unanchoredTitle(): string {
     if (!hasFulltext) return t('detail.annotationNotAnchoredNoFulltext')
@@ -502,7 +503,7 @@ export function AnnotationList({
       ) : (
         visible.map((annotation) => {
           const key = annotation.key
-          const located = annotation.position !== null || annotation.range !== null
+          const located = isLocatable(annotation)
           const text = annotation.text.trim()
           const canInsert = text !== '' || hasComment(annotation.comment)
           return (

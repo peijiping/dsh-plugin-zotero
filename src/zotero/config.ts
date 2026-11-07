@@ -61,6 +61,22 @@ export const STATIC_ROUTE_MATCH = '/dsh-zotero/static'
 export const STATIC_ROUTE_PREFIX = `${STATIC_ROUTE_MATCH}/`
 
 /**
+ * 网页快照路由，形如 `/dsh-zotero/snapshot/<附件key>/[子路径]`。
+ *
+ * 用**目录形** URL 而不是 `?key=`：iframe 的 `src` 指向带尾斜杠的目录，
+ * 快照里的相对资源就会自然落到 `/snapshot/<key>/foo.png`，不需要改写 HTML。
+ * 与 `/api/file` 分开是因为 HTML 要注入脚本、要一套自己的 CSP，且注入后字节数
+ * 变了，和 PDF 的 Range 语义没法共存。
+ */
+export const SNAPSHOT_ROUTE_MATCH = '/dsh-zotero/snapshot'
+
+/** 快照路由的剥离基准（带尾斜杠）。 */
+export const SNAPSHOT_ROUTE_PREFIX = `${SNAPSHOT_ROUTE_MATCH}/`
+
+/** 超过这个大小的快照不做注入（直接流式送出，高亮不可用）。 */
+export const SNAPSHOT_INJECT_MAX_BYTES = 32 * 1024 * 1024
+
+/**
  * 写端点要求的自定义请求头。
  *
  * 回环 + `sec-fetch-site` 只挡住「浏览器直接访问本机端口」，挡不住被诱发的表单

@@ -387,6 +387,8 @@ export interface AnnotationHostInfo {
   itemType: string
   /** 附件的 MIME；非附件为空串。 */
   contentType: string
+  /** 磁盘文件名；MIME 不可靠时用它判扩展名（网页快照常给 `text/html`）。 */
+  filename: string
   /** 文件名或条目标题，只用于错误文案。 */
   title: string
 }
@@ -403,6 +405,7 @@ export async function getAnnotationHost(key: string): Promise<AnnotationHostInfo
     key: raw.key,
     itemType: raw.data?.itemType ?? '',
     contentType: raw.data?.contentType ?? '',
+    filename: raw.data?.filename ?? '',
     title: raw.data?.title ?? '',
   }
 }
@@ -927,6 +930,40 @@ function toPosition(value: unknown): RawAnnotation['position'] {
   return { pageIndex, rects: valid }
 }
 
+/**
+ * 解析网页快照的 `annotationPosition`。
+ *
+ * Zotero 对 snapshot / EPUB 写的是 Web Annotation 形态（`CssSelector` +
+ * `refinedBy: TextPositionSelector`），没有 `pageIndex`/`rects`，所以
+ * {@link toPosition} 对它返回 null —— 两个字段各解析各的。
+ */
+function toWebPosition(value: unknown): RawAnnotation['webPosition'] {
+  if (typeof value !== 'string' || value === '') return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const record = parsed as { type?: unknown; value?: unknown; refinedBy?: unknown }
+  if (record.type !== 'CssSelector') return null
+  if (typeof record.value !== 'string' || record.value.trim() === '') return null
+  // Zotero 各版本里 refinedBy 有时是对象、有时是数组，两种都收。
+  const candidates = Array.isArray(record.refinedBy) ? record.refinedBy : [record.refinedBy]
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'object' || candidate === null) continue
+    const selector = candidate as { type?: unknown; start?: unknown; end?: unknown }
+    if (selector.type !== 'TextPositionSelector') continue
+    const start = selector.start
+    const end = selector.end
+    if (typeof start !== 'number' || !Number.isInteger(start) || start < 0) continue
+    if (typeof end !== 'number' || !Number.isInteger(end) || end <= start) continue
+    return { selector: record.value.trim(), start, end }
+  }
+  return null
+}
+
 /** 原始标注 → 展示用标注；未知类型返回 null。 */
 function toAnnotation(raw: RawItem): RawAnnotation | null {
   const data = raw.data ?? {}
@@ -942,6 +979,7 @@ function toAnnotation(raw: RawItem): RawAnnotation | null {
     pageLabel: data.annotationPageLabel ?? '',
     sortIndex: data.annotationSortIndex ?? '',
     position: toPosition(data.annotationPosition),
+    webPosition: toWebPosition(data.annotationPosition),
     version: versionOf(raw),
     tags: (data.tags ?? [])
       .filter((tag) => typeof tag.tag === 'string' && tag.tag !== '')
@@ -1120,6 +1158,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     color: annotation.color,
     pageLabel: annotation.pageLabel,
     position: annotation.position,
+    webPosition: annotation.webPosition,
     range: annotation.range,
     version: annotation.version,
     sortIndex: annotation.sortIndex,

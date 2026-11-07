@@ -177,12 +177,13 @@ async function handleMcpTools(res: ServerResponse, deps: HandlerDeps): Promise<v
 }
 
 /**
- * 写通道状态（开关 + 内存里有没有 key）。
+ * 写通道状态（开关 + 是否持有可复用的 key）。
  *
- * 只报状态、不碰 Zotero：配置卡每次展开都会读一次，不该为此发请求。
+ * 只报状态、不碰 Zotero：配置卡每次展开都会读一次，不该为此发请求。key 的读取
+ * 全在本机（本插件副本 / Zotero 密钥库），也不涉及网络。
  */
 async function handleAuthStatus(res: ServerResponse): Promise<void> {
-  const data: ZoteroWriteStatus = writeChannelStatus()
+  const data: ZoteroWriteStatus = await writeChannelStatus()
   ok(res, data)
 }
 

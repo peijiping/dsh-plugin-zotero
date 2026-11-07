@@ -19,7 +19,7 @@ export interface DocumentSource {
   /** 小写扩展名（不含点）；MIME 缺失时用于兜底匹配。 */
   ext: string
   title: string
-  /** 同源文件地址：`/dsh-zotero/api/file?key=...`。 */
+  /** 该渲染器可用的同源地址：PDF 是 `/dsh-zotero/api/file?key=`，快照是目录形快照路由。 */
   url: string
 }
 
@@ -78,6 +78,13 @@ export interface DocumentRenderer {
 export function isPdf(source: { contentType: string; ext: string }): boolean {
   return source.contentType.split(';')[0].trim().toLowerCase() === 'application/pdf'
     || source.ext === 'pdf'
+}
+
+/** 附件是否是网页快照（HTML），可交给 iframe 渲染器。 */
+export function isHtml(source: { contentType: string; ext: string }): boolean {
+  const mime = source.contentType.split(';')[0].trim().toLowerCase()
+  return mime === 'text/html' || mime === 'application/xhtml+xml'
+    || source.ext === 'html' || source.ext === 'htm' || source.ext === 'xhtml'
 }
 
 /** 从文件名取小写扩展名。 */

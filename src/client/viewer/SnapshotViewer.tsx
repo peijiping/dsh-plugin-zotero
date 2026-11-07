@@ -1,0 +1,431 @@
+/**
+ * 网页快照渲染器：用沙箱 iframe 还原 Zotero 保存的单文件 HTML 快照。
+ *
+ * 正文由 Host 侧注入的桥接脚本负责（见 `src/snapshot/runtime.js`）：本组件只
+ * 通过 postMessage 推标注、收选区、发定位指令。iframe 的 origin 是 opaque，
+ * 父页面碰不到它内部 DOM —— 所有交互都必须走消息。
+ *
+ * 标注的编辑入口与 PDF 一致：点网页里的高亮 → 桥接脚本上报 key 与矩形 →
+ * 这里弹出共用的 {@link AnnotationCard}，换色 / 改评论 / 换类型 / 删除都走同一套写入。
+ *
+ * `annotations` 用一份轻量签名做依赖：`onChanged()` 之后详情会整份重取，
+ * 数组引用每次都变；按签名判断可以避免无关重渲染也往 iframe 里推一遍。
+ */
+
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+
+import type { ZoteroAnnotation, ZoteroAnnotationDraft } from '../../zotero/types'
+import { EDITABLE_TYPES } from '../annotationRuns'
+import { createAnnotations } from '../api'
+import { notifyDocumentPress, useDismiss } from '../dismiss'
+import { tpl } from '../locales'
+import { showToast } from '../paneStore'
+import { AnnotationCard } from './AnnotationCard'
+import { SelectionBar, type MarkType } from './SelectionBar'
+import {
+  asSnapshotEvent,
+  commandEnvelope,
+  SNAPSHOT_BRIDGE_VERSION,
+  type SnapshotAnnotationItem,
+  type SnapshotCommand,
+  type SnapshotRect,
+  type SnapshotSelection,
+} from './snapshotProtocol'
+import type { DocumentRendererProps } from './types'
+
+/** 桥接脚本一般几百毫秒就绪；超过这个时间就认定它没跑起来。 */
+const BRIDGE_TIMEOUT_MS = 8000
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function itemsOf(annotations: ZoteroAnnotation[]): SnapshotAnnotationItem[] {
+  const items: SnapshotAnnotationItem[] = []
+  for (const annotation of annotations) {
+    if (annotation.webPosition === null) continue
+    items.push({
+      key: annotation.key,
+      type: annotation.type,
+      color: annotation.color,
+      text: annotation.text,
+      webPosition: annotation.webPosition,
+    })
+  }
+  return items
+}
+
+/** 只把 http(s) 交给系统：快照里的 `javascript:` / `file:` 一律丢弃。 */
+function openExternal(href: string): void {
+  let url: URL
+  try {
+    url = new URL(href, window.location.href)
+  } catch {
+    return
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+  window.open(url.href, '_blank', 'noopener,noreferrer')
+}
+
+export function SnapshotViewer({
+  t,
+  detail,
+  source,
+  annotations,
+  viewerRef,
+  onReady,
+  onInsertExcerpt,
+  onInsertAnnotation,
+  onOpenInZotero,
+  onChanged,
+}: DocumentRendererProps): ReactElement {
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const frameRef = useRef<HTMLIFrameElement | null>(null)
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const readyRef = useRef(false)
+  const pendingLocate = useRef<string | null>(null)
+  const selectionRef = useRef<SnapshotSelection | null>(null)
+  const annotationsRef = useRef(annotations)
+  annotationsRef.current = annotations
+
+  const [reloadKey, setReloadKey] = useState(0)
+  const [bridgeReady, setBridgeReady] = useState(false)
+  const [bridgeMissing, setBridgeMissing] = useState(false)
+  const [missed, setMissed] = useState(0)
+  const [selection, setSelection] = useState<SnapshotSelection | null>(null)
+  const [marking, setMarking] = useState(false)
+  /**
+   * 打开着的编辑卡片：只记标注 key 与点击位置，内容每次从 `annotations` 里现取。
+   *
+   * 存快照会有两个坏味道：写成功后 `onChanged` 重取的新版本号进不了卡片，下一次保存
+   * 必撞 412；Zotero 那边改了评论，卡片还显示旧的。
+   */
+  const [card, setCard] = useState<{ key: string; x: number; y: number } | null>(null)
+  /** iframe 里跑的是旧桥接脚本：没有点击矩形，卡片只能居中，界面上要说清原因。 */
+  const [staleBridge, setStaleBridge] = useState(false)
+
+  const post = useCallback((command: SnapshotCommand): void => {
+    const frame = frameRef.current
+    if (frame === null) return
+    try {
+      frame.contentWindow?.postMessage(commandEnvelope(command), '*')
+    } catch {
+      /* iframe 还在导航中：消息会丢，但下一次 applied/ready 会重推 */
+    }
+  }, [])
+
+  const pushAnnotations = useCallback((): void => {
+    post({ type: 'annotations', items: itemsOf(annotationsRef.current) })
+  }, [post])
+
+  /** 只有真正影响网页上高亮的字段变化才重推。 */
+  const signature = useMemo(
+    () => itemsOf(annotations)
+      .map((item) => `${item.key}|${item.type}|${item.color}|${item.webPosition.selector}|${item.webPosition.start}|${item.webPosition.end}`)
+      .join(';'),
+    [annotations],
+  )
+
+  useEffect(() => {
+    if (!readyRef.current) return
+    post({ type: 'annotations', items: itemsOf(annotationsRef.current) })
+  }, [signature, post])
+
+  const flushLocate = useCallback((): void => {
+    const key = pendingLocate.current
+    if (key === null || !readyRef.current) return
+    pendingLocate.current = null
+    post({ type: 'locate', key })
+  }, [post])
+
+  /**
+   * 桥接脚本报了点击：把 iframe 内的矩形换算到本组件坐标系，卡片就摆在高亮下方。
+   *
+   * 旧脚本只发 key 不发矩形（Host 缓存过脚本、没重启 DSH 时就是这样）。这时不能
+   * 退回左上角——那看起来像「卡片坏了」——改为居中显示，同时把 `staleBridge`
+   * 立起来提示重启。
+   */
+  const openCard = useCallback((key: string, rect: SnapshotRect | null): void => {
+    const frame = frameRef.current
+    const root = rootRef.current
+    if (frame === null || root === null) return
+    const frameRect = frame.getBoundingClientRect()
+    const rootRect = root.getBoundingClientRect()
+    if (rect === null) {
+      setStaleBridge(true)
+      setCard({ key, x: rootRect.width / 2, y: rootRect.height * 0.32 })
+      return
+    }
+    setCard({
+      key,
+      x: frameRect.left - rootRect.left + rect.left + rect.width / 2,
+      y: frameRect.top - rootRect.top + rect.top + rect.height,
+    })
+  }, [])
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent): void {
+      const frame = frameRef.current
+      // opaque origin：只能比对来源窗口，不能看 event.origin（值是 "null"）。
+      if (frame === null || event.source !== frame.contentWindow) return
+      const data = asSnapshotEvent(event.data)
+      if (data === null) return
+
+      if (data.type === 'ready') {
+        readyRef.current = true
+        setBridgeReady(true)
+        setStaleBridge((data.bridge ?? 1) < SNAPSHOT_BRIDGE_VERSION)
+        setBridgeMissing(false)
+        pushAnnotations()
+        flushLocate()
+        onReady()
+        return
+      }
+      if (data.type === 'applied') {
+        // `error` 非空表示整轮应用失败（桥接脚本已兜住异常并上报），
+        // 这时按「全部未定位」提示，比静默停在加载态好。
+        setMissed(typeof data.error === 'string' ? data.total : Math.max(0, data.total - data.resolved))
+        // 标注已落到 DOM 上，这时候的 locate 才可能命中。
+        flushLocate()
+        return
+      }
+      if (data.type === 'selection') {
+        selectionRef.current = data.selection
+        setSelection(data.selection)
+        return
+      }
+      if (data.type === 'pointerdown') {
+        // iframe 里的按下不会进父页面的 `document`：转报一次，打开着的浮层
+        // （信息菜单、编辑卡片）自己收起来，见 `dismiss.ts`。
+        notifyDocumentPress()
+        return
+      }
+      if (data.type === 'annotation-click') {
+        openCard(data.key, data.rect ?? null)
+        return
+      }
+      if (data.type === 'open-external') {
+        openExternal(data.href)
+      }
+    }
+
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [flushLocate, onReady, pushAnnotations, openCard])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (readyRef.current) return
+      setBridgeMissing(true)
+    }, BRIDGE_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [reloadKey])
+
+  // 卡片开着时点别处 / 按 Esc 就收起，与 PDF 卡片同一套（见 `dismiss.ts`）。
+  useDismiss(card !== null, cardRef, () => setCard(null))
+
+  const locate = useCallback((annotationKey: string): boolean => {
+    const annotation = annotationsRef.current.find((item) => item.key === annotationKey)
+    if (annotation === undefined || annotation.webPosition === null) return false
+    pendingLocate.current = annotationKey
+    if (!readyRef.current) return false
+    pendingLocate.current = null
+    post({ type: 'locate', key: annotationKey })
+    return true
+  }, [post])
+
+  useImperativeHandle(viewerRef, () => ({
+    locate,
+    currentPage: () => 1,
+    zoomIn: () => undefined,
+    zoomOut: () => undefined,
+    setZoom: () => undefined,
+    fitToWidth: () => undefined,
+  }), [locate, viewerRef])
+
+  function handleFrameLoad(): void {
+    if (!readyRef.current) setBridgeMissing(true)
+  }
+
+  function reload(): void {
+    readyRef.current = false
+    pendingLocate.current = null
+    selectionRef.current = null
+    setSelection(null)
+    setCard(null)
+    setStaleBridge(false)
+    setBridgeReady(false)
+    setBridgeMissing(false)
+    setMissed(0)
+    setReloadKey((key) => key + 1)
+  }
+
+  async function createMark(type: MarkType, color: string, comment: string): Promise<void> {
+    const picked = selectionRef.current
+    if (picked === null || source === null) {
+      showToast(t('annotation.markUnavailable'))
+      return
+    }
+    setMarking(true)
+    try {
+      const draft: ZoteroAnnotationDraft = {
+        annotationType: type,
+        annotationText: picked.text,
+        annotationColor: color,
+        // 网页快照没有页码概念，Zotero 自己也留空。
+        annotationPageLabel: '',
+        annotationSortIndex: picked.sortIndex,
+        webPosition: { selector: picked.selector, start: picked.start, end: picked.end },
+      }
+      if (comment !== '') draft.annotationComment = comment
+      await createAnnotations({ parentItem: source.attachmentKey, annotations: [draft] })
+      showToast(t('annotation.created'))
+      post({ type: 'clear-selection' })
+      selectionRef.current = null
+      setSelection(null)
+      onChanged()
+    } catch (error) {
+      showToast(tpl(t('annotation.writeFailed'), { message: errorText(error) }))
+    } finally {
+      setMarking(false)
+    }
+  }
+
+  const bar = selection === null ? null : barPosition(selection, frameRef.current, rootRef.current)
+
+  /** 卡片内容按 key 现取：写入成功后父级重取，颜色 / 类型 / 评论都从库里回填。 */
+  const cardAnnotation = card === null
+    ? null
+    : annotations.find((item) => item.key === card.key) ?? null
+  const rootWidth = rootRef.current?.clientWidth ?? 320
+  const rootHeight = rootRef.current?.clientHeight ?? 400
+  const cardLeft = card === null ? 0 : Math.max(8, Math.min(card.x - 130, rootWidth - 268))
+  // 点在下半屏就往上摆，免得卡片顶到容器底部被裁掉。
+  const cardAbove = card !== null && card.y > rootHeight * 0.55
+
+  return (
+    <div ref={rootRef} style={rootStyle}>
+      <iframe
+        key={reloadKey}
+        ref={frameRef}
+        src={source?.url ?? ''}
+        title={source?.title ?? detail.title}
+        // 不给 allow-same-origin：origin 变 opaque，脚本碰不到父页面与本机 API。
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        style={frameStyle}
+        onLoad={handleFrameLoad}
+      />
+      {bridgeMissing && (
+        <div style={noticeStyle}>
+          <span>{t('viewer.snapshotNoHighlight')}</span>
+          <button type="button" onClick={reload} style={retryStyle}>{t('viewer.snapshotRetry')}</button>
+        </div>
+      )}
+      {!bridgeMissing && missed > 0 && (
+        <div style={noticeStyle}>{tpl(t('viewer.highlightPartial'), { n: missed })}</div>
+      )}
+      {!bridgeMissing && staleBridge && (
+        <div style={{ ...noticeStyle, top: 8, bottom: 'auto' }}>{t('viewer.snapshotStaleBridge')}</div>
+      )}
+      {bar !== null && selection !== null && (
+        <SelectionBar
+          t={t}
+          text={selection.text}
+          x={bar.x}
+          y={bar.y}
+          onInsert={onInsertExcerpt}
+          onDismiss={() => {
+            selectionRef.current = null
+            setSelection(null)
+            post({ type: 'clear-selection' })
+          }}
+          annotate={detail.writeEnabled && source !== null
+            ? { busy: marking, onCreate: (type, color, comment) => void createMark(type, color, comment) }
+            : undefined}
+        />
+      )}
+      {card !== null && cardAnnotation !== null && (
+        <AnnotationCard
+          t={t}
+          annotation={cardAnnotation}
+          cardRef={cardRef}
+          style={cardAbove ? { left: cardLeft, bottom: rootHeight - card.y + 10 } : { left: cardLeft, top: card.y + 10 }}
+          canEdit={detail.writeEnabled && source !== null && EDITABLE_TYPES.has(cardAnnotation.type)}
+          onClose={() => setCard(null)}
+          onInsert={onInsertAnnotation}
+          // 快照没有页码：交给 ItemDetail 走「选中这个附件」那条路。
+          onOpenInZotero={() => onOpenInZotero(1)}
+          onChanged={onChanged}
+        />
+      )}
+    </div>
+  )
+}
+
+/** 子视口坐标 → 父容器坐标；iframe 铺满根节点，所以只差一个偏移。 */
+function barPosition(
+  selection: SnapshotSelection,
+  frame: HTMLIFrameElement | null,
+  root: HTMLDivElement | null,
+): { x: number; y: number } {
+  if (frame === null || root === null) return { x: 0, y: 0 }
+  const frameRect = frame.getBoundingClientRect()
+  const rootRect = root.getBoundingClientRect()
+  const offsetX = frameRect.left - rootRect.left
+  const offsetY = frameRect.top - rootRect.top
+  return {
+    x: offsetX + selection.rect.left + selection.rect.width / 2,
+    // 浮条自身是 translate(-50%,-130%)，顶部留出工具条高度，避免被裁掉。
+    y: Math.max(36, offsetY + selection.rect.top),
+  }
+}
+
+const rootStyle = {
+  position: 'relative',
+  height: '100%',
+  minHeight: 0,
+  overflow: 'hidden',
+} as const
+
+/**
+ * `background: #fff` 不是装饰：快照自身通常没写 body 背景，透明会让
+ * 深色主题的容器底色透上来，黑字压深底就看不清了。
+ */
+const frameStyle = {
+  width: '100%',
+  height: '100%',
+  border: 0,
+  display: 'block',
+  background: '#fff',
+} as const
+
+const noticeStyle: CSSProperties = {
+  position: 'absolute',
+  left: 8,
+  right: 8,
+  bottom: 8,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '5px 8px',
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: 'Canvas',
+  color: 'CanvasText',
+  fontSize: 11.5,
+  boxShadow: '0 3px 12px rgba(0,0,0,0.16)',
+  zIndex: 9,
+} as const
+
+const retryStyle = {
+  marginLeft: 'auto',
+  padding: '2px 8px',
+  fontSize: 11.5,
+  borderRadius: 5,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'transparent',
+  color: 'inherit',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+} as const
