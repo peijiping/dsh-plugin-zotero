@@ -16,7 +16,7 @@ import { callMcpTool, listMcpTools, type McpToolInfo } from '../zotero/client.js
 import { getSettings } from '../zotero/config.js'
 
 /** `ctx.tools` 的最小结构接口（真实类型由 dsh 装配，不在本包类型面内）。 */
-interface ToolsService {
+export interface ToolsService {
   register(definition: unknown): () => void
 }
 
@@ -29,7 +29,7 @@ function publicName(rawName: string): string {
 }
 
 /** 把 MCP 内容块数组压成模型可读文本（非文本块以 JSON 兜底）。 */
-function blocksToText(content: unknown): string {
+export function blocksToText(content: unknown): string {
   if (!Array.isArray(content)) return ''
   return content
     .map((block) => {
@@ -59,13 +59,19 @@ const DESTRUCTIVE_TOOL_RE = /^(delete|remove)_/i
  * MCP 手写 curl，就会每次写都让用户点一次「允许」。集成 MCP 的写工具在 Zotero
  * 进程内直接改库，完全不触发这套授权，因此这里明确把 MCP 标成首选通道。
  *
+ * 一个例外要说清：集成 MCP 没有标注与笔记的写工具（`get_annotations` 之类全是
+ * 只读），这两类改动本插件的 `zotero_*` 工具是唯一通道 —— 不提这一点，模型会在
+ * MCP 里翻半天找不到，然后转向 curl。
+ *
  * 注意措辞是「优先」而不是「禁止」：集成 MCP 某些场景确实可能失败，必须给模型
  * 留下降级空间，否则它会在报错后继续硬试或改用更糟的方式。
  */
 const WRITE_PREFIX =
-  '[首选写通道] 本工具在 Zotero 进程内执行，不会触发本地 API 授权弹窗。写 Zotero 优先用它。' +
+  '[首选写通道] 本工具在 Zotero 进程内执行，不会触发本地 API 授权弹窗。写条目/分类/标签/标识符优先用它。' +
   '仅当本工具不可用或调用失败时再考虑其他方式；不要直接用 shell/curl 访问 http://127.0.0.1:23119，' +
-  '那会每次都弹出「本地 API 授权」框让用户点允许。'
+  '那会每次都弹出「本地 API 授权」框让用户点允许。\n' +
+  '例外：标注（高亮/划线）与笔记的写操作本工具做不到，请用插件自带的 `zotero_update_annotation` / ' +
+  '`zotero_delete_annotation` / `zotero_create_note` / `zotero_update_note` / `zotero_delete_note`。'
 
 /** 针对「导入本地文件挂到条目下」这一高频场景，直接点明参数组合，省得模型去猜。 */
 const WRITE_ITEM_HINT =

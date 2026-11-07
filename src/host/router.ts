@@ -1,9 +1,14 @@
 /**
- * Host 侧只读 HTTP 路由：`GET /dsh-zotero/api/<action>`。
+ * Host 侧 HTTP 路由：`/dsh-zotero/api/<action>`。
  *
  * 统一信封 `{ok:true,data}` / `{ok:false,error:{code,message}}`（设计方案 §6）。
  * 信任栅栏：拒绝 `sec-fetch-site: cross-site`，且 Host 头必须是回环地址
- * （防御 DNS rebinding）。只读端点，无需会话 cookie。
+ * （防御 DNS rebinding）。读端点无需会话 cookie。
+ *
+ * 写端点（{@link WRITE_ACTIONS}）在此之上再加两道：必须带自定义头
+ * `x-dsh-zotero-write` 且 `content-type: application/json`。跨源要凑出这两样就成了
+ * 非简单请求，必须先过 CORS 预检 —— 而我们从不回应预检，于是任何网页都驱动不了
+ * 本插件的写入与删除。
  */
 
 import { spawn } from 'node:child_process'
@@ -12,18 +17,25 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import * as zotero from '../zotero/client.js'
 import { ZoteroError } from '../zotero/client.js'
-import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX } from '../zotero/config.js'
+import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
+import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
+import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
+import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type {
   ApiEnvelope,
   ApiError,
   ApiErrorCode,
+  ZoteroAuthResult,
   ZoteroCollectionBib,
   ZoteroHealth,
   ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItems,
+  ZoteroNoteRaw,
   ZoteroTags,
   ZoteroTree,
+  ZoteroWriteRef,
+  ZoteroWriteStatus,
 } from '../zotero/types.js'
 
 /** dsh `webServer` 的最小结构接口（类型不在已安装的 dsh 包里）。 */
@@ -59,6 +71,30 @@ export function isTrusted(req: IncomingMessage): boolean {
   return isLoopbackHost(req.headers.host)
 }
 
+/**
+ * 会改动 Zotero 数据、或会触发 Zotero 弹窗的 action。
+ *
+ * 光靠回环 + `sec-fetch-site` 挡不住「本机上别的网页/内嵌视图诱导的表单式请求」；
+ * 这批 action 额外要求 {@link hasWriteIntent}。
+ */
+const WRITE_ACTIONS = new Set([
+  'open-in-zotero',
+  'authorize',
+  'note-create',
+  'note-update',
+  'note-delete',
+  'annotation-patch',
+  'annotation-delete',
+  'annotation-create',
+])
+
+/** 自定义写头 + JSON content-type：让任何跨源写都变成需要预检的非简单请求。 */
+function hasWriteIntent(req: IncomingMessage): boolean {
+  if (req.headers[WRITE_HEADER] !== '1') return false
+  const type = req.headers['content-type']
+  return typeof type === 'string' && type.toLowerCase().includes('application/json')
+}
+
 function sendJson(res: ServerResponse, status: number, payload: ApiEnvelope<unknown>): void {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
@@ -78,10 +114,28 @@ function ok<T>(res: ServerResponse, data: T): void {
   sendJson(res, 200, { ok: true, data })
 }
 
+/**
+ * 错误码 → 对外 HTTP 状态。
+ *
+ * 保持与旧行为一致（读端点的 unreachable/disabled 仍是 502），写通道新增的码按
+ * Zotero 自己的语义透传，Client 据此区分「重新授权」与「刷新重试」。
+ */
+const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
+  zotero_unreachable: 502,
+  zotero_disabled: 502,
+  zotero_not_found: 404,
+  bad_request: 400,
+  internal_error: 500,
+  zotero_need_auth: 401,
+  zotero_denied: 403,
+  zotero_stale: 412,
+  zotero_conflict: 409,
+  zotero_rate_limited: 429,
+}
+
 function toApiError(error: unknown): { status: number; error: ApiError } {
   if (error instanceof ZoteroError) {
-    const status = error.code === 'zotero_not_found' ? 404 : error.code === 'bad_request' ? 400 : 502
-    return { status, error: { code: error.code, message: error.message } }
+    return { status: STATUS_BY_CODE[error.code] ?? 500, error: { code: error.code, message: error.message } }
   }
   const message = error instanceof Error ? error.message : String(error)
   return { status: 500, error: { code: 'internal_error', message } }
@@ -120,6 +174,27 @@ async function handleHealth(res: ServerResponse): Promise<void> {
 async function handleMcpTools(res: ServerResponse, deps: HandlerDeps): Promise<void> {
   const tools = deps.syncTools ? await deps.syncTools() : await zotero.listMcpTools()
   ok(res, { tools })
+}
+
+/**
+ * 写通道状态（开关 + 内存里有没有 key）。
+ *
+ * 只报状态、不碰 Zotero：配置卡每次展开都会读一次，不该为此发请求。
+ */
+async function handleAuthStatus(res: ServerResponse): Promise<void> {
+  const data: ZoteroWriteStatus = writeChannelStatus()
+  ok(res, data)
+}
+
+/**
+ * 申请 Zotero 写权限。
+ *
+ * 这条请求会挂住直到用户在 Zotero 弹窗里点按钮（分钟级），因此前端必须在等待期
+ * 间禁用按钮 —— 重复触发只会撞上 Zotero 的每分钟 5 次授权限流。
+ */
+async function handleAuthorize(res: ServerResponse): Promise<void> {
+  const data: ZoteroAuthResult = await authorize()
+  ok(res, data)
 }
 
 async function handleTree(res: ServerResponse): Promise<void> {
@@ -209,7 +284,7 @@ async function handleCollectionBib(res: ServerResponse, params: URLSearchParams)
 }
 
 /** Zotero key：8 位，字母表排除了易混淆的 0 / 1 / O。 */
-const KEY_PATTERN = /^[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}$/u
+export const KEY_PATTERN = /^[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}$/u
 
 /** 允许直接流式读取的附件类型；后续加 Word 等格式只需在此追加。 */
 const SERVABLE_TYPES = new Set(['application/pdf'])
@@ -327,19 +402,7 @@ async function readBody(req: IncomingMessage, limit: number): Promise<string> {
 }
 
 async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  let input: unknown
-  try {
-    input = JSON.parse(await readBody(req, 4096))
-  } catch (error) {
-    if (error instanceof ZoteroError) throw error
-    fail(res, 400, 'bad_request', '请求体不是合法 JSON')
-    return
-  }
-  const record = (typeof input === 'object' && input !== null ? input : {}) as {
-    key?: unknown
-    kind?: unknown
-    page?: unknown
-  }
+  const record = await readJsonBody(req, 4096)
   const key = typeof record.key === 'string' ? record.key : ''
   const kind = record.kind === 'item' || record.kind === 'attachment' ? record.kind : null
   if (!KEY_PATTERN.test(key) || kind === null) {
@@ -365,6 +428,163 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
   ok(res, { opened: true })
 }
 
+// ---- 笔记读写 ---------------------------------------------------------------
+
+/**
+ * 笔记写请求的 body 上限。
+ *
+ * 正文本身另有一条 512 KB 的语义上限（在 `notes.ts` 里查），这里给的是 JSON 信封
+ * 加转义后的宽松天花板——`"` 会变成 `\"`，按最坏情况留 4 倍余量。
+ */
+const NOTE_BODY_LIMIT = 2 * 1024 * 1024
+
+/** 读取并解析 JSON 请求体；非对象一律按空对象处理，交给字段校验报错。 */
+async function readJsonBody(req: IncomingMessage, limit: number): Promise<Record<string, unknown>> {
+  let input: unknown
+  try {
+    input = JSON.parse(await readBody(req, limit))
+  } catch (error) {
+    if (error instanceof ZoteroError) throw error
+    throw new ZoteroError('bad_request', '请求体不是合法 JSON')
+  }
+  return (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+}
+
+/** 取一个合法的 Zotero key。 */
+export function requireKey(record: Record<string, unknown>, field: string): string {
+  const value = record[field]
+  if (typeof value !== 'string' || !KEY_PATTERN.test(value)) {
+    throw new ZoteroError('bad_request', `${field} 不是合法的 Zotero key`)
+  }
+  return value
+}
+
+/**
+ * 取条目版本。
+ *
+ * 缺失就不发请求，而不是让 Zotero 收到一个 `NaN` / `0` 的前置条件：前者会被判 428，
+ * 后者判 412，两种都要用户在错误文案里猜「我什么都没填，怎么就版本不符」。
+ */
+function requireVersion(record: Record<string, unknown>): number {
+  const version = record.version
+  if (typeof version !== 'number' || !Number.isInteger(version) || version <= 0) {
+    throw new ZoteroError('bad_request', '缺少 version：写入必须带上该条目当前的版本号。')
+  }
+  return version
+}
+
+function requireNoteBody(record: Record<string, unknown>): string {
+  const note = record.note
+  if (typeof note !== 'string') throw new ZoteroError('bad_request', 'note 必须是字符串')
+  return note
+}
+
+/** 笔记原始正文：不经清洗、不截断，只给编辑器用。 */
+async function handleNoteRaw(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const raw = params.get('key')
+  if (raw === null || !KEY_PATTERN.test(raw)) {
+    fail(res, 400, 'bad_request', '笔记 key 格式不合法')
+    return
+  }
+  const data: ZoteroNoteRaw = await zotero.getNoteRaw(raw)
+  ok(res, data)
+}
+
+async function handleNoteCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, NOTE_BODY_LIMIT)
+  const data: ZoteroWriteRef = await createNote({
+    parentItem: requireKey(record, 'parentItem'),
+    note: requireNoteBody(record),
+  })
+  ok(res, data)
+}
+
+async function handleNoteUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, NOTE_BODY_LIMIT)
+  const key = requireKey(record, 'key')
+  await updateNote({ key, version: requireVersion(record), note: requireNoteBody(record) })
+  // PATCH 回 204，没有条目版本可报；面板随后整份重取详情。
+  ok(res, { key, version: null })
+}
+
+async function handleNoteDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, 4096)
+  const key = requireKey(record, 'key')
+  await deleteNote({ key, version: requireVersion(record) })
+  ok(res, { key, version: null })
+}
+
+// ---- 标注写 -----------------------------------------------------------------
+
+/**
+ * 标注写请求的 body 上限。
+ *
+ * 标注只有短字段（评论、页码、标签），64 KB 已经是「把整段论文粘进评论」的量级；
+ * 真正的语义上限（评论 16 KB）在 `annotation-writes.ts` 里查。
+ */
+const ANNOTATION_BODY_LIMIT = 64 * 1024
+
+async function handleAnnotationPatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, ANNOTATION_BODY_LIMIT)
+  const key = requireKey(record, 'key')
+  // `patch` 的字段白名单与取值规则都在 annotation-writes 里查：面板和模型工具共用同一套。
+  await patchAnnotation({ key, version: requireVersion(record), patch: record.patch })
+  ok(res, { key, version: null })
+}
+
+async function handleAnnotationDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, 4096)
+  const key = requireKey(record, 'key')
+  await deleteAnnotation({ key, version: requireVersion(record) })
+  ok(res, { key, version: null })
+}
+
+/**
+ * 新建标注的 body 上限。
+ *
+ * 比改字段宽得多：一条 drafts 里带着选中原文，整段跨页选区能有几万字。真正的条数与
+ * 长度上限在 `annotation-writes.ts` 里查。
+ */
+const ANNOTATION_CREATE_BODY_LIMIT = 512 * 1024
+
+async function handleAnnotationCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, ANNOTATION_CREATE_BODY_LIMIT)
+  const created = await createAnnotations({
+    parentItem: requireKey(record, 'parentItem'),
+    annotations: record.annotations,
+  })
+  ok(res, created)
+}
+
+/**
+ * action → 允许的 HTTP 方法。
+ *
+ * 写 action 一律走 `POST /<verb>` 形态（真实 Zotero 动词由 write.ts 决定），这样
+ * 面板侧只需一个 `post()` 助手，方法白名单也只有一 GET / POST 两种，好核对。
+ * 用 Map 而非对象字面量：`action` 来自 URL，`constructor` 之类的名字不该命中原型链。
+ */
+const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
+  ['health', 'GET'],
+  ['tree', 'GET'],
+  ['items', 'GET'],
+  ['tags', 'GET'],
+  ['tag-usage', 'GET'],
+  ['item', 'GET'],
+  ['collection-bib', 'GET'],
+  ['file', 'GET'],
+  ['mcp-tools', 'GET'],
+  ['auth-status', 'GET'],
+  ['note-raw', 'GET'],
+  ['open-in-zotero', 'POST'],
+  ['authorize', 'POST'],
+  ['note-create', 'POST'],
+  ['note-update', 'POST'],
+  ['note-delete', 'POST'],
+  ['annotation-patch', 'POST'],
+  ['annotation-delete', 'POST'],
+  ['annotation-create', 'POST'],
+])
+
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
 export function createHandler(
   deps: HandlerDeps = {},
@@ -382,9 +602,17 @@ export function createHandler(
     }
     const action = url.pathname.slice(ROUTE_PREFIX.length)
     const method = req.method ?? 'GET'
-    const allowedMethod = action === 'open-in-zotero' ? 'POST' : 'GET'
+    const allowedMethod = ROUTE_METHODS.get(action)
+    if (allowedMethod === undefined) {
+      fail(res, 404, 'bad_request', `未知 action ${action}`)
+      return
+    }
     if (method !== allowedMethod) {
       fail(res, 405, 'bad_request', `该端点仅支持 ${allowedMethod}，收到 ${method}`)
+      return
+    }
+    if (WRITE_ACTIONS.has(action) && !hasWriteIntent(req)) {
+      fail(res, 403, 'bad_request', '拒绝未带写标记的请求')
       return
     }
 
@@ -419,6 +647,33 @@ export function createHandler(
           return
         case 'mcp-tools':
           await handleMcpTools(res, deps)
+          return
+        case 'auth-status':
+          await handleAuthStatus(res)
+          return
+        case 'authorize':
+          await handleAuthorize(res)
+          return
+        case 'note-raw':
+          await handleNoteRaw(res, url.searchParams)
+          return
+        case 'note-create':
+          await handleNoteCreate(req, res)
+          return
+        case 'note-update':
+          await handleNoteUpdate(req, res)
+          return
+        case 'note-delete':
+          await handleNoteDelete(req, res)
+          return
+        case 'annotation-patch':
+          await handleAnnotationPatch(req, res)
+          return
+        case 'annotation-delete':
+          await handleAnnotationDelete(req, res)
+          return
+        case 'annotation-create':
+          await handleAnnotationCreate(req, res)
           return
         default:
           fail(res, 404, 'bad_request', `未知 action ${action}`)

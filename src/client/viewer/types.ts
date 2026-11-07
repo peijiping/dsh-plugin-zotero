@@ -58,6 +58,13 @@ export interface DocumentRendererProps {
   onInsertExcerpt(quote: string): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
+  /**
+   * 写成功后的重取。
+   *
+   * 渲染器只在建标注时用得到（写完要让列表与叠加层看到库里那条新建的），但契约上
+   * 一律要求：漏传一次就是「写进去了但界面上看不见」，那种 bug 最难查。
+   */
+  onChanged(): void
 }
 
 export interface DocumentRenderer {

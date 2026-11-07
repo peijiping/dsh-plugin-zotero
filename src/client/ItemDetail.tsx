@@ -31,6 +31,8 @@ interface Props {
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   /** 插一条笔记的引用 chip（提交时展开为笔记正文）。 */
   onInsertNote(note: ZoteroNote): void
+  /** 面板里写成功后重取详情（静默，不打断当前阅读位置）。 */
+  onChanged(): void
 }
 
 /** 定位重试：渲染器刚就绪时页面占位可能还没提交，最多试几次。 */
@@ -51,7 +53,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   }
 }
 
-export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote }: Props): ReactElement {
+export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onChanged }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>({ type: 'all', color: null })
@@ -155,6 +157,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         onInsertExcerpt={onInsertExcerpt}
         onInsertAnnotation={onInsertAnnotation}
         onOpenInZotero={openInZoteroAt}
+        onChanged={onChanged}
       />
       <InfoPanel
         t={t}
@@ -168,6 +171,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         onLocateAnnotation={locateAnnotation}
         onInsertAnnotation={onInsertAnnotation}
         onInsertNote={onInsertNote}
+        onChanged={onChanged}
         annotationFilter={annotationFilter}
         onAnnotationFilterChange={setAnnotationFilter}
       />

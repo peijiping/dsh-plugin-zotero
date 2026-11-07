@@ -5,7 +5,7 @@
  * 取数状态放在组件内，每个 tab 互不影响。关闭 tab 时 `tab.signal` 中止请求。
  */
 
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -15,6 +15,7 @@ import type { InputActions } from './inline'
 import { ItemDetail } from './ItemDetail'
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import { showToast } from './paneStore'
 import type { SessionsFace } from './reference'
 import { Toast } from './Toast'
 import { useInsertion } from './useInsertion'
@@ -97,6 +98,27 @@ export function ZoteroItemPane(props: Props): ReactElement {
       })
   }, [itemKey, retry, signal])
 
+  /**
+   * 静默重取当前详情（写操作之后走这条）。
+   *
+   * 不复用 `retry` 那条路径：它会把整棵树换成「加载中」，信息面板随之收起——刚存完
+   * 一条笔记就眼看它填的内容消失，比慢半拍更让人以为是写丢了。
+   * 失败也只提示，不清空已有详情：写已经落库，这次没刷到而已。
+   */
+  const refresh = useCallback((): void => {
+    if (itemKey === null) return
+    const current = ++seq.current
+    fetchItem(itemKey, 'apa', signal)
+      .then((data) => {
+        if (current !== seq.current) return
+        setDetail(data)
+      })
+      .catch((err: unknown) => {
+        if (current !== seq.current || signal.aborted) return
+        showToast(tpl(t('detail.refreshFailed'), { message: errorMessage(err) }))
+      })
+  }, [itemKey, signal, t])
+
   const {
     insertItem,
     insertExcerpt,
@@ -125,6 +147,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
           onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
           onInsertNote={(note) => insertNote(detail, note)}
+          onChanged={refresh}
         />
       )}
       <Toast />

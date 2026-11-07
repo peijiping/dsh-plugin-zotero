@@ -20,6 +20,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { McpToolBridge } from './host/mcp-bridge.js'
 import { createHandler, type WebServerLike } from './host/router.js'
 import { createStaticHandler } from './host/static.js'
+import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
 import {
   DEFAULT_LIMIT,
@@ -55,6 +56,13 @@ export const Config = Schema.object({
   defaultLimit: Schema.number().default(DEFAULT_LIMIT).volatile(),
   /** 被关掉的集成 MCP 工具原始名；模型侧据此过滤注册。 */
   disabledMcpTools: Schema.array(Schema.string()).default([]).volatile(),
+  /**
+   * 写入总开关（默认关）。
+   *
+   * 只影响写路径（面板的标注/笔记编辑 + 模型侧写工具），读能力不受影响。
+   * 关掉即彻底回滚到「严格只读」，这也是出问题时的止血手段。
+   */
+  writeEnabled: Schema.boolean().default(false).volatile(),
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
@@ -67,30 +75,48 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     fulltextMaxBytes: config.fulltextMaxBytes.get(),
     defaultLimit: config.defaultLimit.get(),
     disabledMcpTools: [...config.disabledMcpTools.get()],
+    writeEnabled: config.writeEnabled.get(),
   }))
 
   // 模型侧：自持集成 MCP 连接，按 disabledMcpTools 过滤后注册工具。
   let bridge: McpToolBridge | undefined
+  let writeBridge: ZoteroWriteToolBridge | undefined
   ctx.inject(['tools'], (toolCtx: Context) => {
     const instance = new McpToolBridge(toolCtx)
+    const writeInstance = new ZoteroWriteToolBridge(toolCtx)
     bridge = instance
+    writeBridge = writeInstance
     toolCtx.effect(
       () => () => {
         instance.dispose()
+        writeInstance.dispose()
         if (bridge === instance) bridge = undefined
+        if (writeBridge === writeInstance) writeBridge = undefined
       },
-      'dsh-plugin-zotero: mcp tool bridge',
+      'dsh-plugin-zotero: tool bridge',
     )
     instance.sync().catch((error: unknown) => {
       console.warn('[dsh-plugin-zotero] 集成 MCP 工具注册失败：', error)
     })
+    try {
+      writeInstance.sync()
+    } catch (error) {
+      console.warn('[dsh-plugin-zotero] 写工具注册失败：', error)
+    }
   })
 
   ctx.inject(['webServer'], (hostCtx: Context) => {
     const webServer = (hostCtx as unknown as { webServer: WebServerLike }).webServer
-    // 面板打开「配置」页时会 GET 该路由：顺带按最新开关重建一次注册。
+    // 面板打开「配置」页与保存后都会 GET 该路由：顺带按最新开关重建两批注册。
     const handler = createHandler({
-      syncTools: async () => (bridge ? bridge.sync() : listMcpTools()),
+      syncTools: async () => {
+        try {
+          writeBridge?.sync()
+        } catch (error) {
+          console.warn('[dsh-plugin-zotero] 写工具注册失败：', error)
+        }
+        return bridge ? bridge.sync() : listMcpTools()
+      },
     })
     hostCtx.effect(
       () => webServer.register({ kind: 'prefix', path: ROUTE_MATCH, handler }),

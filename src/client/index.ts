@@ -19,7 +19,7 @@ import type { InputActions } from './inline'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
-import { ZoteroCard, ZoteroCardController, ROW_CONFIG_KEY, ROW_ID } from './ZoteroCard'
+import { ZoteroCardController, ROW_ID, ZoteroSettingsSection } from './ZoteroCard'
 import { ITEM_ADDRESS_PREFIX, ZoteroItemPane } from './ZoteroItemPane'
 import { ZoteroPane } from './ZoteroPane'
 
@@ -99,6 +99,9 @@ const TAB_ID = 'zotero'
 
 /** 条目 tab 的类型 id / kind；正文与标题席位也按这个 key 注册。 */
 const ITEM_TAB_ID = 'zotero-item'
+
+/** 「设置」对话框里这一页的 section id（`settings.section` 的 `id`）。 */
+const SETTINGS_SECTION_ID = 'zotero'
 
 export const name = 'dsh-plugin-zotero'
 export const inject = [
@@ -226,23 +229,29 @@ export function apply(ctx: ClientContext): void {
   // 共享面板状态是模块级单例，插件卸载时清空。
   ctx.effect(() => () => resetPaneStore(), 'dsh-plugin-zotero: pane state')
 
-  // 插件页「配置」入口：行级配置页渲染在 `plugins.row.config` 席位，
-  // 仅当 Host 服务本插件的 settings 命名空间时才注册（key = 包名#行 id）。
+  // 配置页：只有「设置」对话框里的独立一页（`settings.section`，root 作用域，
+  // 右侧内容列），仅当 Host 服务本插件的 settings 命名空间时才注册 —— 否则
+  // 表单恒为不可用状态，留着只会误导。
+  // 席位选项里 `label` 是导航文案、`order` 决定它在左侧列表里的位置
+  // （框架自带各页：账号 -10 / 通用 0 / 模型 10 / 内置插件 15 / Agent 预设 20，
+  // 这里排在最后）。
   const controller = new ZoteroCardController(ctx.configForms.get(ROW_ID))
-  ctx.effect(() => () => controller.dispose(), 'dsh-plugin-zotero: card form')
+  ctx.effect(() => () => controller.dispose(), 'dsh-plugin-zotero: settings form')
   ctx.effect(
     () => ctx.configForms.whileServed([ROW_ID], () => ctx.slots.inject(
-      'plugins.row.config',
+      'settings.section',
       () => ctx.slots.register(
         {
-          name: 'plugins.row.config',
-          key: ROW_CONFIG_KEY,
+          name: 'settings.section',
+          id: SETTINGS_SECTION_ID,
+          order: 30,
+          label: () => t('settings.nav'),
           locale: NS,
           inject: () => controller.inject(),
         },
-        ZoteroCard as ComponentType<never>,
+        ZoteroSettingsSection as ComponentType<never>,
       ),
     )),
-    'dsh-plugin-zotero: row config card',
+    'dsh-plugin-zotero: settings section',
   )
 }

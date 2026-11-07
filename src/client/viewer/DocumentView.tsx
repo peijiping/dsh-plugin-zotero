@@ -22,6 +22,7 @@ interface Props {
   onInsertExcerpt(quote: string): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
+  onChanged(): void
 }
 
 export function DocumentView({
@@ -34,6 +35,7 @@ export function DocumentView({
   onInsertExcerpt,
   onInsertAnnotation,
   onOpenInZotero,
+  onChanged,
 }: Props): ReactElement {
   const renderer = pickRenderer(source, detail)
   const Renderer = renderer.Component
@@ -109,6 +111,7 @@ export function DocumentView({
           onInsertExcerpt={onInsertExcerpt}
           onInsertAnnotation={onInsertAnnotation}
           onOpenInZotero={onOpenInZotero}
+          onChanged={onChanged}
         />
       </div>
     </div>

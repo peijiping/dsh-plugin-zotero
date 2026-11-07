@@ -27,6 +27,7 @@ import {
 import type {
   ApiErrorCode,
   ZoteroAnnotation,
+  ZoteroAnnotationState,
   ZoteroAttachment,
   ZoteroAttachmentFile,
   ZoteroCollection,
@@ -36,7 +37,9 @@ import type {
   ZoteroItemScope,
   ZoteroItemSummary,
   ZoteroNote,
+  ZoteroNoteRaw,
   ZoteroTag,
+  ZoteroTagRef,
   ZoteroTags,
 } from './types.js'
 
@@ -73,6 +76,8 @@ interface RawTag {
 
 interface RawItemData {
   itemType?: string
+  /** 条目版本：写操作的并发前置条件。顶层 `raw.version` 的兜底来源。 */
+  version?: number
   title?: string
   abstractNote?: string
   date?: string
@@ -284,8 +289,46 @@ function noteTitle(html: string): string {
   return text.length > 60 ? `${text.slice(0, 60)}…` : text
 }
 
+/**
+ * 条目版本。
+ *
+ * 写操作（PATCH / DELETE）缺它就直接 428，因此宁可给 0 也不要给 undefined：
+ * 真拿 0 去写会被 Zotero 判成版本不符（412），比「静默盲写」安全。
+ * 顶层 `version` 与 `data.version` 实测同时存在，取任一份即可。
+ */
+function versionOf(raw: RawItem): number {
+  const version = raw.version ?? raw.data?.version
+  return typeof version === 'number' && Number.isInteger(version) && version > 0 ? version : 0
+}
+
+/** 父条目 key；顶层条目、独立笔记一律归一成空串。 */
+function parentKeyOf(raw: RawItem): string {
+  const parent = raw.data?.parentItem
+  return typeof parent === 'string' ? parent : ''
+}
+
+/**
+ * 正文里是否含 Zotero 的结构锚点。
+ *
+ * 引文（`class="citation"` / `data-citation-items`）与「添加至笔记」生成的标注反链
+ * （`data-annotation`）都靠这些属性回指库里的对象。插件的编辑器只能读写纯 HTML 文本，
+ * 保存时若属性有任何损失，Zotero 侧的引文就变成死链——因此这类笔记只允许删除。
+ */
+const NOTE_ANCHOR = /\b(?:data-(?:citation|annotation|pid)\b|class="citation")/u
+
+/**
+ * 正文是否含 Zotero 的结构锚点。
+ *
+ * 导出给写侧复用：判定「这条笔记能不能编辑」只能有一处口径，列表面板与写入口
+ * 各写一份正则，早晚会漂移到「面板放行了、库里坏了」。
+ */
+export function hasZoteroAnchors(html: string): boolean {
+  return NOTE_ANCHOR.test(html)
+}
+
 function toNote(raw: RawItem): ZoteroNote {
-  const html = sanitizeNoteHtml(raw.data?.note ?? '')
+  const source = raw.data?.note ?? ''
+  const html = sanitizeNoteHtml(source)
   const maxBytes = NOTE_MAX_BYTES
   const truncated = html.length > maxBytes
   return {
@@ -294,6 +337,74 @@ function toNote(raw: RawItem): ZoteroNote {
     html: truncated ? html.slice(0, maxBytes) : html,
     dateModified: raw.data?.dateModified ?? '',
     truncated,
+    version: versionOf(raw),
+    parentItem: parentKeyOf(raw),
+    editable: !hasZoteroAnchors(source),
+  }
+}
+
+/**
+ * 笔记原始正文（编辑器取数用）。
+ *
+ * 与 {@link toNote} 的区别刻意为之：不清洗、不截断。清洗会剥掉 `data-*`，截断会腰斩
+ * 标签，两者回写进 Zotero 都是数据损伤。
+ */
+export async function getNoteRaw(key: string): Promise<ZoteroNoteRaw> {
+  const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
+  if (raw.data?.itemType !== 'note') {
+    throw new ZoteroError('bad_request', '该条目不是笔记，无法按笔记编辑。')
+  }
+  return {
+    key: raw.key,
+    version: versionOf(raw),
+    parentItem: parentKeyOf(raw),
+    html: raw.data.note ?? '',
+  }
+}
+
+/**
+ * 标注的当前状态（写入前的核对用）。
+ *
+ * 只回校验用得着的字段：写侧需要确认「这确实是一条标注、而且是高亮/划线」，
+ * 而不是把整条数据拉过来再丢掉。目标不存在时这里就抛 404，不会白跑一次 PATCH。
+ */
+export async function getAnnotationState(key: string): Promise<ZoteroAnnotationState> {
+  const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
+  if (raw.data?.itemType !== 'annotation') {
+    throw new ZoteroError('bad_request', '该条目不是标注，本插件的标注写入不会改动它。')
+  }
+  return {
+    key: raw.key,
+    version: versionOf(raw),
+    parentItem: parentKeyOf(raw),
+    type: raw.data.annotationType ?? '',
+  }
+}
+
+/** 标注挂载点（父条目）的校验信息。 */
+export interface AnnotationHostInfo {
+  key: string
+  /** Zotero 的条目类型，如 `attachment` / `journalArticle`。 */
+  itemType: string
+  /** 附件的 MIME；非附件为空串。 */
+  contentType: string
+  /** 文件名或条目标题，只用于错误文案。 */
+  title: string
+}
+
+/**
+ * 读一条「准备挂标注」的条目，回够校验用的几个字段。
+ *
+ * Zotero 只允许标注长在附件（PDF/EPUB）下面，把 key 递错成父条目时它那边报的是一句
+ * 英文内部错误；与其让用户看见那种话，不如在这里挡住并说清该选哪一层。
+ */
+export async function getAnnotationHost(key: string): Promise<AnnotationHostInfo> {
+  const { body: raw } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
+  return {
+    key: raw.key,
+    itemType: raw.data?.itemType ?? '',
+    contentType: raw.data?.contentType ?? '',
+    title: raw.data?.title ?? '',
   }
 }
 
@@ -822,10 +933,9 @@ function toAnnotation(raw: RawItem): RawAnnotation | null {
   const data = raw.data ?? {}
   const type = data.annotationType ?? ''
   if (!ANNOTATION_TYPES.has(type)) return null
-  const parentItem = data.parentItem
   return {
     key: raw.key,
-    attachmentKey: typeof parentItem === 'string' ? parentItem : '',
+    attachmentKey: parentKeyOf(raw),
     type,
     text: data.annotationText ?? '',
     comment: data.annotationComment ?? '',
@@ -833,6 +943,10 @@ function toAnnotation(raw: RawItem): RawAnnotation | null {
     pageLabel: data.annotationPageLabel ?? '',
     sortIndex: data.annotationSortIndex ?? '',
     position: toPosition(data.annotationPosition),
+    version: versionOf(raw),
+    tags: (data.tags ?? [])
+      .filter((tag) => typeof tag.tag === 'string' && tag.tag !== '')
+      .map((tag) => ({ tag: tag.tag as string, type: tag.type ?? 1 })),
   }
 }
 
@@ -1008,6 +1122,9 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     pageLabel: annotation.pageLabel,
     position: annotation.position,
     range: annotation.range,
+    version: annotation.version,
+    sortIndex: annotation.sortIndex,
+    tags: annotation.tags,
   }))
 
   return {
@@ -1028,6 +1145,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     annotations,
     fulltext,
     bib,
+    writeEnabled: getSettings().writeEnabled,
   }
 }
 

@@ -6,7 +6,7 @@
  * 通过 map 把折叠下标还原成原文下标。
  */
 
-import type { ZoteroFulltext } from './types.js'
+import type { ZoteroFulltext, ZoteroTagRef } from './types.js'
 
 /** Host 侧归一化后的标注。 */
 export interface RawAnnotation {
@@ -21,6 +21,10 @@ export interface RawAnnotation {
   sortIndex: string
   /** PDF 页位置；缺失或墨迹标注为 null。 */
   position: { pageIndex: number; rects: [number, number, number, number][] } | null
+  /** Zotero 条目版本：改色 / 改评论 / 删除要原样带回做并发前置条件。 */
+  version: number
+  /** 标注自身的标签。 */
+  tags: ZoteroTagRef[]
 }
 
 /** 可以锚定到全文纯文本的标注类型（其余类型只用于 PDF 坐标叠加）。 */

@@ -1,17 +1,19 @@
 /**
- * 插件页配置卡（浏览器半）。
+ * 设置页（浏览器半）。
  *
- * 把 Host 导出的 volatile `Config` 表单渲染进插件页的 `plugins.row.config`
- * 席位 —— 造型与状态机照抄官方参考实现
- * `@deepseek-ai/dsh-client-ui-settings-shell` 的 `ShellCard`：
+ * 把 Host 导出的 volatile `Config` 表单渲染进「设置」对话框的
+ * `settings.section` 席位（左侧导航里独立一页「Zotero」）—— 造型与状态机
+ * 照抄官方参考实现 `@deepseek-ai/dsh-client-ui-settings-shell` 的 `ShellCard`：
  * 控制器持 `SettingsFormModel`，组件经注入的 hook 读快照。
  *
- * 卡片分两组：**API 设置**（本地 API 与面板行为）与 **MCP 设置**（集成 MCP
- * 连接 + 工具清单）。工具清单由 Host 路由 `/dsh-zotero/api/mcp-tools` 现场拉
- * 取，每个工具一个 `Switch`，禁用集写进 `disabledMcpTools` 字段。
+ * 顺序：**Zotero 写权限**（置顶 —— 写入开关 + 授权/重读按钮，写成显眼的操作卡）、
+ * **API 设置**（本地 API 与面板行为）、**MCP 设置**（集成 MCP 连接 + 工具清单）。
+ * 写权限放最前是因为「没点授权按钮 → 写操作全失败」是最常见的踩坑点，不能让用户
+ * 翻到页面底部才发现有这个按钮。工具清单由 Host 路由 `/dsh-zotero/api/mcp-tools`
+ * 现场拉取，每个工具一个 `Switch`，禁用集写进 `disabledMcpTools` 字段。
  *
- * 席位 key 由 plugin-manager 的 `rowConfigKey(bundle, rowId)` 决定，因此
- * {@link ROW_CONFIG_KEY} 必须与 `cordis.patch.yml` 的行 id 保持同步。
+ * 席位 `id`（{@link ROW_ID}）同时是 Host settings 命名空间，必须与
+ * `cordis.patch.yml` 的行 id 保持同步。
  */
 
 import { useEffect, useState, type ReactElement } from 'react'
@@ -31,19 +33,21 @@ import {
   type SnapshotStore,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
+import type { ZoteroWriteStatus } from '../zotero/types'
+import { authorizeWrites, fetchWriteStatus } from './api'
 import { tpl, type Translate } from './locales'
 
-/** 插件页的行 id / settings 命名空间（= cordis.patch.yml 的 insert 行 id）。 */
+/** 设置命名空间 id（= cordis.patch.yml 的 insert 行 id）。 */
 export const ROW_ID = 'dsh-plugin-zotero'
-
-/** `plugins.row.config` 席位的 key（= `<包名>#<行 id>`）。 */
-export const ROW_CONFIG_KEY = `${ROW_ID}#${ROW_ID}`
 
 /** 本插件 Host 路由前缀（与 `src/zotero/config.ts` 的 ROUTE_PREFIX 同步）。 */
 const API_BASE = '/dsh-zotero/api'
 
 /** 承载「被禁用的工具原始名」的配置字段名。 */
 const DISABLED_FIELD = 'disabledMcpTools'
+
+/** 写入总开关的配置字段名。 */
+const WRITE_FIELD = 'writeEnabled'
 
 /** 可配置字段名，与 Host `Config` schema 一一对应。 */
 type FieldName =
@@ -97,6 +101,7 @@ interface CardState extends SettingsFormState {
   fulltextMaxBytes: SettingsFieldState
   defaultLimit: SettingsFieldState
   disabledMcpTools: SettingsFieldState
+  writeEnabled: SettingsFieldState
 }
 
 /** 席位注册时经 `inject()` 下发给组件的面。 */
@@ -104,9 +109,8 @@ interface CardInjection extends SettingsActions {
   hooks: { zoteroCard: SnapshotStore<CardState> }
 }
 
-/** 组件收到的 props：席位标准 props + 注入面（hook 与表单动作）+ 本卡字典。 */
+/** 组件收到的 props：席位标准 props + 注入面（hook 与表单动作）+ 本页字典。 */
 interface CardProps {
-  view: 'summary' | 'page'
   t: Translate
   useZoteroCard: <T>(selector: (state: CardState) => T) => T
   save(): void
@@ -150,6 +154,23 @@ function readDisabled(text: string): Set<string> {
 }
 
 /**
+ * 布尔字段的规格：表单只认文本，因此开关以 `'true' / 'false'` 字符串暂存。
+ * 其他文本视为非法，阻止保存（避免误把「1」「on」写进配置）。
+ */
+function booleanField(field: string): SettingsFieldSpec {
+  return {
+    field,
+    format: (value) => (value === true ? 'true' : 'false'),
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      if (trimmed === 'true' || trimmed === 'false') return { kind: 'set', value: trimmed === 'true' }
+      return undefined
+    },
+  }
+}
+
+/**
  * 一张卡片的暂存表单模型：只在保存时写入，离开页面时丢弃草稿。
  * `scope` 由 `configForms.get(ROW_ID)` 提供（本条的共享配置表单）。
  */
@@ -163,6 +184,7 @@ export class ZoteroCardController {
       ...ALL_FIELDS.map((field): SettingsFieldSpec =>
         field.numeric ? settingsNumberField(field.name) : settingsTextField(field.name)),
       disabledToolsField(DISABLED_FIELD),
+      booleanField(WRITE_FIELD),
     ])
     this.store = this.form.bind(() => this.projection())
   }
@@ -177,6 +199,7 @@ export class ZoteroCardController {
       fulltextMaxBytes: this.form.field('fulltextMaxBytes'),
       defaultLimit: this.form.field('defaultLimit'),
       disabledMcpTools: this.form.field(DISABLED_FIELD),
+      writeEnabled: this.form.field(WRITE_FIELD),
     }
   }
 
@@ -191,16 +214,12 @@ export class ZoteroCardController {
   }
 }
 
-/**
- * 拉取集成 MCP 工具清单。`active` 为 false（行摘要态）时不动手。
- * 返回 `[状态, 重新读取]`。
- */
-function useMcpTools(active: boolean): readonly [ToolsState, () => void] {
+/** 拉取集成 MCP 工具清单。返回 `[状态, 重新读取]`。 */
+function useMcpTools(): readonly [ToolsState, () => void] {
   const [state, setState] = useState<ToolsState>({ kind: 'loading' })
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
-    if (!active) return undefined
     let cancelled = false
     setState({ kind: 'loading' })
     void (async () => {
@@ -225,11 +244,51 @@ function useMcpTools(active: boolean): readonly [ToolsState, () => void] {
     return () => {
       cancelled = true
     }
-  }, [active, nonce])
+  }, [nonce])
 
   return [state, () => { setNonce((value) => value + 1) }]
 }
 
+/** 写通道状态的加载结果。 */
+type WriteState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; status: ZoteroWriteStatus }
+
+/**
+ * 读取写通道状态（已保存的开关 + Host 内存里有没有 key）。
+ *
+ * 授权成功或失败后都要重读，否则徽标会停在旧事实上。
+ */
+function useWriteStatus(): readonly [WriteState, () => void] {
+  const [state, setState] = useState<WriteState>({ kind: 'loading' })
+  const [nonce, setNonce] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    void (async () => {
+      try {
+        const status = await fetchWriteStatus()
+        if (!cancelled) setState({ kind: 'ready', status })
+      } catch (error) {
+        if (!cancelled) {
+          setState({
+            kind: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [nonce])
+
+  return [state, () => { setNonce((value) => value + 1) }]
+}
+
+const SECTION_HINT_STYLE = { fontSize: 12, opacity: 0.72, marginBottom: 10 }
 const GROUP_STYLE = { marginTop: 4 }
 const GROUP_HEAD_STYLE = { fontSize: 12, fontWeight: 600, opacity: 0.72, margin: '0 0 6px' }
 const HINT_STYLE = { fontSize: 12, opacity: 0.72, display: 'flex', alignItems: 'center', gap: 8 }
@@ -245,13 +304,49 @@ const TOOL_INFO_STYLE = { minWidth: 0 }
 const TOOL_NAME_STYLE = { fontSize: 12, display: 'block' }
 const TOOL_DESC_STYLE = { fontSize: 11, opacity: 0.66, display: 'block', marginTop: 2 }
 
-/** 行摘要返回一句话；行「配置」页返回完整表单（两大组 + MCP 工具开关）。 */
-export function ZoteroCard(props: CardProps): ReactElement | string {
+/**
+ * 写权限操作卡：整块描边 + 浅底，把「必须点按钮」这件事从一片灰字里拎出来。
+ * 颜色走主题变量，light/dark 都成立。
+ */
+const WRITE_PANEL_STYLE = {
+  border: '1px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.35))',
+  borderRadius: 10,
+  padding: '12px 14px 14px',
+  background: 'var(--dsw-alias-bg-layer-1, transparent)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  marginTop: 4,
+}
+/** 卡片内的步骤标题（「步骤 ①」那种小标签）。 */
+const WRITE_STEP_STYLE = { fontSize: 11, fontWeight: 600, opacity: 0.6, margin: 0 }
+/** 状态徽标行：加粗显示「未授权 / 已授权」。 */
+const WRITE_STATUS_STYLE = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 12,
+  fontWeight: 600,
+}
+/** 按钮行：主按钮在前，紧挨次要按钮。 */
+const WRITE_ACTIONS_STYLE = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }
+/** 警示行（未授权 / 需先保存），用 warn 色，但不抢按钮的视觉重心。 */
+const WRITE_WARN_STYLE = {
+  fontSize: 12,
+  lineHeight: 1.5,
+  color: 'var(--dsw-alias-state-warn-primary, #b26a00)',
+}
+/** 常规说明行。 */
+const WRITE_NOTE_STYLE = { fontSize: 12, lineHeight: 1.5, opacity: 0.72 }
+
+/** 设置页正文：三大组 + MCP 工具开关。 */
+export function ZoteroSettingsSection(props: CardProps): ReactElement {
   const { t } = props
   const state = props.useZoteroCard((snapshot) => snapshot)
-  const [tools, reloadTools] = useMcpTools(props.view === 'page')
-
-  if (props.view === 'summary') return t('card.desc')
+  const [tools, reloadTools] = useMcpTools()
+  const [write, reloadWrite] = useWriteStatus()
+  const [authorizing, setAuthorizing] = useState(false)
+  const [authNotice, setAuthNotice] = useState<string | null>(null)
 
   const locked = !state.writable
   const disabledSet = readDisabled(state.disabledMcpTools.text)
@@ -326,6 +421,109 @@ export function ZoteroCard(props: CardProps): ReactElement | string {
     )
   }
 
+  /**
+   * 发起授权。
+   *
+   * Zotero 的弹窗会挂住这条请求直到用户点按钮，所以等待期间禁用按钮：再点一次
+   * 只是多弹一个框，还可能撞上 Zotero 每分钟 5 次的授权限流。
+   */
+  const runAuthorize = async (): Promise<void> => {
+    setAuthorizing(true)
+    setAuthNotice(null)
+    try {
+      const result = await authorizeWrites()
+      setAuthNotice(result.remembered ? t('write.granted') : t('write.grantedOnce'))
+    } catch (error) {
+      setAuthNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAuthorizing(false)
+      reloadWrite()
+    }
+  }
+
+  const renderWrite = (): ReactElement => {
+    if (write.kind === 'loading') return <div style={HINT_STYLE}>{t('write.loading')}</div>
+    if (write.kind === 'error') {
+      return (
+        <div style={HINT_STYLE}>
+          <span>{tpl(t('write.error'), { message: write.message })}</span>
+          <Button variant="outline" size="sm" onClick={() => reloadWrite()}>{t('write.reload')}</Button>
+        </div>
+      )
+    }
+    const { enabled, hasKey, remembered } = write.status
+    const badge = !enabled
+      ? t('write.off')
+      : !hasKey
+        ? t('write.unauthorized')
+        : remembered
+          ? t('write.remembered')
+          : t('write.singleUse')
+    const blocked = locked || authorizing || !enabled
+    return (
+      <div style={WRITE_PANEL_STYLE}>
+        <div style={TOOL_ROW_STYLE}>
+          <div style={TOOL_INFO_STYLE}>
+            <span style={{ ...TOOL_NAME_STYLE, fontSize: 13, fontWeight: 600 }}>{t('write.toggle')}</span>
+            <span style={TOOL_DESC_STYLE}>{t('write.toggleHint')}</span>
+          </div>
+          <Switch
+            checked={state.writeEnabled.text === 'true'}
+            disabled={locked}
+            label={t('write.toggle')}
+            title={state.writeEnabled.text === 'true' ? t('write.on') : t('write.off')}
+            onChange={(next) => {
+              props.edit(WRITE_FIELD, next ? 'true' : 'false')
+              setAuthNotice(null)
+            }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <p style={WRITE_STEP_STYLE}>{t('write.steps')}</p>
+          <div style={WRITE_STATUS_STYLE}>
+            <span>{badge}</span>
+          </div>
+          {/* 按钮必须自己站出来说话：主按钮实心，重读按钮描边，都是 md 尺寸。 */}
+          <div style={WRITE_ACTIONS_STYLE}>
+            <Button
+              variant="primary"
+              size="md"
+              disabled={blocked}
+              title={enabled ? t('write.authorizeHint') : t('write.needSave')}
+              onClick={() => {
+                void runAuthorize()
+              }}
+            >
+              {authorizing ? t('write.pending') : t('write.authorize')}
+            </Button>
+            <Button
+              variant="outline"
+              size="md"
+              title={t('write.reloadHint')}
+              onClick={() => {
+                setAuthNotice(null)
+                reloadWrite()
+              }}
+            >
+              {t('write.reload')}
+            </Button>
+          </div>
+        </div>
+
+        {/* 未开启开关时，按钮是禁用的 —— 这条说清为什么、该先做什么。 */}
+        {!enabled && <div style={WRITE_WARN_STYLE}>{t('write.needSave')}</div>}
+        {enabled && (
+          <div style={WRITE_WARN_STYLE}>
+            {hasKey && remembered ? t('write.calloutReady') : t('write.callout')}
+          </div>
+        )}
+        {authNotice !== null && <div style={WRITE_NOTE_STYLE}>{authNotice}</div>}
+        <div style={WRITE_NOTE_STYLE}>{t('write.alwaysAllow')}</div>
+      </div>
+    )
+  }
+
   return (
     <SettingsForm
       labels={{
@@ -339,10 +537,18 @@ export function ZoteroCard(props: CardProps): ReactElement | string {
       onSave={() => {
         props.save()
         // 保存是异步落盘：稍后重读清单，Host 会顺带按新开关重建工具注册。
-        setTimeout(() => reloadTools(), 400)
+        setTimeout(() => {
+          reloadTools()
+          reloadWrite()
+        }, 400)
       }}
       onDiscard={() => props.discard()}
     >
+      <div style={SECTION_HINT_STYLE}>{t('settings.hint')}</div>
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.write')}</h4>
+        {renderWrite()}
+      </section>
       <section style={GROUP_STYLE}>
         <h4 style={GROUP_HEAD_STYLE}>{t('group.api')}</h4>
         {API_FIELDS.map(renderField)}

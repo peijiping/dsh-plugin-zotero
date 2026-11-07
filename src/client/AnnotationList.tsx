@@ -7,16 +7,27 @@
  *
  * 顶部两行筛选：类型与颜色，两者 AND 组合。类型按当前条目的实际种类生成，
  * 不会出现空分类。
+ *
+ * 开了写入开关后，高亮与划线可以就地改：换色、换类型、评论、页码、标签，以及删除。
+ * 三条约定：
+ * - 每次只发改动的那一个字段，`text` 与 `position` 绝不过我们的手；
+ * - 标签是**整表替换**，所以草稿框里给的是全表、发出去的也是全表；
+ * - 删除是硬删（不进 Zotero 回收站），因此必须点两次。
+ * 写完一律交给 {@link onChanged} 重取详情：版本号以库里那份为准，本地不猜结果。
  */
 
-import { Fragment, type ReactElement, type ReactNode } from 'react'
+import { Fragment, useState, type ReactElement, type ReactNode } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroAnnotation } from '../zotero/types'
-import { hasComment, parseComment } from './annotationComment'
+import type { ZoteroAnnotation, ZoteroAnnotationPatch } from '../zotero/types'
+import { ANNOTATION_COLORS } from '../zotero/palette'
+import { deleteAnnotation, patchAnnotation } from './api'
+import { commentForEditor, hasComment, parseComment } from './annotationComment'
 import { annotationColor, filterAnnotations, type AnnotationFilter } from './annotationRuns'
 import { tpl, type Translate } from './locales'
+import { showToast } from './paneStore'
+import { ACCENT } from './styles'
 
 interface Props {
   t: Translate
@@ -27,17 +38,59 @@ interface Props {
   truncated: boolean
   /** 类型 + 颜色筛选；由详情持有，正文内联跟着一起过滤。 */
   filter: AnnotationFilter
+  /** 配置里的「允许写入 Zotero」是否打开；关着时整块保持只读。 */
+  canWrite: boolean
   onFilterChange(filter: AnnotationFilter): void
   onLocate(annotation: ZoteroAnnotation): void
   onInsert(annotation: ZoteroAnnotation): void
+  /** 写成功后重取整份详情：Zotero 是唯一真相，本地不拼结果。 */
+  onChanged(): void
 }
 
 /** 类型 chip 的固定顺序；未出现的类型不渲染。 */
 const TYPE_ORDER = ['highlight', 'underline', 'note', 'text', 'image', 'ink'] as const
 
+/** 本插件可改写的类型：口径与 Host 一致，不一致时以 Host 的报错为准。 */
+const EDITABLE_TYPES = new Set(['highlight', 'underline'])
+
+/** 可互转的类型，编辑区里按这个顺序摆 chip。 */
+const TOGGLE_TYPES = ['highlight', 'underline'] as const
+
 interface ColorChip {
   hex: string
   count: number
+}
+
+/** 展开的那条标注的草稿；每一项都是「将要原样写回 Zotero」的形态。 */
+interface Draft {
+  comment: string
+  pageLabel: string
+  tags: string
+}
+
+const EMPTY_DRAFT: Draft = { comment: '', pageLabel: '', tags: '' }
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * 草稿串 → 标签表。
+ *
+ * 分隔符容忍全角逗号与换行：中文输入法下逗号天然是「，」。标签本身不含逗号，
+ * 真要带就回 Zotero 里加——这里是复刻，不是另立一套标签语法。
+ */
+function parseTags(input: string): ZoteroAnnotationPatch['tags'] {
+  const seen: string[] = []
+  for (const part of input.split(/[,，\n]/u)) {
+    const tag = part.trim()
+    if (tag !== '' && !seen.includes(tag)) seen.push(tag)
+  }
+  return seen.map((tag) => ({ tag, type: 1 }))
+}
+
+function tagsToText(tags: ZoteroAnnotation['tags']): string {
+  return tags.map((item) => item.tag).join(', ')
 }
 
 function typeLabel(t: Translate, type: string): string {
@@ -139,10 +192,20 @@ export function AnnotationList({
   hasFulltext,
   truncated,
   filter,
+  canWrite,
   onFilterChange,
   onLocate,
   onInsert,
+  onChanged,
 }: Props): ReactElement | null {
+  /** 展开编辑区的标注 key；一次只开一条，窄面板里塞两个编辑器只会互相抢视线。 */
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  /** 已点过一次「删除」、正在等第二次确认的标注 key。 */
+  const [armed, setArmed] = useState<string | null>(null)
+
   if (annotations.length === 0) return null
 
   const counts = new Map<string, number>()
@@ -171,6 +234,228 @@ export function AnnotationList({
     if (!hasFulltext) return t('detail.annotationNotAnchoredNoFulltext')
     if (truncated) return t('detail.annotationNotAnchoredTruncated')
     return t('detail.annotationNotAnchored')
+  }
+
+  /**
+   * 跑一次与 Zotero 的往返。
+   *
+   * 成功只报一句就重取详情（新版本号、PDF 叠加层、列表排序都以库里那份为准）；
+   * 失败把 Host 的中文文案原样摊出来——里面已经写明去哪点授权、或哪项校验没过。
+   */
+  async function run(action: () => Promise<unknown>, message: string): Promise<boolean> {
+    setNotice(null)
+    setBusy(true)
+    try {
+      await action()
+      showToast(message)
+      onChanged()
+      return true
+    } catch (error) {
+      setNotice(tpl(t('annotation.writeFailed'), { message: errorMessage(error) }))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function save(annotation: ZoteroAnnotation, patch: ZoteroAnnotationPatch): void {
+    void run(
+      () => patchAnnotation({ key: annotation.key, version: annotation.version, patch }),
+      t('annotation.saved'),
+    )
+  }
+
+  function remove(annotation: ZoteroAnnotation): void {
+    setArmed(null)
+    void run(
+      () => deleteAnnotation({ key: annotation.key, version: annotation.version }),
+      t('annotation.deleted'),
+    ).then((done) => {
+      if (done && editingKey === annotation.key) setEditingKey(null)
+    })
+  }
+
+  /** 编辑区开合：打开时把草稿铺好，取的是库里那份的归一化形态。 */
+  function toggleEditor(annotation: ZoteroAnnotation): void {
+    setArmed(null)
+    if (editingKey === annotation.key) {
+      setEditingKey(null)
+      return
+    }
+    setEditingKey(annotation.key)
+    setDraft({
+      comment: commentForEditor(annotation.comment),
+      pageLabel: annotation.pageLabel,
+      tags: tagsToText(annotation.tags),
+    })
+  }
+
+  function rowButtons(annotation: ZoteroAnnotation): ReactElement | null {
+    if (!canWrite) return null
+    if (!EDITABLE_TYPES.has(annotation.type)) {
+      return (
+        <Button variant="outline" size="sm" disabled title={t('annotation.lockedHint')} style={insertButtonStyle}>
+          {t('annotation.edit')}
+        </Button>
+      )
+    }
+    const open = editingKey === annotation.key
+    return (
+      <>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => toggleEditor(annotation)}
+          title={open ? undefined : t('annotation.editTitle')}
+          style={insertButtonStyle}
+        >
+          {open ? t('annotation.closeEdit') : t('annotation.edit')}
+        </Button>
+        {armed === annotation.key ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => remove(annotation)}
+            title={t('annotation.deleteWarn')}
+            style={insertButtonStyle}
+          >
+            {t('annotation.confirmDelete')}
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => setArmed(annotation.key)}
+            title={t('annotation.deleteWarn')}
+            style={insertButtonStyle}
+          >
+            {t('annotation.delete')}
+          </Button>
+        )}
+      </>
+    )
+  }
+
+  /**
+   * 一条标注的编辑区。
+   *
+   * 色块与类型 chip 点一下就写（改的是「选一个值」这类单选项，不需要再按保存）；
+   * 评论、页码、标签是自由文本，各带一个保存按钮，内容没变时保存是灰的——
+   * 省掉一次「什么都没改但版本号涨了」的写。
+   */
+  function editor(annotation: ZoteroAnnotation): ReactElement {
+    const current = annotationColor(annotation).toLowerCase()
+    const originalComment = commentForEditor(annotation.comment)
+    const originalTags = tagsToText(annotation.tags)
+    // 页码按提交口径 trim 后再比，否则编辑器一开「保存」就是亮的。
+    const pageChanged = draft.pageLabel.trim() !== annotation.pageLabel.trim()
+    return (
+      <div style={editorStyle}>
+        <div style={fieldRowStyle}>
+          <span style={fieldLabelStyle}>{t('annotation.color')}</span>
+          {ANNOTATION_COLORS.map((hex) => (
+            <button
+              key={hex}
+              type="button"
+              disabled={busy || hex === current}
+              onClick={() => save(annotation, { color: hex })}
+              title={hex === current ? t('annotation.currentColor') : t('annotation.setColor')}
+              aria-label={t('annotation.setColor')}
+              style={{
+                ...swatchButtonStyle,
+                background: hex,
+                boxShadow: hex === current ? `inset 0 0 0 2px Canvas, 0 0 0 2px ${ACCENT}` : 'inset 0 0 0 1px rgba(127,127,127,0.35)',
+              }}
+            />
+          ))}
+        </div>
+
+        <div style={fieldRowStyle}>
+          <span style={fieldLabelStyle}>{t('annotation.type')}</span>
+          {TOGGLE_TYPES.map((type) => (
+            <Chip
+              key={type}
+              active={annotation.type === type}
+              onClick={() => {
+                if (annotation.type !== type) save(annotation, { type })
+              }}
+            >
+              {typeLabel(t, type)}
+            </Chip>
+          ))}
+        </div>
+
+        <div style={fieldBlockStyle}>
+          <span style={fieldLabelStyle}>{t('annotation.comment')}</span>
+          <textarea
+            value={draft.comment}
+            placeholder={t('annotation.commentPlaceholder')}
+            disabled={busy}
+            onChange={(event) => setDraft((prev) => ({ ...prev, comment: event.target.value }))}
+            style={textareaStyle}
+            aria-label={t('annotation.comment')}
+          />
+          <div style={editorFootStyle}>
+            <span style={editorHintStyle}>{t('annotation.commentHint')}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || draft.comment === originalComment}
+              onClick={() => save(annotation, { comment: draft.comment })}
+            >
+              {t('annotation.save')}
+            </Button>
+          </div>
+        </div>
+
+        <div style={fieldRowStyle}>
+          <span style={fieldLabelStyle}>{t('annotation.pageLabel')}</span>
+          <input
+            value={draft.pageLabel}
+            placeholder={t('annotation.pagePlaceholder')}
+            disabled={busy}
+            onChange={(event) => setDraft((prev) => ({ ...prev, pageLabel: event.target.value }))}
+            style={inputStyle}
+            aria-label={t('annotation.pageLabel')}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || !pageChanged}
+            onClick={() => save(annotation, { pageLabel: draft.pageLabel })}
+            style={fieldButtonStyle}
+          >
+            {t('annotation.save')}
+          </Button>
+        </div>
+
+        <div style={fieldBlockStyle}>
+          <span style={fieldLabelStyle}>{t('annotation.tags')}</span>
+          <input
+            value={draft.tags}
+            placeholder={t('annotation.tagsPlaceholder')}
+            disabled={busy}
+            onChange={(event) => setDraft((prev) => ({ ...prev, tags: event.target.value }))}
+            style={inputStyle}
+            aria-label={t('annotation.tags')}
+          />
+          <div style={editorFootStyle}>
+            <span style={editorHintStyle}>{t('annotation.tagsHint')}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || draft.tags === originalTags}
+              onClick={() => save(annotation, { tags: parseTags(draft.tags) })}
+            >
+              {t('annotation.save')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -222,7 +507,7 @@ export function AnnotationList({
           const canInsert = text !== '' || hasComment(annotation.comment)
           return (
             <div key={key} style={{ padding: '8px 2px', borderBottom: '1px solid rgba(127,127,127,0.18)', opacity: located ? 1 : 0.55 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <Swatch color={annotationColor(annotation)} type={annotation.type} />
                 <span style={{ fontSize: 11, opacity: 0.65 }}>{typeLabel(t, annotation.type)}</span>
                 {annotation.pageLabel !== '' && (
@@ -250,6 +535,7 @@ export function AnnotationList({
                 >
                   {t('action.insertItemShort')}
                 </Button>
+                {rowButtons(annotation)}
               </div>
 
               {text !== '' && (
@@ -265,9 +551,17 @@ export function AnnotationList({
               )}
 
               {hasComment(annotation.comment) && <CommentBody comment={annotation.comment} />}
+
+              {editingKey === key && editor(annotation)}
             </div>
           )
         })
+      )}
+
+      {notice !== null && (
+        <div role="alert" style={noticeStyle}>
+          {notice}
+        </div>
       )}
     </div>
   )
@@ -332,4 +626,109 @@ const commentStyle = {
   opacity: 0.8,
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
+} as const
+
+const editorStyle = {
+  marginTop: 8,
+  padding: 8,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.25)',
+  background: 'rgba(127,127,127,0.05)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 9,
+  opacity: 1,
+} as const
+
+const fieldRowStyle = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 5,
+} as const
+
+const fieldBlockStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+} as const
+
+const fieldLabelStyle = {
+  fontSize: 11,
+  opacity: 0.65,
+  flexShrink: 0,
+  marginRight: 2,
+} as const
+
+const fieldButtonStyle = {
+  flexShrink: 0,
+  height: 20,
+  padding: '0 6px',
+  fontSize: 11,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+} as const
+
+const editorFootStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+} as const
+
+const editorHintStyle = {
+  flex: 1,
+  fontSize: 10.5,
+  lineHeight: 1.5,
+  opacity: 0.6,
+} as const
+
+/** 色块按钮：颜色本身就是标签，不需要文字；当前色用描边圈出来（禁用态也看得出选了哪个）。 */
+const swatchButtonStyle = {
+  width: 16,
+  height: 16,
+  padding: 0,
+  flexShrink: 0,
+  borderRadius: 3,
+  border: 'none',
+  cursor: 'pointer',
+} as const
+
+const textareaStyle = {
+  width: '100%',
+  minHeight: 64,
+  boxSizing: 'border-box',
+  padding: '6px 8px',
+  fontSize: 12.5,
+  lineHeight: 1.6,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'Canvas',
+  color: 'inherit',
+  fontFamily: 'inherit',
+  resize: 'vertical',
+} as const
+
+const inputStyle = {
+  flex: 1,
+  minWidth: 90,
+  boxSizing: 'border-box',
+  padding: '4px 8px',
+  fontSize: 12.5,
+  lineHeight: 1.5,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'Canvas',
+  color: 'inherit',
+  fontFamily: 'inherit',
+} as const
+
+const noticeStyle = {
+  marginTop: 6,
+  padding: '6px 8px',
+  borderRadius: 6,
+  fontSize: 12,
+  lineHeight: 1.6,
+  color: '#d29922',
+  background: 'rgba(210,153,34,0.1)',
+  overflowWrap: 'break-word',
 } as const

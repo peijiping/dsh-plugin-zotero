@@ -26,6 +26,17 @@ export const MCP_PROBE_TIMEOUT_MS = 800
 /** 单次集成 MCP 工具调用的超时（精读 PDF 可能很慢）。 */
 export const MCP_CALL_TIMEOUT_MS = 120_000
 
+/** 单次写请求超时（笔记正文较大，比读请求宽松）。 */
+export const WRITE_TIMEOUT_MS = 15_000
+
+/**
+ * 授权请求超时。
+ *
+ * `/api/local/authorize` 会挂住直到用户在 Zotero 弹窗里点按钮，因此这里等的是
+ * 「人读完一句话并挪一次鼠标」的时间，不能用 {@link REQUEST_TIMEOUT_MS}。
+ */
+export const AUTHORIZE_TIMEOUT_MS = 5 * 60_000
+
 /** 全文单条最大返回字节数，超出则以 truncated 标记。 */
 export const FULLTEXT_MAX_BYTES = 200 * 1024
 
@@ -49,6 +60,18 @@ export const STATIC_ROUTE_MATCH = '/dsh-zotero/static'
 /** 静态资产路由的剥离基准（带尾斜杠）。 */
 export const STATIC_ROUTE_PREFIX = `${STATIC_ROUTE_MATCH}/`
 
+/**
+ * 写端点要求的自定义请求头。
+ *
+ * 回环 + `sec-fetch-site` 只挡住「浏览器直接访问本机端口」，挡不住被诱发的表单
+ * 式请求。带上自定义头后任何跨源写都成为非简单请求，必须先过 preflight ——
+ * 而我们从不回应 CORS 预检，网页就驱动不了删除。头值内容无意义，存在即可。
+ */
+export const WRITE_HEADER = 'x-dsh-zotero-write'
+
+/** 授权弹窗里展示给用户的应用名。 */
+export const AUTHORIZE_APP_NAME = 'DSH Zotero 插件'
+
 // ---- 运行时设置（可由插件页配置覆盖） ---------------------------------------
 
 /** 可在 dsh「插件」页里编辑的字段；默认值即上面的常量。 */
@@ -61,6 +84,13 @@ export interface ZoteroSettings {
   defaultLimit: number
   /** 被用户关闭的集成 MCP 工具**原始名**（模型侧据此过滤）。 */
   disabledMcpTools: string[]
+  /**
+   * 写入总开关（默认关）。
+   *
+   * 同时是回滚开关：关掉后面板与模型侧的写端点一律拒绝，读能力不受影响。
+   * 面板是只读的，但写路径一旦可达就可能被误操作，故显式开关比隐式可用安全。
+   */
+  writeEnabled: boolean
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -72,6 +102,7 @@ let readSettings = (): ZoteroSettings => ({
   fulltextMaxBytes: FULLTEXT_MAX_BYTES,
   defaultLimit: DEFAULT_LIMIT,
   disabledMcpTools: [],
+  writeEnabled: false,
 })
 
 /**

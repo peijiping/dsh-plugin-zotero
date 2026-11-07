@@ -8,6 +8,11 @@
  *
  * 每条笔记默认折叠成一行标题（正文首段摘要），点击标题展开正文；
  * 行尾「引用」往会话输入框插一个笔记 chip，正文在提交那一刻才展开成文本。
+ *
+ * 开了写入开关后，这里还是笔记的新建 / 编辑 / 删除入口，三条约定：
+ * - 编辑取的是**原始 HTML**（`note-raw`），不是列表里那份清洗过的展示文本；
+ * - 含引文 / 标注锚点的笔记只给删除、不给编辑（`note.editable`）；
+ * - 删除是硬删（不进 Zotero 回收站），因此必须点两次。
  */
 
 import { useState, type ReactElement } from 'react'
@@ -15,19 +20,63 @@ import { useState, type ReactElement } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroNote } from '../zotero/types'
-import type { Translate } from './locales'
+import { createNote, deleteNote, fetchNoteRaw, updateNote } from './api'
+import { tpl, type Translate } from './locales'
+import { showToast } from './paneStore'
 
 interface Props {
   t: Translate
   notes: ZoteroNote[]
+  /** 新建的笔记挂在这个条目下。 */
+  itemKey: string
+  /** 配置里的「允许写入 Zotero」是否打开；关着时整块保持只读。 */
+  canWrite: boolean
+  /** 当前详情本身就是一条独立笔记：没有可挂载的父条目，不提供新建。 */
+  selfNote: boolean
   onInsert(note: ZoteroNote): void
+  /** 写成功后重取整份详情：Zotero 是唯一真相，本地不猜结果。 */
+  onChanged(): void
 }
 
-export function NoteList({ t, notes, onInsert }: Props): ReactElement | null {
+/** 正在等 Zotero 的动作；`read` 只取正文，不落库。 */
+type Pending = 'create' | 'edit' | 'delete' | 'read'
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;')
+}
+
+/**
+ * 纯文本 → 笔记 HTML。
+ *
+ * 笔记正文在 Zotero 里是 HTML，裸文本的换行会被糊成一段。空行分段、段内换行转
+ * `<br>`，其余一律转义：新建时用户写的是内容，不是标签。
+ */
+function textToHtml(text: string): string {
+  const blocks = text
+    .replace(/\r\n?/gu, '\n')
+    .split(/\n{2,}/u)
+    .map((block) => block.replace(/^\n+|\n+$/gu, ''))
+    .filter((block) => block !== '')
+  return blocks.map((block) => `<p>${escapeHtml(block).replace(/\n/gu, '<br>')}</p>`).join('')
+}
+
+export function NoteList({ t, notes, itemKey, canWrite, selfNote, onInsert, onChanged }: Props): ReactElement {
   // 展开的笔记 key 集合；默认全部折叠。
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  /** 正在编辑的笔记：原始 HTML 与其草稿。 */
+  const [editing, setEditing] = useState<{ key: string; html: string } | null>(null)
+  /** 新建草稿（纯文本）；`null` 表示新建框没打开。 */
+  const [composing, setComposing] = useState<string | null>(null)
+  const [pending, setPending] = useState<Pending | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  /** 已点过一次「删除」、正在等第二次确认的笔记 key。 */
+  const [armed, setArmed] = useState<string | null>(null)
 
-  if (notes.length === 0) return null
+  const busy = pending !== null
 
   function toggle(key: string): void {
     setExpanded((prev) => {
@@ -38,16 +87,153 @@ export function NoteList({ t, notes, onInsert }: Props): ReactElement | null {
     })
   }
 
+  /**
+   * 跑一次与 Zotero 的往返。
+   *
+   * 写成功只报一句就交给 {@link onChanged} 重取：版本号、日期、标题摘要都得以库里
+   * 那份为准，本地不拼。失败把 Host 的中文文案原样摊出来，里面已写明去哪点授权。
+   */
+  async function run(kind: Pending, action: () => Promise<unknown>): Promise<boolean> {
+    setNotice(null)
+    setPending(kind)
+    try {
+      await action()
+      if (kind !== 'read') {
+        showToast(kind === 'delete' ? t('note.deleted') : kind === 'edit' ? t('note.saved') : t('note.created'))
+        onChanged()
+      }
+      return true
+    } catch (error) {
+      setNotice(tpl(t(kind === 'read' ? 'note.readFailed' : 'note.writeFailed'), { message: errorMessage(error) }))
+      return false
+    } finally {
+      setPending(null)
+    }
+  }
+
+  function startEdit(note: ZoteroNote): void {
+    setArmed(null)
+    setComposing(null)
+    if (editing?.key === note.key) {
+      setEditing(null)
+      return
+    }
+    void run('read', async () => {
+      const raw = await fetchNoteRaw(note.key)
+      setEditing({ key: raw.key, html: raw.html })
+    })
+  }
+
+  function rowButtons(note: ZoteroNote): ReactElement | null {
+    if (!canWrite) return null
+    const editingThis = editing?.key === note.key
+    return (
+      <>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || !note.editable}
+          onClick={() => startEdit(note)}
+          title={note.editable ? t('note.edit') : t('note.lockedHint')}
+          style={insertButtonStyle}
+        >
+          {editingThis ? t('note.cancel') : t('note.edit')}
+        </Button>
+        {armed === note.key ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setArmed(null)
+              void run('delete', () => deleteNote({ key: note.key, version: note.version }))
+            }}
+            title={t('note.deleteWarn')}
+            style={insertButtonStyle}
+          >
+            {t('note.confirmDelete')}
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || editingThis}
+            onClick={() => {
+              setEditing(null)
+              setArmed(note.key)
+            }}
+            title={t('note.deleteWarn')}
+            style={insertButtonStyle}
+          >
+            {t('note.delete')}
+          </Button>
+        )}
+      </>
+    )
+  }
+
   return (
     <div>
       <style>{NOTE_CSS}</style>
+
+      {canWrite && !selfNote && composing === null && (
+        <div style={toolRowStyle}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setArmed(null)
+              setEditing(null)
+              setNotice(null)
+              setComposing('')
+            }}
+            title={t('note.newHint')}
+          >
+            {t('note.new')}
+          </Button>
+        </div>
+      )}
+
+      {composing !== null && (
+        <div style={editorStyle}>
+          <textarea
+            value={composing}
+            placeholder={t('note.bodyPlaceholder')}
+            disabled={busy}
+            onChange={(event) => setComposing(event.target.value)}
+            style={textareaStyle}
+            aria-label={t('note.new')}
+          />
+          <div style={editorFootStyle}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || composing.trim() === ''}
+              onClick={() => {
+                const draft = composing
+                void run('create', () => createNote({ parentItem: itemKey, note: textToHtml(draft) })).then((done) => {
+                  if (done) setComposing(null)
+                })
+              }}
+            >
+              {pending === 'create' ? t('note.saving') : t('note.save')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setComposing(null)}>
+              {t('note.cancel')}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {notes.map((note) => {
-        const open = expanded.has(note.key)
+        const editor = editing?.key === note.key ? editing : null
+        const open = editor === null && expanded.has(note.key)
         return (
           <div key={note.key} style={{ marginBottom: 10 }}>
             <div style={noteRowStyle}>
               <button type="button" onClick={() => toggle(note.key)} style={noteHeaderStyle}>
-                <span style={{ flexShrink: 0, opacity: 0.55 }}>{open ? '▾' : '▸'}</span>
+                <span style={{ flexShrink: 0, opacity: 0.55 }}>{open || editor !== null ? '▾' : '▸'}</span>
                 <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{note.title}</span>
                 {note.truncated && <span style={{ opacity: 0.55, flexShrink: 0 }}>{t('detail.noteTruncated')}</span>}
               </button>
@@ -60,7 +246,9 @@ export function NoteList({ t, notes, onInsert }: Props): ReactElement | null {
               >
                 {t('action.insertItemShort')}
               </Button>
+              {rowButtons(note)}
             </div>
+
             {open && (
               <div
                 className="dsh-zotero-note"
@@ -68,9 +256,48 @@ export function NoteList({ t, notes, onInsert }: Props): ReactElement | null {
                 style={noteBodyStyle}
               />
             )}
+
+            {editor !== null && (
+              <div style={editorStyle}>
+                <textarea
+                  value={editor.html}
+                  disabled={busy}
+                  onChange={(event) => setEditing({ key: note.key, html: event.target.value })}
+                  style={textareaStyle}
+                  aria-label={t('note.htmlHint')}
+                />
+                <div style={editorFootStyle}>
+                  <span style={editorHintStyle}>{t('note.htmlHint')}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || editor.html.trim() === ''}
+                    onClick={() => {
+                      const draft = editor.html
+                      void run('edit', () =>
+                        updateNote({ key: note.key, version: note.version, note: draft }),
+                      ).then((done) => {
+                        if (done) setEditing(null)
+                      })
+                    }}
+                  >
+                    {pending === 'edit' ? t('note.saving') : t('note.save')}
+                  </Button>
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(null)}>
+                    {t('note.cancel')}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )
       })}
+
+      {notice !== null && (
+        <div role="alert" style={noticeStyle}>
+          {notice}
+        </div>
+      )}
     </div>
   )
 }
@@ -106,6 +333,8 @@ export const NOTE_CSS = `
 
 const noteRowStyle = {
   display: 'flex',
+  // 三个短按钮（引用 / 编辑 / 删除）在右栏宽度下放不下时换行，而不是把标题挤没。
+  flexWrap: 'wrap',
   alignItems: 'center',
   gap: 6,
   padding: '4px 2px',
@@ -117,7 +346,7 @@ const noteHeaderStyle = {
   gap: 6,
   alignItems: 'baseline',
   flex: 1,
-  minWidth: 0,
+  minWidth: 120,
   padding: 0,
   fontSize: 12.5,
   lineHeight: 1.6,
@@ -144,5 +373,54 @@ const noteBodyStyle = {
   fontSize: 12.5,
   lineHeight: 1.75,
   opacity: 0.9,
+  overflowWrap: 'break-word',
+} as const
+
+const toolRowStyle = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  padding: '2px 0 8px',
+} as const
+
+const editorStyle = {
+  marginTop: 6,
+} as const
+
+const editorFootStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  marginTop: 4,
+} as const
+
+const editorHintStyle = {
+  flex: 1,
+  fontSize: 11,
+  opacity: 0.6,
+} as const
+
+const textareaStyle = {
+  width: '100%',
+  minHeight: 110,
+  boxSizing: 'border-box',
+  padding: '6px 8px',
+  fontSize: 12.5,
+  lineHeight: 1.6,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'rgba(127,127,127,0.06)',
+  color: 'inherit',
+  fontFamily: 'inherit',
+  resize: 'vertical',
+} as const
+
+const noticeStyle = {
+  marginTop: 6,
+  padding: '6px 8px',
+  borderRadius: 6,
+  fontSize: 12,
+  lineHeight: 1.6,
+  color: '#d29922',
+  background: 'rgba(210,153,34,0.1)',
   overflowWrap: 'break-word',
 } as const

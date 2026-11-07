@@ -35,14 +35,17 @@ import {
 } from 'pdfjs-dist'
 
 import type { ZoteroAnnotation } from '../../zotero/types'
-import { hasComment, parseComment } from '../annotationComment'
+import { commentForEditor, hasComment, parseComment } from '../annotationComment'
 import { annotationColor } from '../annotationRuns'
+import { createAnnotations, patchAnnotation } from '../api'
 import { tpl, type Translate } from '../locales'
+import { showToast } from '../paneStore'
+import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import { enqueueRender, markScrollActivity, waitForScrollIdle } from './renderQueue'
-import { SelectionBar } from './SelectionBar'
+import { SelectionBar, type MarkType } from './SelectionBar'
 import type { DocumentRendererProps } from './types'
 
 const MIN_SCALE = 0.5
@@ -59,6 +62,8 @@ const MAX_CANVAS_PIXELS = 5_242_880
 
 const EMPTY_PAGES: ReadonlySet<number> = new Set()
 const EMPTY_ANNOTATIONS: ZoteroAnnotation[] = []
+/** 卡片里能改评论的类型，与「标注」列表的编辑口径一致。 */
+const COMMENTABLE_TYPES = new Set(['highlight', 'underline'])
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -469,6 +474,7 @@ function observePages(
 export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const {
     t,
+    detail,
     source,
     annotations,
     viewerRef,
@@ -478,6 +484,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     onInsertExcerpt,
     onInsertAnnotation,
     onOpenInZotero,
+    onChanged,
   } = props
 
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -487,6 +494,14 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const rafRef = useRef<number | null>(null)
   const flashTimerRef = useRef<number | null>(null)
   const selectionRef = useRef<{ text: string; x: number; y: number } | null>(null)
+  /**
+   * 上一次鼠标松开时的选区快照。
+   *
+   * 必须是 `cloneRange()`：浮条上的按钮一按，实时选区就可能被清掉，而位置、原文、
+   * 排序键都要从这份 Range 里算。
+   */
+  const rangeRef = useRef<Range | null>(null)
+  const [marking, setMarking] = useState(false)
 
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -499,7 +514,17 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const [manualScale, setManualScale] = useState(1)
   const [currentPage, setCurrentPage] = useState(1)
   const [flashKey, setFlashKey] = useState<string | null>(null)
-  const [card, setCard] = useState<{ annotation: ZoteroAnnotation; x: number; y: number } | null>(null)
+  /**
+   * 卡片只记 key 和屏幕位置，内容每次从 `annotations` 里现取。
+   *
+   * 存快照会有两个坏味道：写成功后 `onChanged` 重取的新版本号进不了卡片，下一次保存
+   * 必撞 412；Zotero 那边改了评论，卡片还显示旧的。
+   */
+  const [card, setCard] = useState<{ key: string; x: number; y: number } | null>(null)
+  /** 非 null 即评论编辑器打开着，值就是草稿。 */
+  const [commentDraft, setCommentDraft] = useState<string | null>(null)
+  const [commentNotice, setCommentNotice] = useState<string | null>(null)
+  const [savingComment, setSavingComment] = useState(false)
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
   const [activePages, setActivePages] = useState<ReadonlySet<number>>(EMPTY_PAGES)
   const [retainedPages, setRetainedPages] = useState<ReadonlySet<number>>(EMPTY_PAGES)
@@ -662,11 +687,16 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     return annotation?.position?.pageIndex ?? -1
   }, [flashKey, annotations])
 
+  const cardAnnotation = useMemo(
+    () => (card === null ? null : annotations.find((item) => item.key === card.key) ?? null),
+    [card, annotations],
+  )
+
   const onAnnotationClick = useCallback(
     (annotation: ZoteroAnnotation, clientX: number, clientY: number): void => {
       const rootRect = rootRef.current?.getBoundingClientRect()
       if (rootRect === undefined) return
-      setCard({ annotation, x: clientX - rootRect.left, y: clientY - rootRect.top })
+      setCard({ key: annotation.key, x: clientX - rootRect.left, y: clientY - rootRect.top })
     },
     [],
   )
@@ -676,7 +706,10 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     if (rafRef.current !== null) return
     rafRef.current = window.requestAnimationFrame(() => {
       rafRef.current = null
-      if (selectionRef.current !== null) setSelection(null)
+      if (selectionRef.current !== null) {
+        rangeRef.current = null
+        setSelection(null)
+      }
       const element = scrollRef.current
       if (element === null) return
       const pages = element.firstElementChild
@@ -706,6 +739,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       || selectionObject.rangeCount === 0
       || root === null
     ) {
+      rangeRef.current = null
       setSelection(null)
       return
     }
@@ -713,16 +747,81 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     const range = selectionObject.getRangeAt(0)
     const container = scrollRef.current
     if (text === '' || container === null || !container.contains(range.commonAncestorContainer)) {
+      rangeRef.current = null
       setSelection(null)
       return
     }
     const rect = range.getBoundingClientRect()
     const rootRect = root.getBoundingClientRect()
+    rangeRef.current = range.cloneRange()
     setSelection({
       text,
       x: rect.left - rootRect.left + rect.width / 2,
       y: rect.top - rootRect.top,
     })
+  }
+
+  /**
+   * 把当前选区写成一条（跨页则每页一条）标注。
+   *
+   * 成功只报一句然后交给 {@link onChanged} 整份重取：位置、排序、版本号都以库里那份
+   * 为准，本地不拼。失败把原因摊出来 —— 未授权、未开写、类型不对都在 Host 挡成中文。
+   */
+  async function createMark(type: MarkType, color: string, comment: string): Promise<void> {
+    const range = rangeRef.current
+    const container = scrollRef.current
+    if (range === null || pdf === null || source === null || container === null) {
+      showToast(t('annotation.markUnavailable'))
+      return
+    }
+    setMarking(true)
+    try {
+      const drafts = await draftsFromSelection({
+        range,
+        pdf,
+        pagesRoot: container,
+        scale,
+        annotationType: type,
+        annotationColor: color,
+        annotationComment: comment,
+      })
+      if (drafts.length === 0) {
+        showToast(t('annotation.markUnavailable'))
+        return
+      }
+      await createAnnotations({ parentItem: source.attachmentKey, annotations: drafts })
+      showToast(drafts.length === 1 ? t('annotation.created') : tpl(t('annotation.createdMany'), { count: drafts.length }))
+      rangeRef.current = null
+      window.getSelection()?.removeAllRanges()
+      setSelection(null)
+      onChanged()
+    } catch (error) {
+      showToast(tpl(t('annotation.writeFailed'), { message: errorText(error) }))
+    } finally {
+      setMarking(false)
+    }
+  }
+
+  /**
+   * 保存卡片里的评论。
+   *
+   * 存的是编辑器口径的原文，Host 那边只做换行归一和长度上限，`<b>` 之类按 Zotero
+   * 自己的写法字面量入库。成功后交给 {@link onChanged}：新版本的评论由库里那份回填，
+   * 卡片不在本地拼。
+   */
+  async function saveComment(annotation: ZoteroAnnotation, comment: string): Promise<void> {
+    setSavingComment(true)
+    setCommentNotice(null)
+    try {
+      await patchAnnotation({ key: annotation.key, version: annotation.version, patch: { comment } })
+      showToast(t('annotation.saved'))
+      setCommentDraft(null)
+      onChanged()
+    } catch (error) {
+      setCommentNotice(tpl(t('annotation.writeFailed'), { message: errorText(error) }))
+    } finally {
+      setSavingComment(false)
+    }
   }
 
   function locate(annotationKey: string): boolean {
@@ -788,12 +887,136 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     }
   }, [card])
 
+  /** 换一条标注（或关掉卡片）时，未提交的评论草稿不能跟着串到下一条上。 */
+  useEffect(() => {
+    setCommentDraft(null)
+    setCommentNotice(null)
+  }, [card?.key])
+
   const estimateWidth = baseSize === null ? 0 : baseSize.width * scale
   const estimateHeight = baseSize === null ? 0 : baseSize.height * scale
   const rootWidth = rootRef.current?.clientWidth ?? 320
   const rootHeight = rootRef.current?.clientHeight ?? 400
   const cardLeft = card === null ? 0 : Math.max(8, Math.min(card.x, rootWidth - 268))
   const cardAbove = card !== null && card.y > rootHeight * 0.55
+
+  /**
+   * 点色块弹出的卡片。
+   *
+   * 评论就地可改（Zotero 卡片也是这个位置），但只在「开了写 + PDF 就绪 + 高亮或划线」
+   * 三者都成立时给入口；其余类型只读，避免把文本框、图片标注改成半残状态。
+   */
+  function annotationCard(shown: ZoteroAnnotation, cardY: number): ReactElement {
+    const canEditComment = detail.writeEnabled && source !== null && !loading && COMMENTABLE_TYPES.has(shown.type)
+    const originalComment = commentForEditor(shown.comment)
+    return (
+      <div
+        ref={cardRef}
+        role="dialog"
+        aria-label={typeLabel(t, shown.type)}
+        style={{
+          position: 'absolute',
+          left: cardLeft,
+          ...(cardAbove ? { bottom: rootHeight - cardY + 10 } : { top: cardY + 10 }),
+          width: 260,
+          maxHeight: '55%',
+          overflow: 'auto',
+          padding: '8px 10px',
+          borderRadius: 8,
+          background: 'Canvas',
+          color: 'CanvasText',
+          border: '1px solid rgba(127,127,127,0.32)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+          zIndex: 9,
+          fontSize: 12,
+          lineHeight: 1.6,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+          <span style={{ width: 9, height: 9, borderRadius: 2, background: annotationColor(shown) }} />
+          <span style={{ opacity: 0.7 }}>{typeLabel(t, shown.type)}</span>
+          <div style={{ flex: 1 }} />
+          <button type="button" onClick={() => setCard(null)} style={iconButtonStyle} aria-label={t('viewer.close')}>
+            ×
+          </button>
+        </div>
+        {shown.text.trim() !== '' && (
+          <p style={{ margin: '0 0 6px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {shown.text.trim()}
+          </p>
+        )}
+        {hasComment(shown.comment) && commentDraft === null && <CommentBody comment={shown.comment} />}
+        {canEditComment && commentDraft === null && (
+          <button
+            type="button"
+            onClick={() => {
+              setCommentNotice(null)
+              setCommentDraft(originalComment)
+            }}
+            style={cardLinkStyle}
+          >
+            {hasComment(shown.comment) ? t('annotation.editComment') : t('annotation.addComment')}
+          </button>
+        )}
+        {canEditComment && commentDraft !== null && (
+          <div style={{ marginTop: 6 }}>
+            <textarea
+              value={commentDraft}
+              rows={3}
+              disabled={savingComment}
+              placeholder={t('annotation.commentPlaceholder')}
+              aria-label={t('annotation.comment')}
+              onChange={(event) => setCommentDraft(event.target.value)}
+              style={cardTextareaStyle}
+            />
+            <div style={cardHintStyle}>{t('annotation.commentHint')}</div>
+            {commentNotice !== null && (
+              <div role="alert" style={cardNoticeStyle}>
+                {commentNotice}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <button
+                type="button"
+                disabled={savingComment || commentDraft === originalComment}
+                onClick={() => void saveComment(shown, commentDraft)}
+                style={smallButtonStyle}
+              >
+                {t('annotation.save')}
+              </button>
+              <button
+                type="button"
+                disabled={savingComment}
+                onClick={() => {
+                  setCommentDraft(null)
+                  setCommentNotice(null)
+                }}
+                style={smallButtonStyle}
+              >
+                {t('annotation.closeEdit')}
+              </button>
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          <button
+            type="button"
+            onClick={() => onInsertAnnotation(shown)}
+            style={smallButtonStyle}
+          >
+            {t('action.insertItemShort')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenInZotero((shown.position?.pageIndex ?? 0) + 1)}
+            style={smallButtonStyle}
+          >
+            {t('viewer.openInZoteroShort')}
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div ref={rootRef} style={rootStyle}>
@@ -860,65 +1083,19 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
           x={selection.x}
           y={selection.y}
           onInsert={onInsertExcerpt}
-          onDismiss={() => setSelection(null)}
+          onDismiss={() => {
+            rangeRef.current = null
+            setSelection(null)
+          }}
+          annotate={
+            detail.writeEnabled && source !== null && !loading
+              ? { busy: marking, onCreate: (type, color, comment) => void createMark(type, color, comment) }
+              : undefined
+          }
         />
       )}
 
-      {card !== null && (
-        <div
-          ref={cardRef}
-          role="dialog"
-          aria-label={typeLabel(t, card.annotation.type)}
-          style={{
-            position: 'absolute',
-            left: cardLeft,
-            ...(cardAbove ? { bottom: rootHeight - card.y + 10 } : { top: card.y + 10 }),
-            width: 260,
-            maxHeight: '55%',
-            overflow: 'auto',
-            padding: '8px 10px',
-            borderRadius: 8,
-            background: 'Canvas',
-            color: 'CanvasText',
-            border: '1px solid rgba(127,127,127,0.32)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
-            zIndex: 9,
-            fontSize: 12,
-            lineHeight: 1.6,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <span style={{ width: 9, height: 9, borderRadius: 2, background: annotationColor(card.annotation) }} />
-            <span style={{ opacity: 0.7 }}>{typeLabel(t, card.annotation.type)}</span>
-            <div style={{ flex: 1 }} />
-            <button type="button" onClick={() => setCard(null)} style={iconButtonStyle} aria-label={t('viewer.close')}>
-              ×
-            </button>
-          </div>
-          {card.annotation.text.trim() !== '' && (
-            <p style={{ margin: '0 0 6px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {card.annotation.text.trim()}
-            </p>
-          )}
-          {hasComment(card.annotation.comment) && <CommentBody comment={card.annotation.comment} />}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-            <button
-              type="button"
-              onClick={() => onInsertAnnotation(card.annotation)}
-              style={smallButtonStyle}
-            >
-              {t('action.insertItemShort')}
-            </button>
-            <button
-              type="button"
-              onClick={() => onOpenInZotero((card.annotation.position?.pageIndex ?? 0) + 1)}
-              style={smallButtonStyle}
-            >
-              {t('viewer.openInZoteroShort')}
-            </button>
-          </div>
-        </div>
-      )}
+      {card !== null && cardAnnotation !== null && annotationCard(cardAnnotation, card.y)}
     </div>
   )
 }
@@ -976,4 +1153,50 @@ const commentStyle = {
   opacity: 0.85,
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
+} as const
+
+/** 「添加评论 / 改评论」入口：卡片里不想要一个抢眼的按钮，文字链就够。 */
+const cardLinkStyle = {
+  marginTop: 4,
+  padding: 0,
+  fontSize: 11.5,
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  opacity: 0.7,
+  cursor: 'pointer',
+  textAlign: 'left',
+} as const
+
+const cardTextareaStyle = {
+  width: '100%',
+  minHeight: 60,
+  boxSizing: 'border-box',
+  padding: '6px 8px',
+  fontSize: 12.5,
+  lineHeight: 1.6,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'Canvas',
+  color: 'inherit',
+  fontFamily: 'inherit',
+  resize: 'vertical',
+} as const
+
+const cardHintStyle = {
+  marginTop: 4,
+  fontSize: 10.5,
+  lineHeight: 1.5,
+  opacity: 0.6,
+} as const
+
+const cardNoticeStyle = {
+  marginTop: 6,
+  padding: '6px 8px',
+  borderRadius: 6,
+  fontSize: 12,
+  lineHeight: 1.6,
+  color: '#d29922',
+  background: 'rgba(210,153,34,0.1)',
+  overflowWrap: 'break-word',
 } as const

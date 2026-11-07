@@ -31,6 +31,8 @@ interface Props {
   onLocateAnnotation(annotation: ZoteroAnnotation): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onInsertNote(note: ZoteroNote): void
+  /** 面板里的写操作成功后重取整份详情。 */
+  onChanged(): void
   annotationFilter: AnnotationFilter
   onAnnotationFilterChange(filter: AnnotationFilter): void
 }
@@ -73,6 +75,7 @@ export function InfoPanel({
   onLocateAnnotation,
   onInsertAnnotation,
   onInsertNote,
+  onChanged,
   annotationFilter,
   onAnnotationFilterChange,
 }: Props): ReactElement {
@@ -179,21 +182,31 @@ export function InfoPanel({
                 hasFulltext={detail.fulltext !== null}
                 truncated={detail.fulltext?.truncated === true}
                 filter={annotationFilter}
+                canWrite={detail.writeEnabled}
                 onFilterChange={onAnnotationFilterChange}
                 onLocate={onLocateAnnotation}
                 onInsert={onInsertAnnotation}
+                onChanged={onChanged}
               />
             </Block>
           )}
 
-          {notes.length > 0 && (
+          {(notes.length > 0 || (detail.writeEnabled && !selfNote)) && (
             <Block
               label={t('detail.notes')}
               hint={String(notes.length)}
               open={sections.notes ?? false}
               onToggle={() => toggle('notes')}
             >
-              <NoteList t={t} notes={notes} onInsert={onInsertNote} />
+              <NoteList
+                t={t}
+                notes={notes}
+                itemKey={detail.key}
+                canWrite={detail.writeEnabled}
+                selfNote={selfNote}
+                onInsert={onInsertNote}
+                onChanged={onChanged}
+              />
             </Block>
           )}
 

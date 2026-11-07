@@ -30,3 +30,29 @@ export function viewportBox(
     height: Math.abs(second[1] - first[1]),
   }
 }
+
+/**
+ * 视图坐标 → PDF 用户空间。
+ *
+ * {@link viewportBox} 的反向，换点方式与 Zotero 阅读器里的 `v2p()` 逐行同构（对角点
+ * 分别 `convertToPdfPoint`，再取包围盒）：照抄它，插件建的标注才和 Zotero 自建的那
+ * 条落在同一个矩形里。入参的 left/top 必须相对**页面元素**左上角，不是视口。
+ */
+export function pdfBox(
+  viewport: PageViewport,
+  box: ViewportBox,
+): [number, number, number, number] {
+  const first = viewport.convertToPdfPoint(box.left, box.top) as [number, number]
+  const second = viewport.convertToPdfPoint(box.left + box.width, box.top + box.height) as [number, number]
+  return [
+    Math.min(first[0], second[0]),
+    Math.min(first[1], second[1]),
+    Math.max(first[0], second[0]),
+    Math.max(first[1], second[1]),
+  ]
+}
+
+/** Zotero 存位置时的精度（`roundPositionValues`：乘 1e3 四舍五入）。 */
+export function roundPosition(value: number): number {
+  return Math.round(value * 1e3) / 1e3
+}
