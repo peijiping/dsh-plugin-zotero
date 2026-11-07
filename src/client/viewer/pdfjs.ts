@@ -21,6 +21,13 @@ export const PDF_CSS = `
   overflow: auto;
   background: rgba(127,127,127,0.10);
   overscroll-behavior: contain;
+  /* 滚动位置由我们自己锚定（缩放定点、续读跳页），别让浏览器顺带再调一次。 */
+  overflow-anchor: none;
+}
+/* 滚动中不画文本层：字本来就是透明的，它只在划选时才有用；撤掉能省下大面积
+   字形光栅化，滚动就只剩搬 canvas 的像素。停手 140ms 后由 JS 摘掉标记放回来。 */
+.dsh-zotero-pdf-scroll[data-zp-scrolling] .dsh-zotero-pdf-text {
+  visibility: hidden;
 }
 .dsh-zotero-pdf-pages {
   display: flex;

@@ -11,6 +11,11 @@
  * 绘制结果先画进脱离文档的 canvas，完成后整块替换进页面，
  * 因此可见 canvas 的尺寸与内容总是一起更新——滚动时不会出现
  * 「canvas 已扩到新尺寸但还没画」的黑色空档。
+ *
+ * 滚动的帧预算优先给滚动本身：pdf.js 每个绘制分片最多占主线程 15ms，所以
+ * 分片节奏由 `renderQueue.paceChunk` 接管（滚动中远处的页等停手、近处的页隔帧），
+ * 文本层与选区框校正等停稳后才做，滚动期间文本层直接不上屏（字是透明的，撤掉
+ * 不影响画面）；页码定位读缓存的页面 top 数组，不在滚动帧里读 `offsetTop`。
  */
 
 import {
@@ -45,7 +50,15 @@ import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
-import { enqueueRender, markScrollActivity, waitForScrollIdle } from './renderQueue'
+import {
+  enqueueRender,
+  markScrollActivity,
+  paceChunk,
+  SCROLL_IDLE_MS,
+  SCROLL_NEAR_PRIORITY,
+  scrollIdleFor,
+  waitForScrollIdle,
+} from './renderQueue'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import type { DocumentOutlineItem, DocumentRendererProps } from './types'
 import { useReadPosition } from './useReadPosition'
@@ -55,6 +68,8 @@ const MAX_SCALE = 3
 const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3]
 const GUTTER = 12
 const FLASH_MS = 1600
+/** 停手这么久就把文本层放回屏幕（比绘制让路的判定短：字要尽早能选）。 */
+const SCROLLING_FLAG_MS = 140
 /** 进入这个范围就开始绘制（提前约一屏，滚动到位时通常已画好）。 */
 const RENDER_MARGIN = '100% 0px'
 /** 离开这个范围才释放像素；上下各留约两屏，回滚不会重新渲染。 */
@@ -153,30 +168,29 @@ const TEXT_CHUNK_ITEMS = 8
 
 /**
  * 把整份文本切成小片、每帧喂一片。
+ *
  * TextLayer 对每个流片段是同步处理完的，一次灌整份会长时间占住主线程。
+ * 每片之前还要等滚动停稳：插 span 会带来样式重算与布局失效，这些都不该落在
+ * 滚动的帧上（不滚动时 `waitForScrollIdle` 立即兑现，不影响正常速度）。
  */
 function chunkedText(content: PdfTextContent): ReadableStream<PdfTextContent> {
   let index = 0
   let cancelled = false
   return new ReadableStream<PdfTextContent>({
-    pull(controller) {
-      return new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => {
-          if (cancelled) {
-            resolve()
-            return
-          }
-          if (index >= content.items.length) {
-            controller.close()
-            resolve()
-            return
-          }
-          const items = content.items.slice(index, index + TEXT_CHUNK_ITEMS)
-          index += items.length
-          controller.enqueue({ ...content, items })
-          resolve()
-        })
+    async pull(controller): Promise<void> {
+      await waitForScrollIdle()
+      if (cancelled) return
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve())
       })
+      if (cancelled) return
+      if (index >= content.items.length) {
+        controller.close()
+        return
+      }
+      const items = content.items.slice(index, index + TEXT_CHUNK_ITEMS)
+      index += items.length
+      controller.enqueue({ ...content, items })
     },
     cancel() {
       cancelled = true
@@ -341,6 +355,9 @@ const PdfPage = memo(function PdfPage({
 
     const cancelQueued = enqueueRender({
       priority: () => priorityOf(pageNumber),
+      // 预渲染余量里的远处页不在滚动中开画：一片就要吃掉主线程 15ms，
+      // 而那些帧正被滚动用着；滚完它往往也已经不在范围里了。
+      ready: () => priorityOf(pageNumber) <= SCROLL_NEAR_PRIORITY || scrollIdleFor() >= SCROLL_IDLE_MS,
       start: async () => {
         if (cancelled) return
         const viewport = page.getViewport({ scale })
@@ -357,6 +374,13 @@ const PdfPage = memo(function PdfPage({
           viewport,
           transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
         })
+        // pdf.js 默认是「上一片画完，下一个 rAF 接着画」，也就是每帧都塞满 15ms。
+        // 这里把续排的时机接管过来，滚动时让出帧（见 `paceChunk`）。
+        renderTask.onContinue = (scheduleNext: () => void): void => {
+          paceChunk(priorityOf(pageNumber), () => {
+            if (!cancelled) scheduleNext()
+          })
+        }
         task = renderTask
         try {
           await renderTask.promise
@@ -388,28 +412,28 @@ const PdfPage = memo(function PdfPage({
     let layer: TextLayer | null = null
     const viewport = page.getViewport({ scale })
 
-    waitForScrollIdle()
-      .then(() => {
-        if (cancelled) return undefined
-        return page.getTextContent()
+    const build = async (): Promise<void> => {
+      await waitForScrollIdle()
+      if (cancelled) return
+      const content = await page.getTextContent()
+      if (cancelled) return
+      container.textContent = ''
+      const textLayer = new TextLayer({
+        textContentSource: chunkedText(content),
+        container,
+        viewport,
       })
-      .then((content) => {
-        if (cancelled || content === undefined) return undefined
-        container.textContent = ''
-        const textLayer = new TextLayer({
-          textContentSource: chunkedText(content),
-          container,
-          viewport,
-        })
-        layer = textLayer
-        return textLayer.render().then(() => {
-          if (cancelled) return
-          fitSelectionBoxes(textLayer, content, viewport)
-          moveLineBreaksOffscreen(container)
-          textScaleRef.current = scale
-        })
-      })
-      .catch(() => undefined)
+      layer = textLayer
+      await textLayer.render()
+      if (cancelled) return
+      // 校正选区框要逐 span 量一次尺寸（一次强制布局），同样别落在滚动帧上。
+      await waitForScrollIdle()
+      if (cancelled) return
+      fitSelectionBoxes(textLayer, content, viewport)
+      moveLineBreaksOffscreen(container)
+      textScaleRef.current = scale
+    }
+    void build().catch(() => undefined)
 
     return () => {
       cancelled = true
@@ -537,6 +561,12 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const anchorRef = useRef<{ ratio: number; y: number } | null>(null)
   const rafRef = useRef<number | null>(null)
   const flashTimerRef = useRef<number | null>(null)
+  /** 「正在滚动」标记的定时器：停手一会儿后把文本层放回屏幕上。 */
+  const scrollingTimerRef = useRef<number | null>(null)
+  /** 页面 top 缓存（页码定位用），见 `pageAt`。 */
+  const topsRef = useRef<number[] | null>(null)
+  /** 滚动容器可视高度（只随尺寸变，不随滚动变），免得每帧读一次 `clientHeight`。 */
+  const viewportHeightRef = useRef(0)
   const selectionRef = useRef<{ text: string; x: number; y: number } | null>(null)
   /**
    * 上一次鼠标松开时的选区快照。
@@ -655,11 +685,14 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     const element = scrollRef.current
     if (element === null) return
     const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? 0
-      if (width > 0) setContainerWidth(width)
+      const rect = entries[0]?.contentRect
+      if (rect === undefined) return
+      if (rect.width > 0) setContainerWidth(rect.width)
+      viewportHeightRef.current = rect.height
     })
     observer.observe(element)
     setContainerWidth(element.clientWidth)
+    viewportHeightRef.current = element.clientHeight
     return () => observer.disconnect()
   }, [])
 
@@ -675,6 +708,22 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       renderObserver.disconnect()
       retainObserver.disconnect()
     }
+  }, [pageCount])
+
+  /**
+   * 页码 top 缓存：页面总高变了（尺度、页数、个别页与估算尺寸不同）就作废。
+   *
+   * 观察的是页面容器的总高，一次改动只回调一次，比每页各挂一个观察器便宜。
+   */
+  useEffect(() => {
+    const pages = scrollRef.current?.firstElementChild
+    if (pages === null || pages === undefined) return
+    topsRef.current = null
+    const observer = new ResizeObserver(() => {
+      topsRef.current = null
+    })
+    observer.observe(pages)
+    return () => observer.disconnect()
   }, [pageCount])
 
   const fitScale = baseSize !== null && containerWidth > 0
@@ -798,35 +847,101 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     [],
   )
 
-  function onScroll(): void {
-    scrolledRef.current = true
-    markScrollActivity()
-    if (rafRef.current !== null) return
-    rafRef.current = window.requestAnimationFrame(() => {
-      rafRef.current = null
-      if (selectionRef.current !== null) {
-        rangeRef.current = null
-        setSelection(null)
+  /**
+   * 视口中线落在第几页（1 基）。
+   *
+   * 页面 top 缓存成数组，滚动帧里只做二分。不读 `offsetTop`：一旦有 DOM 改动
+   * （画布、文本层刚插进来）读它就会强制整棵树同步布局，正好压在滚动帧上。
+   */
+  const pageAt = useCallback((element: HTMLDivElement): number => {
+    const pages = element.firstElementChild
+    if (pages === null) return 1
+    const count = pages.children.length
+    let tops = topsRef.current
+    if (tops === null || tops.length !== count) {
+      const next = new Array<number>(count)
+      for (let index = 0; index < count; index += 1) {
+        next[index] = (pages.children[index] as HTMLElement).offsetTop
       }
-      const element = scrollRef.current
-      if (element === null) return
-      const pages = element.firstElementChild
-      if (pages === null) return
-      // 页高一致，按 offsetTop 二分定位；避免每帧遍历全部页面。
-      const middle = element.scrollTop + element.clientHeight / 2
-      let low = 0
-      let high = pages.children.length - 1
-      while (low <= high) {
-        const index = (low + high) >> 1
-        const child = pages.children[index] as HTMLElement | undefined
-        if (child === undefined) break
-        if (child.offsetTop <= middle) low = index + 1
-        else high = index - 1
+      tops = next
+      topsRef.current = next
+    }
+    const middle = element.scrollTop + viewportHeightRef.current / 2
+    let low = 0
+    let high = count - 1
+    while (low <= high) {
+      const index = (low + high) >> 1
+      if ((tops[index] ?? 0) <= middle) low = index + 1
+      else high = index - 1
+    }
+    return Math.max(1, low)
+  }, [])
+
+  /**
+   * 滚动监听：更新页码，并给容器打上「正在滚动」标记。
+   *
+   * 用原生 passive 监听而不是 React 合成事件：触控板/滚轮一秒能来上百条事件，
+   * 合成事件每条都要过一遍 React 的派发与批量更新流程。
+   * 标记走 `data-` 属性而不是 state —— 每个滚动动作都要改，不该引起重渲染；
+   * CSS 据此在滚动期间把文本层撤下（见 `PDF_CSS`）。
+   */
+  useEffect(() => {
+    const element = scrollRef.current
+    if (element === null) return
+    /**
+     * 鼠标按住时不撤文本层：拖选到边缘会触发自动滚动，而 `visibility: hidden`
+     * 的元素不参与命中测试，撤掉会让原生选区当场失去落点。
+     */
+    let pointerHeld = false
+    const press = (): void => {
+      pointerHeld = true
+      // 一按下就把文本层放回来：接下来多半是划选，晚 140ms 会让这一次划选落空。
+      if (scrollingTimerRef.current !== null) {
+        window.clearTimeout(scrollingTimerRef.current)
+        scrollingTimerRef.current = null
       }
-      const page = Math.max(1, low)
-      setCurrentPage((previous) => (previous === page ? previous : page))
-    })
-  }
+      delete element.dataset.zpScrolling
+    }
+    const release = (): void => {
+      pointerHeld = false
+    }
+    const onScroll = (): void => {
+      scrolledRef.current = true
+      markScrollActivity()
+      if (!pointerHeld) {
+        if (element.dataset.zpScrolling !== '1') element.dataset.zpScrolling = '1'
+        if (scrollingTimerRef.current !== null) window.clearTimeout(scrollingTimerRef.current)
+        scrollingTimerRef.current = window.setTimeout(() => {
+          scrollingTimerRef.current = null
+          delete element.dataset.zpScrolling
+        }, SCROLLING_FLAG_MS)
+      }
+      if (rafRef.current !== null) return
+      rafRef.current = window.requestAnimationFrame(() => {
+        rafRef.current = null
+        if (selectionRef.current !== null) {
+          rangeRef.current = null
+          setSelection(null)
+        }
+        const page = pageAt(element)
+        setCurrentPage((previous) => (previous === page ? previous : page))
+      })
+    }
+    element.addEventListener('scroll', onScroll, { passive: true })
+    element.addEventListener('pointerdown', press)
+    window.addEventListener('pointerup', release)
+    window.addEventListener('pointercancel', release)
+    return () => {
+      element.removeEventListener('scroll', onScroll)
+      element.removeEventListener('pointerdown', press)
+      window.removeEventListener('pointerup', release)
+      window.removeEventListener('pointercancel', release)
+      if (scrollingTimerRef.current !== null) {
+        window.clearTimeout(scrollingTimerRef.current)
+        scrollingTimerRef.current = null
+      }
+    }
+  }, [pageAt])
 
   function onMouseUp(): void {
     const selectionObject = window.getSelection()
@@ -1007,7 +1122,6 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       <div
         ref={scrollRef}
         className="dsh-zotero-pdf-scroll"
-        onScroll={onScroll}
         onMouseUp={onMouseUp}
       >
         {pageCount > 0 && (
