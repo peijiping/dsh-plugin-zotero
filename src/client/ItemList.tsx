@@ -4,7 +4,9 @@
  * 头部含范围名、条数与搜索框；条目行单击选中、双击才开独立 tab，ctrl / cmd 点选
  * 多选，右上角「引用 N」把选中的每条各插一个胶囊。右键单行仍能直接插该条引用。
  * 列表分页（加载更多），筛选后为空与本来为空分开提示。
- * 窄面板保持紧凑：行高小、元数据弱化、按钮短标签。
+ *
+ * 行内排版是两行：第一行只放标题，第二行小字灰色放「类型 + 年份 + 作者」，
+ * 行与行之间用一条浅色细线分隔。
  */
 
 import { useState, type ReactElement } from 'react'
@@ -12,7 +14,7 @@ import { useState, type ReactElement } from 'react'
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
-import { ItemTypeIcon } from './itemType'
+import { ItemTypeIcon, itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import { TREE_ROOT_ID } from './paneStore'
@@ -71,37 +73,73 @@ const titleRowStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+/** 行 hover 只染未选中行：选中态用内联背景，优先级更高，不需要额外规则。 */
+const ITEM_CSS = '.dsh-zotero-item-row:hover{background:rgba(127,127,127,0.08)}'
+
+/** 行外壳：只负责那条浅色分隔线，通栏铺满。
+ *
+ * 用 flex 是为了「撑满」：Menu 的 anchor 外面会包一层按内容收窄的元素，
+ * 做成 flex 容器后那层被拉伸到整行宽，里面的标题才有确定的宽度可截断。
+ */
+const itemShellStyle: React.CSSProperties = {
+  display: 'flex',
+  borderBottom: '1px solid rgba(127,127,127,0.14)',
+}
+
 const itemRowStyle: React.CSSProperties = {
   display: 'flex',
-  gap: 6,
-  alignItems: 'baseline',
-  padding: '3px 6px 3px 8px',
-  fontSize: 12.5,
-  lineHeight: 1.5,
-  borderRadius: 5,
+  alignItems: 'flex-start',
+  gap: 7,
+  // Menu 的 anchor 外层是收缩宽度的容器，不显式铺满就会按内容宽度收缩。
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '7px 8px',
+  borderRadius: 6,
   cursor: 'pointer',
 }
 
+/** 标题独占第一行，可截断。 */
 const itemTitleStyle: React.CSSProperties = {
-  flex: 1,
+  display: 'block',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontSize: 13,
+  lineHeight: 1.45,
+}
+
+/** 第二行：类型 + 年份 + 作者，小字灰。 */
+const itemMetaStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 6,
+  minWidth: 0,
+  marginTop: 1,
+  fontSize: 11,
+  lineHeight: 1.4,
+  opacity: 0.5,
+}
+
+/** 类型与年份比作者再淡一点：作者是主要识别信息。 */
+const itemMetaTypeStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85 }
+
+const itemMetaYearStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85 }
+
+const itemMetaTextStyle: React.CSSProperties = {
+  flex: '1 1 auto',
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 }
 
-const itemMetaStyle: React.CSSProperties = {
-  ...itemTitleStyle,
-  flex: '0 0 auto',
-  maxWidth: '48%',
-  opacity: 0.5,
-  fontSize: 11.5,
-}
+const itemBodyStyle: React.CSSProperties = { flex: 1, minWidth: 0 }
 
 const itemIconStyle: React.CSSProperties = {
   display: 'flex',
-  alignSelf: 'center',
   flexShrink: 0,
+  marginTop: 3,
 }
 
 /** 头部引用按钮的紧凑尺寸。 */
@@ -147,38 +185,48 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
 }): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
   const read = isRead(item)
-  const meta = [item.creators, item.year].filter((part) => part !== '').join(' · ')
+  const typeLabel = itemTypeLabel(t, item.itemType)
   return (
-    <Menu
-      open={menuOpen}
-      onClose={() => setMenuOpen(false)}
-      onSelect={(id) => {
-        setMenuOpen(false)
-        if (id === 'insert-item') onInsert(item)
-      }}
-      align="end"
-      portal
-      items={[{ id: 'insert-item', label: t('action.insertItem') }]}
-      anchor={(
-        <div
-          title={itemTooltip(t, item)}
-          onClick={(event) => onSelect(item.key, event.ctrlKey || event.metaKey)}
-          onDoubleClick={() => onOpen(item.key, item.title)}
-          onContextMenu={(event) => {
-            event.preventDefault()
-            setMenuOpen(true)
-          }}
-          style={{
-            ...itemRowStyle,
-            background: selected ? 'rgba(80,140,255,0.18)' : 'transparent',
-          }}
-        >
-          <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
-          <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-          {meta !== '' && <span style={itemMetaStyle}>{meta}</span>}
-        </div>
-      )}
-    />
+    <div style={itemShellStyle}>
+      <Menu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onSelect={(id) => {
+          setMenuOpen(false)
+          if (id === 'insert-item') onInsert(item)
+        }}
+        align="end"
+        portal
+        items={[{ id: 'insert-item', label: t('action.insertItem') }]}
+        anchor={(
+          <div
+            className="dsh-zotero-item-row"
+            title={itemTooltip(t, item)}
+            onClick={(event) => onSelect(item.key, event.ctrlKey || event.metaKey)}
+            onDoubleClick={() => onOpen(item.key, item.title)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setMenuOpen(true)
+            }}
+            style={selected
+              ? { ...itemRowStyle, background: 'rgba(80,140,255,0.16)' }
+              : itemRowStyle}
+          >
+            <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
+            <div style={itemBodyStyle}>
+              <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
+              {(typeLabel !== '' || item.year !== '' || item.creators !== '') && (
+                <div style={itemMetaStyle}>
+                  {typeLabel !== '' && <span style={itemMetaTypeStyle}>{typeLabel}</span>}
+                  {item.year !== '' && <span style={itemMetaYearStyle}>{item.year}</span>}
+                  {item.creators !== '' && <span style={itemMetaTextStyle}>{item.creators}</span>}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      />
+    </div>
   )
 }
 
@@ -284,8 +332,9 @@ export function ItemList(props: Props): ReactElement {
         onClick={(event) => {
           if (event.target === event.currentTarget) onClearSelection()
         }}
-        style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '4px 6px 8px' }}
+        style={{ flex: 1, minHeight: 0, overflowX: 'hidden', overflowY: 'auto', padding: '2px 6px 8px' }}
       >
+        <style>{ITEM_CSS}</style>
         {itemsError !== null && items.length === 0 ? (
           <div style={{ padding: '12px 8px', fontSize: 12.5, color: '#d29922' }}>
             <p style={{ margin: '0 0 8px' }}>{tpl(t('list.loadFailed'), { message: itemsError })}</p>
