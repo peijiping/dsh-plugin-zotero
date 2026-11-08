@@ -226,6 +226,9 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
   const q = params.get('q') ?? undefined
   const tags = params.getAll('tag').map((tag) => tag.trim()).filter((tag) => tag !== '')
   const tagMode = params.get('tagMode') === 'any' ? 'any' : 'all'
+  // 排序：只认按标题，方向缺省正序；不认识的取值一律退回原始顺序。
+  const sortDirection = params.get('direction') === 'desc' ? 'desc' : 'asc'
+  const sort = params.get('sort') === 'title' ? 'title' as const : undefined
   const limit = clampLimit(params.get('limit'))
   const offset = parseOffset(params.get('offset'))
   const result = await zotero.listItems({
@@ -234,6 +237,8 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
     q,
     tags,
     tagMode,
+    sort,
+    direction: sort === undefined ? undefined : sortDirection,
     limit,
     offset,
   })

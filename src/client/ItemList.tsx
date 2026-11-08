@@ -17,6 +17,7 @@ import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
 import { ItemTypeIcon, itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import type { ItemSort } from './paneStore'
 import { TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
 import { SearchField } from './SearchField'
@@ -32,12 +33,16 @@ interface Props {
   itemsError: string | null
   selectedTags: ReadonlySet<string>
   tagMode: 'all' | 'any'
+  /** 当前标题排序状态（原始 / 正序 / 倒序）。 */
+  sort: ItemSort
   /** 列表里被点选的条目 key；引用按钮按这批插 chip。 */
   selectedItemKeys: ReadonlySet<string>
   onSearch(text: string): void
   onRemoveTag(name: string): void
   onRetry(): void
   onLoadMore(): void
+  /** 点排序图标：原始 → 正序 → 倒序 循环。 */
+  onCycleSort(): void
   onOpenItem(key: string, title: string): void
   /** 单击选中；`append`（ctrl / cmd）时切换该项，支持多选。 */
   onSelectItem(key: string, append: boolean): void
@@ -151,6 +156,54 @@ const citeButtonStyle: React.CSSProperties = {
   lineHeight: 1.2,
 }
 
+/** 排序图标按钮：与引用按钮同高，只放图标。 */
+const sortButtonStyle: React.CSSProperties = {
+  flexShrink: 0,
+  height: 20,
+  padding: '0 4px',
+  lineHeight: 1,
+}
+
+/** 排序生效时的图标颜色（与列表选中态同一支蓝）。 */
+const SORT_ACTIVE_COLOR = '#508cff'
+
+/**
+ * 排序图标：三条长短不一的横线 + 右侧方向箭头。
+ *
+ * 未排序时箭头两头都画（提示「可点」）且整体偏淡；正序朝上、倒序朝下并染色。
+ */
+function SortIcon({ sort }: { sort: ItemSort }): ReactElement {
+  const active = sort !== 'none'
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable="false"
+    >
+      <path d="M2.4 3.6h7.2M2.4 8h4.8M2.4 12.4h2.8" opacity={active ? 1 : 0.75} />
+      {sort === 'none' ? (
+        <path d="M13 4.2v7.6M13 4.2l-1.5 1.7M13 4.2l1.5 1.7M13 11.8l-1.5-1.7M13 11.8l1.5-1.7" opacity={0.5} />
+      ) : (
+        <path d={sort === 'asc' ? 'M13 12.2V4M13 4l-1.7 1.9M13 4l1.7 1.9' : 'M13 3.8V12M13 12l-1.7-1.9M13 12l1.7-1.9'} />
+      )}
+    </svg>
+  )
+}
+
+/** 排序按钮的提示文案随状态变，点了知道下一步会变成什么。 */
+function sortHint(t: Translate, sort: ItemSort): string {
+  if (sort === 'asc') return t('list.sortAsc')
+  if (sort === 'desc') return t('list.sortDesc')
+  return t('list.sortNone')
+}
+
 /** 筛选摘要里的小胶囊。 */
 const chipStyle: React.CSSProperties = {
   display: 'inline-flex',
@@ -242,11 +295,13 @@ export function ItemList(props: Props): ReactElement {
     itemsError,
     selectedTags,
     tagMode,
+    sort,
     selectedItemKeys,
     onSearch,
     onRemoveTag,
     onRetry,
     onLoadMore,
+    onCycleSort,
     onOpenItem,
     onSelectItem,
     onClearSelection,
@@ -296,6 +351,18 @@ export function ItemList(props: Props): ReactElement {
               {t('action.insertItemShort')}
             </Button>
           ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            title={sortHint(t, sort)}
+            aria-label={sortHint(t, sort)}
+            style={sort === 'none'
+              ? sortButtonStyle
+              : { ...sortButtonStyle, color: SORT_ACTIVE_COLOR }}
+            onClick={onCycleSort}
+          >
+            <SortIcon sort={sort} />
+          </Button>
         </div>
         <SearchField
           value={query}

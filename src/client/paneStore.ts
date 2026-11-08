@@ -30,8 +30,28 @@ const ITEMS_PAGE_SIZE = 50
 /** 提示条停留时长。 */
 const TOAST_MS = 3000
 
+/** 列表排序的存储键（localStorage，跨会话与重启都记住）。 */
+const SORT_KEY = 'dsh-plugin-zotero.itemSort'
+
 /** 文库根节点的 id（只存在于客户端，不对应任何 Zotero 分类）。 */
 export const TREE_ROOT_ID = '__library__'
+
+/**
+ * 条目列表排序：`none` 走 Zotero 原始顺序，其余按标题。
+ *
+ * 排序由 Host 转成 Zotero 本地 API 的 `sort=title&direction=` 参数，分页才连得起来
+ * （只排已加载的那几页会串行错乱）。
+ */
+export type ItemSort = 'none' | 'asc' | 'desc'
+
+function readSort(): ItemSort {
+  try {
+    const value = window.localStorage.getItem(SORT_KEY)
+    return value === 'asc' || value === 'desc' ? value : 'none'
+  } catch {
+    return 'none'
+  }
+}
 
 export interface PaneState {
   health: ZoteroHealth | null
@@ -55,6 +75,9 @@ export interface PaneState {
   itemsError: string | null
   /** 列表里被点选的条目（单击选中、ctrl/cmd 加选，整目录引用按这批插 chip）。 */
   selectedItemKeys: ReadonlySet<string>
+
+  /** 列表排序（全局生效，存 localStorage）。 */
+  sort: ItemSort
 
   /** 文库级标签；`null` 表示还没成功拉取过。 */
   tags: ZoteroTag[] | null
@@ -92,6 +115,7 @@ function initialState(): PaneState {
     itemsLoading: false,
     itemsError: null,
     selectedItemKeys: new Set(),
+    sort: readSort(),
     tags: null,
     tagsLoading: false,
     tagsError: null,
@@ -367,6 +391,8 @@ export function reloadItems(options: { reset: boolean; append?: boolean }): void
     q: state.query.trim(),
     tags: tags.length === 0 ? undefined : tags,
     tagMode: tags.length === 0 ? undefined : state.tagMode,
+    sort: state.sort === 'none' ? undefined : 'title',
+    direction: state.sort === 'none' ? undefined : state.sort,
     limit: ITEMS_PAGE_SIZE,
     offset,
   }, controller.signal)
@@ -393,6 +419,22 @@ export function reloadItems(options: { reset: boolean; append?: boolean }): void
 export function loadMoreItems(): void {
   if (state.itemsLoading || state.items.length >= state.itemsTotal) return
   reloadItems({ reset: false, append: true })
+}
+
+/**
+ * 切换标题排序：原始顺序 → 正序 → 倒序 → 原始顺序。
+ *
+ * 状态写进 localStorage：所有会话共用同一块面板，重启后也保持上次的选择。
+ */
+export function cycleItemSort(): void {
+  const next: ItemSort = state.sort === 'none' ? 'asc' : state.sort === 'asc' ? 'desc' : 'none'
+  patch({ sort: next })
+  try {
+    window.localStorage.setItem(SORT_KEY, next)
+  } catch {
+    // 隐私模式等禁用 localStorage 时忽略，本次会话内仍然生效。
+  }
+  reloadItems({ reset: true })
 }
 
 export function retryItems(): void {

@@ -98,6 +98,9 @@ const zh: Record<string, string> = {
   'list.emptyFiltered': '没有符合条件的条目',
   'list.loadFailed': '条目列表加载失败：{message}',
   'list.loadMore': '加载更多',
+  'list.sortNone': '按标题排序（当前为 Zotero 原始顺序）',
+  'list.sortAsc': '标题正序 A→Z（再点切换为倒序）',
+  'list.sortDesc': '标题倒序 Z→A（再点恢复原始顺序）',
 
   'tags.title': '标签',
   'tags.filterPlaceholder': '筛选标签名称',
@@ -435,6 +438,9 @@ const en: Record<string, string> = {
   'list.emptyFiltered': 'No items match the filters',
   'list.loadFailed': 'Failed to load items: {message}',
   'list.loadMore': 'Load more',
+  'list.sortNone': 'Sort by title (currently Zotero default order)',
+  'list.sortAsc': 'Title A→Z (click again for Z→A)',
+  'list.sortDesc': 'Title Z→A (click again for default order)',
 
   'tags.title': 'Tags',
   'tags.filterPlaceholder': 'Filter tag names',

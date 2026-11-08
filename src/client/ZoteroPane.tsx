@@ -22,6 +22,7 @@ import type { Translate } from './locales'
 import {
   clearItemSelection,
   clearTags,
+  cycleItemSort,
   loadMoreItems,
   loadTree,
   retryItems,
@@ -109,6 +110,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     tagMode,
     tagUsage,
     tagUsageLoading,
+    sort,
     selectedItemKeys,
   } = usePaneState()
 
@@ -270,11 +272,13 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             itemsError={itemsError}
             selectedTags={selectedTags}
             tagMode={tagMode}
+            sort={sort}
             selectedItemKeys={selectedItemKeys}
             onSearch={setQuery}
             onRemoveTag={toggleTag}
             onRetry={retryItems}
             onLoadMore={loadMoreItems}
+            onCycleSort={cycleItemSort}
             onOpenItem={onOpenItem}
             onSelectItem={selectItem}
             onClearSelection={clearItemSelection}

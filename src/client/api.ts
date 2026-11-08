@@ -113,6 +113,9 @@ export function fetchItems(
     q?: string
     tags?: readonly string[]
     tagMode?: 'all' | 'any'
+    /** 排序字段；目前只支持按标题。 */
+    sort?: 'title'
+    direction?: 'asc' | 'desc'
     limit?: number
     offset?: number
   } = {},

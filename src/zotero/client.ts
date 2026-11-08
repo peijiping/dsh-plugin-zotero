@@ -769,6 +769,9 @@ export interface ListItemsOptions {
   /** 标签过滤：AND（默认）逐个 `tag=`，OR 合并成 `tag=A || B`。 */
   tags?: readonly string[]
   tagMode?: 'all' | 'any'
+  /** 排序字段；缺省用 Zotero 的原始顺序。 */
+  sort?: 'title'
+  direction?: 'asc' | 'desc'
   limit: number
   offset: number
 }
@@ -834,6 +837,13 @@ function appendItemFilters(params: URLSearchParams, options: ListItemsOptions): 
   }
 }
 
+/** 把排序写进查询参数（本地 API 支持 `sort=title` + `direction=asc|desc`）。 */
+function appendItemSort(params: URLSearchParams, options: ListItemsOptions): void {
+  if (options.sort === undefined) return
+  params.set('sort', options.sort)
+  params.set('direction', options.direction === 'desc' ? 'desc' : 'asc')
+}
+
 /** 范围内的顶层条目端点基址（条目列表与标签用量共用同一套范围规则）。 */
 function itemListBase(options: { scope?: ZoteroItemScope; collectionKey?: string }): string {
   return options.scope === 'publications'
@@ -852,6 +862,7 @@ function itemListQuery(options: ListItemsOptions): { base: string; params: URLSe
     start: String(options.offset),
   })
   appendItemFilters(params, options)
+  appendItemSort(params, options)
   return { base: itemListBase(options), params }
 }
 
@@ -866,6 +877,8 @@ async function listUnfiled(
   for (let start = 0; start < UNFILED_SCAN_MAX; start += PAGE_SIZE) {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), start: String(start) })
     appendItemFilters(params, options)
+    // 排序也交给服务端：筛完再排会与分页对不上（扫描顺序决定筛后结果顺序）。
+    appendItemSort(params, options)
     const { body } = await requestJson<RawItem[]>(
       `${libraryBase()}/items/top?${params.toString()}`,
     )
