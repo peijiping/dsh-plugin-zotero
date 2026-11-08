@@ -10,7 +10,7 @@ import { useCallback, useRef, useState, type MutableRefObject, type ReactElement
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import { tpl, type Translate } from '../locales'
 import { pickRenderer } from './registry'
-import type { DocumentOutlineItem, DocumentSource, ViewerHandle, ZoomState } from './types'
+import type { DocumentOutlineItem, DocumentSource, ViewerHandle } from './types'
 
 interface Props {
   t: Translate
@@ -88,6 +88,24 @@ function PageField({ current, total, onJump, t }: {
   )
 }
 
+/**
+ * 放大镜图标：镜筒里一根横线是缩小，再加一根竖线是放大，把手朝右下。
+ *
+ * 纯 `currentColor` 描边，深浅主题都跟着文字走。
+ */
+function ZoomIcon({ kind }: { kind: 'in' | 'out' }): ReactElement {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round">
+        <circle cx="6.8" cy="6.8" r="4.4" />
+        <line x1="10.15" y1="10.15" x2="13.6" y2="13.6" />
+        <line x1="4.8" y1="6.8" x2="8.8" y2="6.8" />
+        {kind === 'in' && <line x1="6.8" y1="4.8" x2="6.8" y2="8.8" />}
+      </g>
+    </svg>
+  )
+}
+
 export function DocumentView({
   t,
   detail,
@@ -103,10 +121,13 @@ export function DocumentView({
 }: Props): ReactElement {
   const renderer = pickRenderer(source, detail)
   const Renderer = renderer.Component
-  const [zoom, setZoom] = useState<ZoomState>({ percent: 100, fitWidth: true })
   const [page, setPage] = useState({ current: 1, total: 0 })
 
-  const handleZoomChange = useCallback((state: ZoomState): void => setZoom(state), [])
+  /**
+   * 缩放比例不再显示，但这个回调渲染器还得有（`RendererProps` 必填）。
+   * 留着空实现而不是改接口：唯一用处是给工具条写字，删掉它要动三个渲染器。
+   */
+  const handleZoomChange = useCallback((): void => {}, [])
   const handlePageChange = useCallback((current: number, total: number): void => {
     setPage({ current, total })
   }, [])
@@ -125,40 +146,33 @@ export function DocumentView({
         )}
         {renderer.capabilities.zoom && (
           <>
-            <button
-              type="button"
-              onClick={() => viewerRef.current?.zoomOut()}
-              style={toolButtonStyle}
-              aria-label={t('viewer.zoomOut')}
-              title={t('viewer.zoomOut')}
-            >
-              −
-            </button>
-            <span style={zoomStyle}>{zoom.percent}%</span>
-            <button
-              type="button"
-              onClick={() => viewerRef.current?.zoomIn()}
-              style={toolButtonStyle}
-              aria-label={t('viewer.zoomIn')}
-              title={t('viewer.zoomIn')}
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={() => viewerRef.current?.fitToWidth()}
-              style={{ ...toolButtonStyle, opacity: zoom.fitWidth ? 1 : 0.6 }}
-              aria-label={t('viewer.fitWidth')}
-              title={t('viewer.fitWidth')}
-            >
-              ⤢
-            </button>
+            <span style={barDividerStyle} aria-hidden="true" />
+            <span style={zoomGroupStyle}>
+              <button
+                type="button"
+                onClick={() => viewerRef.current?.zoomOut()}
+                style={iconButtonStyle}
+                aria-label={t('viewer.zoomOut')}
+                title={t('viewer.zoomOut')}
+              >
+                <ZoomIcon kind="out" />
+              </button>
+              <button
+                type="button"
+                onClick={() => viewerRef.current?.zoomIn()}
+                style={iconButtonStyle}
+                aria-label={t('viewer.zoomIn')}
+                title={t('viewer.zoomIn')}
+              >
+                <ZoomIcon kind="in" />
+              </button>
+            </span>
           </>
         )}
         <button
           type="button"
           onClick={() => onOpenInZotero(page.current)}
-          style={toolButtonStyle}
+          style={{ ...toolButtonStyle, marginLeft: GROUP_GAP }}
           title={t('viewer.openInZotero')}
         >
           {t('viewer.openInZoteroShort')}
@@ -186,14 +200,19 @@ export function DocumentView({
   )
 }
 
-/** 左侧留出两个悬浮按钮（目录 + 文献信息）的位置，标题从它们右边开始。 */
+/**
+ * 左侧留出三个悬浮按钮（目录 / 文献信息 / 加入对话）的位置，标题居中显示在剩下这段里。
+ *
+ * 悬浮按钮是绝对定位、盖在工具条上的（见 `OutlinePanel` / `InfoPanel`：8 + 22 + 4 一格，
+ * 第三格「加入对话」到 124 为止），所以这里的 `paddingLeft` 必须一起改，否则标题从按钮底下钻出来。
+ */
 const barStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 4,
   flexShrink: 0,
   height: 30,
-  padding: '0 8px 0 66px',
+  padding: '0 8px 0 132px',
   borderBottom: '1px solid rgba(127,127,127,0.2)',
   background: 'transparent',
 } as const
@@ -204,9 +223,17 @@ const titleStyle = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+  textAlign: 'center',
   fontSize: 11,
   opacity: 0.62,
 } as const
+
+/**
+ * 工具条里相邻两组控件之间的额外间距（页码 ↔ 缩放 ↔ Zotero）。
+ *
+ * 组内只隔 4（工具条的 `gap`），组间靠这个拉开，否则 `1 / 3` 和两个放大镜会连成一片。
+ */
+const GROUP_GAP = 10
 
 const pageStyle = {
   flexShrink: 0,
@@ -232,13 +259,38 @@ const pageInputStyle = {
   outline: 'none',
 } as const
 
-const zoomStyle = {
+/** 页码区与缩放区之间的竖线：比纯靠留白更能看出是两组。 */
+const barDividerStyle = {
   flexShrink: 0,
-  minWidth: 34,
-  textAlign: 'center',
-  fontSize: 11,
-  opacity: 0.72,
-  fontVariantNumeric: 'tabular-nums',
+  width: 1,
+  height: 14,
+  margin: '0 3px 0 8px',
+  background: 'rgba(127,127,127,0.28)',
+} as const
+
+/** 缩放组（两个放大镜）：不再显示百分比，纯图标。 */
+const zoomGroupStyle = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+} as const
+
+/** 无边框图标按钮：放大镜本身当按钮，不再套一层方框。 */
+const iconButtonStyle = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  padding: 0,
+  borderRadius: 4,
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  opacity: 0.75,
+  cursor: 'pointer',
 } as const
 
 const toolButtonStyle = {

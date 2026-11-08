@@ -2,6 +2,8 @@
  * 左上角的悬浮信息菜单：文献信息 / 摘要 / 标注 / 笔记 / 附件 / 参考文献。
  *
  * 文档占满整版面，元数据类内容收进这个按钮背后的浮层，每块都可折叠。
+ * 「加入对话」是这一行里的独立按钮（`i` 右侧），不放浮层里：它是每次读文献都要点的
+ * 主操作，藏进菜单等于每次多两次点击。
  * 浮层用系统色 `Canvas` / `CanvasText`，盖在白色 PDF 上深浅主题都能读。
  * 点浮层外或按 Esc 关闭（统一走 {@link useDismiss}，网页快照在 iframe 里的按下也算
  * 「外」）；点标注定位后也关闭，让文档重新成为焦点。
@@ -11,8 +13,6 @@
  */
 
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
-
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { AnnotationList } from './AnnotationList'
@@ -147,15 +147,17 @@ export function InfoPanel({
         i
       </button>
 
+      {/* 笔记类条目自己就是正文，没有「把条目加入对话」这回事（同浮层头部的旧规则）。 */}
+      {!selfNote && (
+        <button type="button" onClick={onCite} title={t('action.insertItem')} style={citeTriggerStyle}>
+          {t('action.insertItemShort')}
+        </button>
+      )}
+
       {open && (
         <div role="dialog" aria-label={t('detail.info')} style={panelStyle}>
           <div style={panelHeaderStyle}>
             <span style={panelTitleStyle} title={detail.title}>{detail.title}</span>
-            {!selfNote && (
-              <Button variant="outline" size="sm" onClick={onCite} title={t('action.insertItem')} style={citeStyle}>
-                {t('action.insertItemShort')}
-              </Button>
-            )}
           </div>
 
           <Block label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
@@ -290,7 +292,7 @@ const rootStyle = {
   pointerEvents: 'none',
 } as const
 
-/** 位置让出左边一格给目录按钮（8 起、22 宽、间隔 4），两个按钮并排。 */
+/** 这一行按钮从左往右：目录（8）、文献信息（34）、加入对话（60），每个 22 高、间隔 4。 */
 const triggerStyle = {
   position: 'absolute',
   pointerEvents: 'auto',
@@ -349,13 +351,27 @@ const panelTitleStyle = {
   wordBreak: 'break-word',
 } as const
 
-const citeStyle = {
-  flexShrink: 0,
-  height: 20,
-  padding: '0 6px',
-  fontSize: 11,
-  lineHeight: 1.2,
+/** 收在 `i` 右边、跟它同一行：是每次读文献都要点的主操作，不藏进浮层。 */
+const citeTriggerStyle = {
+  position: 'absolute',
+  pointerEvents: 'auto',
+  top: 4,
+  left: 60,
+  display: 'inline-flex',
+  alignItems: 'center',
+  height: 22,
+  padding: '0 9px',
+  fontSize: 11.5,
+  fontWeight: 500,
+  lineHeight: 1,
   whiteSpace: 'nowrap',
+  borderRadius: 11,
+  border: '1px solid rgba(127,127,127,0.4)',
+  background: 'Canvas',
+  color: 'CanvasText',
+  cursor: 'pointer',
+  boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
+  zIndex: 21,
 } as const
 
 const blockStyle = {
