@@ -398,9 +398,22 @@ export type ApiErrorCode =
   /** 授权弹窗过于频繁（每分钟 5 次上限）→ HTTP 429。 */
   | 'zotero_rate_limited'
 
+/**
+ * 可由页面一键执行的修复动作。
+ *
+ * `message` 只说「哪儿坏了」，这个字段说「点一下能去哪儿修」——像目录授权、
+ * 链接附件基础目录这类问题，光给文字用户找不到入口。
+ *
+ * - `privacy-files`：macOS 的「隐私与安全性 → 文件与文件夹」面板；
+ * - `zotero-settings`：Zotero 首选项（链接附件基础目录那一页）。
+ */
+export type ApiFix = 'privacy-files' | 'zotero-settings'
+
 export interface ApiError {
   code: ApiErrorCode
   message: string
+  /** 有值表示这个错误有「一键去哪儿修」的入口，前端据此出按钮。 */
+  fix?: ApiFix
 }
 
 /** 统一响应信封。 */

@@ -13,8 +13,10 @@
  * - `?include=bib` 会让响应**丢掉 `data`**，因此条目详情与 bib 必须分两次请求。
  */
 
-import { stat } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import { connect } from 'node:net'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { anchorAnnotations, type RawAnnotation } from './annotations.js'
@@ -24,8 +26,10 @@ import {
   MCP_CALL_TIMEOUT_MS,
   zoteroProbeUrl,
 } from './config.js'
+import { readZoteroPaths } from './prefs.js'
 import type {
   ApiErrorCode,
+  ApiFix,
   ZoteroAnnotation,
   ZoteroAnnotationState,
   ZoteroAttachment,
@@ -46,11 +50,14 @@ import type {
 /** 归一化后的 Zotero 访问错误。 */
 export class ZoteroError extends Error {
   readonly code: ApiErrorCode
+  /** 可一键执行的修复动作；有值时前端会多出一个「去修复」按钮。 */
+  readonly fix?: ApiFix
 
-  constructor(code: ApiErrorCode, message: string) {
+  constructor(code: ApiErrorCode, message: string, fix?: ApiFix) {
     super(message)
     this.name = 'ZoteroError'
     this.code = code
+    this.fix = fix
   }
 }
 
@@ -89,6 +96,14 @@ interface RawItemData {
   collections?: string[]
   contentType?: string
   filename?: string
+  /**
+   * 链接附件的路径，只有 `linkMode: linked_file` 才有。
+   *
+   * 相对路径以 `attachments:` 开头，由 Zotero 的「链接附件基础目录」补全 ——
+   * 这个补全过程只在 Zotero 进程里发生，本地 API 的 `links.enclosure` 可能因此
+   * 缺席，插件拿不到绝对路径。
+   */
+  path?: string
   /** 笔记正文（HTML），仅 `itemType === 'note'` 有。 */
   note?: string
   /** 标注所属附件，仅 `itemType === 'annotation'` 有。 */
@@ -1081,7 +1096,14 @@ function unreadableReason(error: unknown, path: string): string {
     ? String((error as { code?: unknown }).code ?? '')
     : ''
   if (code === 'ENOENT' || code === 'ENOTDIR') return `附件文件不存在：${path}`
-  if (code === 'EACCES' || code === 'EPERM') return `没有权限读取附件文件：${path}`
+  if (code === 'EACCES' || code === 'EPERM') {
+    // Zotero 自己读得到、插件读不到时，八成是系统级目录授权（macOS 的 TCC）没过：
+    // 那个弹窗每台机器只问一次，误点「不允许」之后就只会一直失败。
+    const hint = process.platform === 'darwin'
+      ? '（macOS 需在「系统设置 → 隐私与安全性 → 文件与文件夹」里允许 DSH 读取该目录）'
+      : '（检查该目录的访问权限）'
+    return `没有权限读取附件文件：${path}${hint}`
+  }
   if (code === 'ELOOP') return `附件文件是失效的符号链接：${path}`
   const detail = error instanceof Error ? error.message : String(error)
   return `无法读取附件文件：${path}（${code === '' ? detail : code}）`
@@ -1103,8 +1125,18 @@ export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFi
   }
   const href = raw.links?.enclosure?.href ?? ''
   if (href === '') {
-    // 没有 enclosure：附件记录在，但 Zotero 那边没有对应的本地文件（未下载、
-    // 只同步了元数据、或网页链接型附件）。这是「打不开 PDF」最常见的一种。
+    // 没有 enclosure：附件记录在，但 Zotero 没有给出这个文件的绝对路径。
+    // 相对路径的链接附件（`attachments:`）是最典型的一种：补全基础目录只发生在
+    // Zotero 进程里，Zotero 自己打得开、本地 API 却给不出路径 —— 这正是
+    // 「Zotero 里正常、插件里 404」最容易被误判成插件 bug 的情形，所以点名说清。
+    const relative = typeof data.path === 'string' ? data.path : ''
+    if (relative.startsWith('attachments:')) {
+      throw new ZoteroError(
+        'zotero_not_found',
+        `附件 ${key} 是相对路径的链接附件（${relative}）：请在 Zotero「设置 → 高级 → 文件和文件夹」`
+        + '里确认「链接附件的基础目录」已设置，并在 Zotero 里重新链接一次该文件',
+      )
+    }
     throw new ZoteroError('zotero_not_found', `附件 ${key} 没有本地文件（Zotero 里可能尚未下载）`)
   }
   let path: string
@@ -1127,6 +1159,14 @@ export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFi
   }
   if (!stats.isFile()) {
     throw new ZoteroError('zotero_not_found', `附件路径不是文件：${path}`)
+  }
+  // `stat` 只证明路径存在，不证明读得到：权限（macOS 目录授权、ACL）要到真正
+  // 打开文件时才暴露。在这里先试开一次，失败就能给出准确原因，而不是等到
+  // 响应头已经发出、流读到一半才断掉。
+  try {
+    await (await open(path, 'r')).close()
+  } catch (error) {
+    throw new ZoteroError('zotero_not_found', unreadableReason(error, path))
   }
   const filename = data.filename ?? attachmentTitle(raw)
   return {

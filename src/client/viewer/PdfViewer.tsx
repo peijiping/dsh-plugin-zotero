@@ -16,6 +16,10 @@
  * 分片节奏由 `renderQueue.paceChunk` 接管（滚动中远处的页等停手、近处的页隔帧），
  * 文本层与选区框校正等停稳后才做，滚动期间文本层直接不上屏（字是透明的，撤掉
  * 不影响画面）；页码定位读缓存的页面 top 数组，不在滚动帧里读 `offsetTop`。
+ *
+ * 缩放按「页号 + 页内相对坐标」锚定视口中心那个文档点，倍率改完再把它放回中心，
+ * 横竖两轴都不跳；之所以不用 scrollHeight 的比例，是因为同一份 PDF 里可能混着
+ * 竖排和横排页，总高并不随倍率等比例变化。
  */
 
 import {
@@ -68,6 +72,7 @@ import { useReadPosition } from './useReadPosition'
 const MIN_SCALE = 0.5
 const MAX_SCALE = 3
 const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3]
+/** 页面容器左右内边距（与 PDF_CSS 的 padding 一致），适应宽度和水平居中都按它算。 */
 const GUTTER = 12
 const FLASH_MS = 1600
 /** 停手这么久就把文本层放回屏幕（比绘制让路的判定短：字要尽早能选）。 */
@@ -330,6 +335,20 @@ function moveLineBreaksOffscreen(container: HTMLElement): void {
   }
 }
 
+/**
+ * 缩放锚点：屏幕上 (x, y) 这一点落在第 `page` 页的 (fx, fy) 处。
+ *
+ * fx / fy 是相对页左上角的比例，允许落在 0..1 之外（点在页外灰边时）；
+ * 倍率改完后用同一页的新尺寸把它还原到 (x, y)，就是「按中心缩放」。
+ */
+interface ZoomAnchor {
+  page: number
+  fx: number
+  fy: number
+  x: number
+  y: number
+}
+
 interface PageProps {
   /** 页面无障碍标签：外层算好，避免把可能不稳定的 `t` 传进 memo 组件。 */
   label: string
@@ -342,6 +361,8 @@ interface PageProps {
   retained: boolean
   estimateWidth: number
   estimateHeight: number
+  /** 滚动容器可视宽度：页面按自身宽度在视口内水平居中。 */
+  containerWidth: number
   annotations: ZoteroAnnotation[]
   flashKey: string | null
   onAnnotationClick(annotation: ZoteroAnnotation, clientX: number, clientY: number): void
@@ -358,6 +379,7 @@ const PdfPage = memo(function PdfPage({
   retained,
   estimateWidth,
   estimateHeight,
+  containerWidth,
   annotations,
   flashKey,
   onAnnotationClick,
@@ -526,9 +548,13 @@ const PdfPage = memo(function PdfPage({
     if (annotation !== null) onAnnotationClick(annotation, event.clientX, event.clientY)
   }
 
+  const pageWidth = viewport?.width ?? estimateWidth
+  // 窄页在可视区里居中；比可视区还宽的页贴着左内边距（向右溢出，由滚动容器提供横向滚动）。
+  const leftInset = Math.max(0, (containerWidth - pageWidth) / 2 - GUTTER)
   const pageStyle: CSSProperties & Record<string, string | number> = {
-    width: viewport?.width ?? estimateWidth,
+    width: pageWidth,
     height: viewport?.height ?? estimateHeight,
+    marginLeft: leftInset,
     '--total-scale-factor': scale,
     '--scale-round-x': '1px',
     '--scale-round-y': '1px',
@@ -603,7 +629,10 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
-  const anchorRef = useRef<{ ratio: number; y: number } | null>(null)
+  /** 每次缩放前记下的锚点，由 useLayoutEffect 在新布局里消费一次。 */
+  const zoomAnchorRef = useRef<ZoomAnchor | null>(null)
+  /** 即使倍率没变（已到上限、适应宽度时本来就相等）也要消费掉锚点，所以用计数强制跑一次。 */
+  const [zoomTick, setZoomTick] = useState(0)
   const rafRef = useRef<number | null>(null)
   const flashTimerRef = useRef<number | null>(null)
   /** 「正在滚动」标记的定时器：停手一会儿后把文本层放回屏幕上。 */
@@ -834,12 +863,56 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     notePage(currentPage)
   }, [currentPage, pageCount, notePage])
 
-  const applyZoom = (next: number): void => {
+  /**
+   * 改倍率前先固定屏幕上 (x, y) 这一点的文档位置。
+   *
+   * 只记「第几页 + 页内相对坐标」：混排 PDF 里各页高宽不同，按 scrollHeight
+   * 比例还原会偏；按页记则不管页怎么变，同一个字仍落在同一个屏幕位置。
+   * 点落在页间空隙或灰边上时就归到最近的一页，比例允许超出 0..1。
+   */
+  const captureZoomAnchor = useCallback((x: number, y: number): void => {
+    const element = scrollRef.current
+    const pages = element?.firstElementChild
+    if (element === null || element === undefined || pages === null || pages === undefined) return
+    const count = pages.children.length
+    if (count === 0) return
+    const docX = element.scrollLeft + x
+    const docY = element.scrollTop + y
+    let index = 0
+    for (let i = 0; i < count; i += 1) {
+      const child = pages.children[i] as HTMLElement
+      const top = child.offsetTop
+      if (docY <= top + child.offsetHeight) {
+        index = i
+        break
+      }
+      index = i
+    }
+    const page = pages.children[index] as HTMLElement
+    const top = page.offsetTop
+    const width = page.offsetWidth
+    const height = page.offsetHeight
+    if (width <= 0 || height <= 0) return
+    zoomAnchorRef.current = {
+      page: index + 1,
+      fx: (docX - page.offsetLeft) / width,
+      fy: (docY - top) / height,
+      x,
+      y,
+    }
+    setZoomTick((value) => value + 1)
+  }, [])
+
+  /** 按钮 / 命令行缩放按视口中心锚定；Ctrl+滚轮按鼠标位置锚定。 */
+  const applyZoom = useCallback((next: number, at?: { x: number; y: number }): void => {
+    const element = scrollRef.current
+    if (element !== null) {
+      captureZoomAnchor(at?.x ?? element.clientWidth / 2, at?.y ?? element.clientHeight / 2)
+    }
     setFitWidth(false)
     setManualScale(clampScale(next))
-  }
+  }, [captureZoomAnchor])
 
-  // 手动缩放时，Ctrl/⌘ + 滚轮保持鼠标下的文档位置不变。
   const scaleRef = useRef(scale)
   scaleRef.current = scale
   useEffect(() => {
@@ -849,26 +922,30 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       if (!(event.ctrlKey || event.metaKey)) return
       event.preventDefault()
       const rect = element.getBoundingClientRect()
-      const y = event.clientY - rect.top
-      anchorRef.current = {
-        ratio: element.scrollHeight > 0 ? (element.scrollTop + y) / element.scrollHeight : 0,
-        y,
-      }
       const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1
-      setFitWidth(false)
-      setManualScale(clampScale(scaleRef.current * factor))
+      // 触控板捏合等合成事件偶尔带 0 坐标，夹回可视区内，免得锚点落到屏外把页面推偏。
+      applyZoom(scaleRef.current * factor, {
+        x: Math.min(Math.max(event.clientX - rect.left, 0), element.clientWidth),
+        y: Math.min(Math.max(event.clientY - rect.top, 0), element.clientHeight),
+      })
     }
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => element.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [applyZoom])
 
+  /** 布局已按新倍率提交：把锚点那个文档点放回原来的屏幕位置，横竖两轴一起调。 */
   useLayoutEffect(() => {
-    const anchor = anchorRef.current
+    const anchor = zoomAnchorRef.current
     const element = scrollRef.current
     if (anchor === null || element === null) return
-    anchorRef.current = null
-    element.scrollTop = Math.max(0, anchor.ratio * element.scrollHeight - anchor.y)
-  }, [scale])
+    zoomAnchorRef.current = null
+    // 页面 top 全变了：立刻作废缓存，别让这次滚动派发的 pageAt 拿旧坐标报错页码。
+    topsRef.current = null
+    const target = element.querySelector<HTMLElement>(`[data-zp-page="${anchor.page}"]`)
+    if (target === null) return
+    element.scrollLeft = Math.max(0, target.offsetLeft + anchor.fx * target.offsetWidth - anchor.x)
+    element.scrollTop = Math.max(0, target.offsetTop + anchor.fy * target.offsetHeight - anchor.y)
+  }, [zoomTick, scale, fitWidth])
 
   const annotationsByPage = useMemo(() => {
     const map = new Map<number, ZoteroAnnotation[]>()
@@ -1135,7 +1212,13 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     zoomIn,
     zoomOut,
     setZoom: (percent: number) => applyZoom(percent / 100),
-    fitToWidth: () => setFitWidth(true),
+    fitToWidth: () => {
+      const element = scrollRef.current
+      if (element !== null) {
+        captureZoomAnchor(element.clientWidth / 2, element.clientHeight / 2)
+      }
+      setFitWidth(true)
+    },
   }))
 
   useEffect(() => () => {
@@ -1197,6 +1280,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
                 retained={retainedPages.has(index + 1)}
                 estimateWidth={estimateWidth}
                 estimateHeight={estimateHeight}
+                containerWidth={containerWidth}
                 annotations={annotationsByPage.get(index) ?? EMPTY_ANNOTATIONS}
                 flashKey={index === flashPage ? flashKey : null}
                 onAnnotationClick={onAnnotationClick}

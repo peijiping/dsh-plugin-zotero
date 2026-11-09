@@ -32,10 +32,14 @@ export const PDF_CSS = `
 .dsh-zotero-pdf-pages {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 12px;
-  min-width: min-content;
+  /* 宽度固定为可视区：横向页只向右溢出形成滚动条，不能让它把窄页一起推到
+     容器中间（混排文档里会出现一侧几百像素的灰边）。每页靠 JS 算的
+     margin-left 在自己的可视区里居中，宽页则贴着左内边距。 */
+  box-sizing: border-box;
+  width: 100%;
 }
 .dsh-zotero-pdf-page {
   position: relative;
