@@ -21,8 +21,9 @@ export const SNAPSHOT_VERSION = 1
  * 退化成居中显示，界面上要明说，别让用户以为卡片位置是坏的。
  *
  * 2：`annotation-click` 携带 `rect`（点击位置）。
+ * 3：上报网页标题目录 `outline`，并能响应 `scroll-to-outline`。
  */
-export const SNAPSHOT_BRIDGE_VERSION = 2
+export const SNAPSHOT_BRIDGE_VERSION = 3
 
 /** iframe 侧的一条标注（只带渲染高亮需要的最小字段）。 */
 export interface SnapshotAnnotationItem {
@@ -33,11 +34,21 @@ export interface SnapshotAnnotationItem {
   webPosition: { selector: string; start: number; end: number }
 }
 
+/** iframe 里的一条网页标题（h1–h6 拍平后的层级由 `depth` 表示）。 */
+export interface SnapshotOutlineItem {
+  title: string
+  /** 0 起；以页面里最小的标题级别为 0，见 `outline.ts` 的 headingDepths。 */
+  depth: number
+  /** 桥接脚本给标题元素打的锚点序号（`data-dsh-zotero-outline`）。 */
+  id: string
+}
+
 /** 父页面 → iframe。 */
 export type SnapshotCommand =
   | { type: 'annotations'; items: SnapshotAnnotationItem[] }
   | { type: 'locate'; key: string }
   | { type: 'clear-selection' }
+  | { type: 'scroll-to-outline'; id: string }
 
 /** 相对 iframe 视口的矩形。 */
 export interface SnapshotRect {
@@ -63,6 +74,7 @@ export interface SnapshotSelection {
 export type SnapshotEvent =
   /** `bridge` 缺省视为 1（没有这个字段的老脚本）。 */
   | { type: 'ready'; bridge?: number }
+  | { type: 'outline'; items: SnapshotOutlineItem[] }
   | { type: 'applied'; total: number; resolved: number; rev: number; error?: string | null }
   | { type: 'selection'; selection: SnapshotSelection | null }
   | { type: 'locate-result'; key: string; ok: boolean }
@@ -81,6 +93,7 @@ export type SnapshotEvent =
 
 const EVENT_TYPES = new Set([
   'ready',
+  'outline',
   'applied',
   'selection',
   'locate-result',

@@ -165,8 +165,8 @@ function injectionPoint(buffer: Buffer): number {
  *
  * **故意不缓存**：`client/snapshot/runtime.js` 是构建产物，改了脚本只想让用户刷新
  * 一下页面就生效。进程级缓存会让「旧的脚本 + 新的界面」这种组合静默存在——旧脚本
- * 不带点击矩形，编辑卡片就只能退到左上角，排查起来极费劲。22 KB 的读盘一次请求
- * 一次，代价可以忽略。
+ * 不带点击矩形、也不上报网页标题目录，界面会静默退化（卡片退到左上角、目录为空），
+ * 排查起来极费劲。22 KB 的读盘一次请求一次，代价可以忽略。
  */
 async function loadRuntime(): Promise<string | null> {
   try {

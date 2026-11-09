@@ -14,6 +14,10 @@
  *   2. rebuild highlights from Zotero's `CssSelector` + `TextPositionSelector`
  *   3. report the user's selection back to the parent (as plain data)
  *   4. scroll/flash on `locate`, forward link clicks out of the sandbox
+ *   5. publish the h1-h6 outline and scroll to a heading on request
+ *
+ * The outline conventions (heading selector, anchor attribute, depth rule,
+ * item cap) mirror viewer/outline.ts; this file cannot import that module.
  *
  * Message envelope: { s: 'dsh-zotero/snapshot', v: 1, type, ... }
  */
@@ -157,6 +161,82 @@
       node = walker.nextNode();
     }
     return parts;
+  }
+
+  /* ------------------------------------------------------------- outline */
+
+  /* Mirrors viewer/outline.ts. Kept here because the bridge is a classic IIFE
+     running inside the sandboxed iframe, with no way to import TS modules. */
+  var OUTLINE_ATTR = 'data-dsh-zotero-outline';
+  var OUTLINE_MAX_ITEMS = 800;
+  var OUTLINE_MAX_DEPTH = 8;
+
+  function publishOutline() {
+    var nodes = [];
+    try {
+      nodes = document.body ? document.body.querySelectorAll('h1,h2,h3,h4,h5,h6') : [];
+    } catch (error) {
+      nodes = [];
+    }
+    var entries = [];
+    var minLevel = 6;
+    for (var i = 0; i < nodes.length && entries.length < OUTLINE_MAX_ITEMS; i++) {
+      var node = nodes[i];
+      var title = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (title === '') continue;
+      /* Hidden headings (display:none, collapsed chrome) are not navigation. */
+      try {
+        if (node.getClientRects().length === 0) continue;
+      } catch (error) {
+        /* keep the heading if layout cannot be read */
+      }
+      var level = parseInt(node.tagName.charAt(1), 10);
+      if (!(level >= 1 && level <= 6)) continue;
+      if (level < minLevel) minLevel = level;
+      entries.push({ node: node, title: title, level: level });
+    }
+
+    var items = [];
+    for (var j = 0; j < entries.length; j++) {
+      entries[j].node.setAttribute(OUTLINE_ATTR, String(j));
+      items.push({
+        title: entries[j].title,
+        depth: Math.max(0, Math.min(OUTLINE_MAX_DEPTH - 1, entries[j].level - minLevel)),
+        id: String(j)
+      });
+    }
+    post({ type: 'outline', items: items });
+  }
+
+  function scrollToOutline(rawId) {
+    /* Our own ids are decimal indices; refuse anything else before it reaches
+       a selector. No CSS.escape here: it escapes leading digits, which is wrong
+       inside a quoted attribute value. */
+    var id = String(rawId || '');
+    if (!/^[0-9]+$/.test(id)) return;
+    var selector = '[' + OUTLINE_ATTR + '="' + id + '"]';
+    var target = null;
+    try {
+      target = document.querySelector(selector);
+    } catch (error) {
+      target = null;
+    }
+    if (target === null) {
+      /* A snapshot script may have rewritten the DOM after we published. */
+      publishOutline();
+      try {
+        target = document.querySelector(selector);
+      } catch (error) {
+        target = null;
+      }
+    }
+    if (target === null) return;
+    try {
+      target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    } catch (error) {
+      target.scrollIntoView();
+    }
+    flash(target);
   }
 
   /* -------------------------------------------------- global text fallback */
@@ -556,6 +636,7 @@
         /* applyAll already reports its own failures */
       }
     }
+    publishOutline();
     publishSelection();
   }
 
@@ -575,6 +656,10 @@
     }
     if (data.type === 'locate') {
       locate(String(data.key || ''));
+      return;
+    }
+    if (data.type === 'scroll-to-outline') {
+      scrollToOutline(data.id);
       return;
     }
     if (data.type === 'clear-selection') {
@@ -643,15 +728,16 @@
 
   /* Snapshot scripts (SingleFile's lazy-image pass) can rewrite the DOM after
      DOMContentLoaded. Re-applying once after `load` keeps highlights on the
-     final tree; a second run is cheap because unwrap/apply is idempotent. */
+     final tree and refreshes the outline against that final tree. */
   window.addEventListener('load', function () {
     window.setTimeout(function () {
       if (annotations.length > 0) applyAll();
+      publishOutline();
     }, 60);
   }, { once: true });
 
   installStorageShim('localStorage');
   installStorageShim('sessionStorage');
 
-  post({ type: 'ready', bridge: 2 });
+  post({ type: 'ready', bridge: 3 });
 }());

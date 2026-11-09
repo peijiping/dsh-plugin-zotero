@@ -24,7 +24,7 @@ interface Props {
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   onChanged(): void
-  /** 渲染器报上来的目录（PDF 书签），交给左上角的目录浮层。 */
+  /** 渲染器报上来的目录（PDF 书签 / 网页标题 / 笔记标题），交给左上角统一的目录浮层。 */
   onOutlineChange(outline: DocumentOutlineItem[]): void
 }
 

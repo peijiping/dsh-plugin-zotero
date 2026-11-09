@@ -50,6 +50,7 @@ import { AnnotationCard } from './AnnotationCard'
 import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
+import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS, pageTarget } from './outline'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import {
   enqueueRender,
@@ -80,10 +81,6 @@ const MAX_CANVAS_PIXELS = 5_242_880
 
 const EMPTY_PAGES: ReadonlySet<number> = new Set()
 const EMPTY_ANNOTATIONS: ZoteroAnnotation[] = []
-
-/** 目录条目数与层级的硬上限：个别 PDF 的书签能上千条，面板画不完也没人看得完。 */
-const OUTLINE_MAX_ITEMS = 800
-const OUTLINE_MAX_DEPTH = 8
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -182,9 +179,10 @@ async function readOutline(pdf: PDFDocumentProxy): Promise<DocumentOutlineItem[]
   const walk = async (nodes: Nodes, depth: number): Promise<void> => {
     for (const node of nodes) {
       if (out.length >= OUTLINE_MAX_ITEMS) return
+      const page = await outlinePageOf(pdf, node.dest)
       out.push({
         title: (node.title ?? '').trim() || '(无标题)',
-        page: await outlinePageOf(pdf, node.dest),
+        target: page === null ? null : pageTarget(page),
         depth,
       })
       const children = node.items as Nodes | undefined
@@ -1131,6 +1129,9 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     locate,
     currentPage: () => currentPageRef.current,
     goToPage,
+    goToOutline: (target) => {
+      if (target?.kind === 'page') goToPage(target.page)
+    },
     zoomIn,
     zoomOut,
     setZoom: (percent: number) => applyZoom(percent / 100),

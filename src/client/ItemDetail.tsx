@@ -49,15 +49,25 @@ const LOCATE_RETRIES = 6
 const LOCATE_RETRY_MS = 60
 
 /**
- * 目录缓存按附件归属。
+ * 目录缓存按「当前文档」归属。
  *
- * 存 `attachmentKey` 而不是清空：切附件时新渲染器要重新解析书签（约几十毫秒到几百
- * 毫秒），这段时间面板若拿上一条的目录顶上，就会跳错页。归属对不上就当作「还没读到」。
+ * 存 key 而不是清空：切附件 / 切条目时新渲染器要重新解析（PDF 书签、快照网页标题、
+ * 笔记标题都是几十到几百毫秒），这段时间面板若拿上一条的目录顶上，就会跳错位置。
+ * 归属对不上就当作「还没读到」。独立笔记没有附件，所以 key 里要带上条目自身。
  */
 interface OutlineState {
-  attachmentKey: string
-  /** `null` = 还没读到；空数组 = 这份文档没有书签。 */
+  documentKey: string
+  /** `null` = 还没读到；空数组 = 这份文档没有目录。 */
   items: DocumentOutlineItem[] | null
+}
+
+/** 目录来源说明：同一份浮层服务三类文档，给用户一句口径。 */
+const OUTLINE_SOURCE_LABEL: Record<string, string> = {
+  pdf: 'outline.source.pdf',
+  snapshot: 'outline.source.snapshot',
+  note: 'outline.source.note',
+  text: 'outline.source.text',
+  webpage: 'outline.source.text',
 }
 
 function errorMessage(error: unknown): string {
@@ -81,7 +91,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
 export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onChanged }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
-  const [outline, setOutline] = useState<OutlineState>({ attachmentKey: '', items: null })
+  const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>({ type: 'all', color: null })
   const [stateKey, setStateKey] = useState(detail.key)
@@ -128,14 +138,18 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
   /** 收起信息浮层；`InfoPanel` 内部再用 `useDismiss` 接管「点浮层外 / Esc」。 */
   const closeInfo = useCallback((): void => setInfoOpen(false), [])
 
-  const sourceKey = source?.attachmentKey ?? ''
+  // 独立笔记没有附件，光用 attachmentKey 会让两篇笔记共用一份缓存。
+  const documentKey = `${detail.key}:${source?.attachmentKey ?? 'self'}`
   /** 归属对不上的目录一律当「还没读到」，绝不用上一条文献的书签跳页。 */
-  const outlineItems = outline.attachmentKey === sourceKey ? outline.items : null
+  const outlineItems = outline.documentKey === documentKey ? outline.items : null
   const handleOutlineChange = useCallback((items: DocumentOutlineItem[]): void => {
-    setOutline({ attachmentKey: sourceKey, items })
-  }, [sourceKey])
-  /** 目录按钮只在有分页的文档上出现：跳页是这个浮层唯一的用处。 */
-  const outlineAvailable = pickRenderer(source, detail).capabilities.pageNavigation
+    setOutline({ documentKey, items })
+  }, [documentKey])
+  const renderer = pickRenderer(source, detail)
+  /** 目录按钮按渲染器能力出现：PDF / 快照 / 笔记 / 全文共用左上角那一个浮层。 */
+  const outlineAvailable = renderer.capabilities.outline
+  const outlineSourceLabel = t(OUTLINE_SOURCE_LABEL[detail.itemType === 'note' ? 'note' : renderer.id]
+    ?? 'outline.source.text')
 
   const flushPendingLocate = useCallback((key: string, attempt: number): void => {
     if (locateTimer.current !== null) {
@@ -192,13 +206,14 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
   }
 
   /**
-   * 跳页。
+   * 跳到一条目录项。
    *
-   * 跳完就收起目录：浮层压在文档左边，留着会把刚跳过去的那一页挡掉一半。
+   * 目标原样交给渲染器：PDF 按页、网页快照 / 笔记按标题锚点，面板不解释。
+   * 跳完就收起目录：浮层压在文档左边，留着会把刚跳过去的内容挡掉一半。
    */
-  function jumpToPage(page: number): void {
+  function jumpToOutline(item: DocumentOutlineItem): void {
     setOutlineOpen(false)
-    viewerRef.current?.goToPage(page)
+    if (item.target !== null) viewerRef.current?.goToOutline(item.target)
   }
 
   return (
@@ -220,6 +235,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         <OutlinePanel
           t={t}
           items={outlineItems}
+          sourceLabel={outlineSourceLabel}
           open={outlineOpen}
           onToggle={() => {
             // 两个浮层同一块位置，开一个就收另一个，否则压在一起互相挡。
@@ -227,7 +243,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
             setOutlineOpen(!outlineOpen)
           }}
           onClose={() => setOutlineOpen(false)}
-          onJump={jumpToPage}
+          onJump={jumpToOutline}
         />
       )}
       <InfoPanel

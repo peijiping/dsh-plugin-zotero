@@ -10,6 +10,9 @@
  *
  * `annotations` 用一份轻量签名做依赖：`onChanged()` 之后详情会整份重取，
  * 数组引用每次都变；按签名判断可以避免无关重渲染也往 iframe 里推一遍。
+ *
+ * 网页标题目录也走这座桥：iframe 里扫 h1–h6 打锚点后上报 `outline`，本组件转成
+ * 统一目录项交给左上角浮层；点目录项发 `scroll-to-outline` 让 iframe 自己滚。
  */
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
@@ -22,6 +25,7 @@ import { tpl } from '../locales'
 import { showToast } from '../paneStore'
 import { SOFT_BUTTON_STYLE } from '../styles'
 import { AnnotationCard } from './AnnotationCard'
+import { anchorTarget, OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS } from './outline'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import {
   asSnapshotEvent,
@@ -29,10 +33,11 @@ import {
   SNAPSHOT_BRIDGE_VERSION,
   type SnapshotAnnotationItem,
   type SnapshotCommand,
+  type SnapshotOutlineItem,
   type SnapshotRect,
   type SnapshotSelection,
 } from './snapshotProtocol'
-import type { DocumentRendererProps } from './types'
+import type { DocumentOutlineItem, DocumentRendererProps } from './types'
 
 /** 桥接脚本一般几百毫秒就绪；超过这个时间就认定它没跑起来。 */
 const BRIDGE_TIMEOUT_MS = 8000
@@ -52,6 +57,27 @@ function itemsOf(annotations: ZoteroAnnotation[]): SnapshotAnnotationItem[] {
       text: annotation.text,
       webPosition: annotation.webPosition,
     })
+  }
+  return items
+}
+
+/**
+ * iframe 报上来的标题目录 → 统一目录项。
+ *
+ * 消息来自沙箱里的页面脚本，虽然只能伪造文字也不能写库，还是逐字段收窄一遍：
+ * 标题与锚点必须是字符串、层级夹到面板画得出来的范围、条数封顶。
+ */
+function outlineOf(raw: SnapshotOutlineItem[]): DocumentOutlineItem[] {
+  const items: DocumentOutlineItem[] = []
+  for (const entry of raw) {
+    if (items.length >= OUTLINE_MAX_ITEMS) break
+    if (typeof entry?.title !== 'string' || typeof entry?.id !== 'string') continue
+    const title = entry.title.trim()
+    if (title === '') continue
+    const depth = typeof entry.depth === 'number' && Number.isFinite(entry.depth)
+      ? Math.max(0, Math.min(OUTLINE_MAX_DEPTH - 1, Math.trunc(entry.depth)))
+      : 0
+    items.push({ title, depth, target: anchorTarget(entry.id) })
   }
   return items
 }
@@ -79,6 +105,7 @@ export function SnapshotViewer({
   onInsertAnnotation,
   onOpenInZotero,
   onChanged,
+  onOutlineChange,
 }: DocumentRendererProps): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
@@ -88,6 +115,9 @@ export function SnapshotViewer({
   const selectionRef = useRef<SnapshotSelection | null>(null)
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
+  /** 目录回调走 ref：message 监听只该挂一次，不该因父级重渲染换了回调身份就重挂。 */
+  const outlineRef = useRef(onOutlineChange)
+  outlineRef.current = onOutlineChange
 
   const [reloadKey, setReloadKey] = useState(0)
   const [bridgeReady, setBridgeReady] = useState(false)
@@ -175,11 +205,18 @@ export function SnapshotViewer({
       if (data.type === 'ready') {
         readyRef.current = true
         setBridgeReady(true)
-        setStaleBridge((data.bridge ?? 1) < SNAPSHOT_BRIDGE_VERSION)
+        const bridge = data.bridge ?? 1
+        setStaleBridge(bridge < SNAPSHOT_BRIDGE_VERSION)
         setBridgeMissing(false)
+        // 旧脚本不会报目录：明确报空数组，否则面板永远停在「正在读取目录…」。
+        if (bridge < 3) outlineRef.current?.([])
         pushAnnotations()
         flushLocate()
         onReady()
+        return
+      }
+      if (data.type === 'outline') {
+        outlineRef.current?.(outlineOf(Array.isArray(data.items) ? data.items : []))
         return
       }
       if (data.type === 'applied') {
@@ -218,6 +255,8 @@ export function SnapshotViewer({
     const timer = window.setTimeout(() => {
       if (readyRef.current) return
       setBridgeMissing(true)
+      // 桥接脚本没起来就解析不出网页标题，别让目录浮层一直转。
+      outlineRef.current?.([])
     }, BRIDGE_TIMEOUT_MS)
     return () => window.clearTimeout(timer)
   }, [reloadKey])
@@ -239,6 +278,9 @@ export function SnapshotViewer({
     locate,
     currentPage: () => 1,
     goToPage: () => undefined,
+    goToOutline: (target) => {
+      if (target?.kind === 'anchor') post({ type: 'scroll-to-outline', id: target.id })
+    },
     zoomIn: () => undefined,
     zoomOut: () => undefined,
     setZoom: () => undefined,

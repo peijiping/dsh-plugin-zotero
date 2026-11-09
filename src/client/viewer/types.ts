@@ -28,7 +28,27 @@ export interface ViewerCapabilities {
   zoom: boolean
   /** 是否有分页概念；影响页码显示。 */
   pageNavigation: boolean
+  /**
+   * 是否提供目录。
+   *
+   * 目录按钮只有一份（`OutlinePanel`），这里只决定它出不出现：PDF 书签、网页标题、
+   * 笔记标题都由各自的渲染器解析后上报，与「有没有页码」无关。
+   */
+  outline: boolean
 }
+
+/**
+ * 一条目录项的跳转目标。
+ *
+ * - `page`：PDF 书签，交给 {@link ViewerHandle.goToPage}；
+ * - `anchor`：HTML / 笔记 / 纯文本里的标题，`id` 的含义由渲染器自己定（元素锚点序号、
+ *   文本字符偏移等）——面板只负责把它原样传回来，不解释。
+ *
+ * `null` 表示这条只有标题、跳不过去（例如只有外链的 PDF 书签），面板会置灰。
+ */
+export type OutlineTarget =
+  | { kind: 'page'; page: number }
+  | { kind: 'anchor'; id: string }
 
 /** 外层通过 ref 调用的命令。 */
 export interface ViewerHandle {
@@ -37,6 +57,8 @@ export interface ViewerHandle {
   currentPage(): number
   /** 跳到指定页（1 基）。不支持分页的渲染器是空实现。 */
   goToPage(page: number): void
+  /** 跳到一条目录项：PDF 按页，HTML / 笔记按锚点；类型不匹配的渲染器忽略。 */
+  goToOutline(target: OutlineTarget | null): void
   zoomIn(): void
   zoomOut(): void
   setZoom(percent: number): void
@@ -49,16 +71,16 @@ export interface ZoomState {
 }
 
 /**
- * 文档目录的一项（PDF 书签）。
+ * 文档目录的一项（PDF 书签 / 网页标题 / 笔记标题共用）。
  *
  * 渲染器把树拍平上报：面板只按 `depth` 缩进，不重建嵌套 —— 长目录真正要的是
  * 「一眼看完 + 点一下跳过去」，折叠交互换不来这个，却要多养一套开合状态。
  */
 export interface DocumentOutlineItem {
-  /** 书签标题，PDF 里原样存着的（多数自带「1.2.3」这类编号）。 */
+  /** 标题原文（PDF 书签多数自带「1.2.3」这类编号；HTML 标题取纯文本）。 */
   title: string
-  /** 目标页（1 基）；`null` 表示这条书签只有外链，或目标解析不出来。 */
-  page: number | null
+  /** 跳转目标；`null` 表示只有标题、定位不了，面板置灰。 */
+  target: OutlineTarget | null
   /** 层级：0 为顶层。 */
   depth: number
 }
@@ -76,11 +98,11 @@ export interface DocumentRendererProps {
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   /**
-   * 上报文档目录（PDF 书签）。
+   * 上报文档目录（PDF 书签、网页 h1–h6、笔记标题）。
    *
-   * 只有**带页内跳转**的渲染器需要实现：不实现就永远不报，面板里显示「没有目录」。
-   * 实现时一律上报**完整的一份**（不是增量），没有书签就明确报空数组 —— 空数组与
-   * 「还没读到」是两种状态，面板显示的话不一样。
+   * 凡是 `capabilities.outline` 为 true 的渲染器都要实现：不报就永远停在「正在读取目录…」。
+   * 一律上报**完整的一份**（不是增量），没有标题就明确报空数组 —— 空数组与
+   * 「还没读到」是两种状态，面板显示的话不一样。解析逻辑尽量复用 `outline.ts`。
    */
   onOutlineChange?(outline: DocumentOutlineItem[]): void
   /**

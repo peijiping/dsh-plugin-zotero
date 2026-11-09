@@ -1,11 +1,12 @@
 /**
- * 左上角的目录浮层：PDF 书签按层级列出，点一条跳到对应页。
+ * 左上角的**统一**目录浮层：PDF 书签、网页快照标题、笔记 / 全文标题都在这里。
  *
  * 按钮与「文献信息」并排（目录在左），收起规则和其它浮层共用 {@link useDismiss}：
  * 点浮层外、按 Esc、点进网页快照正文里都会收起。
  *
- * 目录数据由渲染器上报（见 `viewer/types.ts` 的 `onOutlineChange`），这里只负责画；
- * 渲染器不报（纯文本 / 网页快照）时按钮根本不出现，见 `ItemDetail`。
+ * 目录数据一律由渲染器上报（见 `viewer/types.ts` 的 `onOutlineChange`），这里只负责画：
+ * 面板不解释跳转目标，点一条就把 `target` 原样交回 `ItemDetail` 转给渲染器——
+ * 于是 PDF 跳页、HTML 滚到标题可以共用同一份 UI。
  *
  * 点条目跳转后立刻收起：浮层压在文档左侧，留着就把刚跳过去的内容挡了一半。
  */
@@ -19,19 +20,21 @@ import type { DocumentOutlineItem } from './viewer/types'
 
 interface Props {
   t: Translate
-  /** `null` 表示还没读到（文档还在加载）；空数组表示这份文档没有书签。 */
+  /** `null` 表示还没读到（文档还在加载）；空数组表示这份文档没有标题 / 书签。 */
   items: DocumentOutlineItem[] | null
+  /** 目录来源的一句说明：PDF 书签 / 网页标题 / 笔记标题 …，只作展示。 */
+  sourceLabel: string
   open: boolean
   onToggle(): void
   onClose(): void
-  onJump(page: number): void
+  onJump(item: DocumentOutlineItem): void
 }
 
 /** 缩进宽度；层级再深也不再往外推，免得窄面板里标题全被挤成一点。 */
 const INDENT = 13
 const MAX_INDENT_DEPTH = 6
 
-export function OutlinePanel({ t, items, open, onToggle, onClose, onJump }: Props): ReactElement {
+export function OutlinePanel({ t, items, sourceLabel, open, onToggle, onClose, onJump }: Props): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
   /** 悬停行：内联 style 写不了 `:hover`，只能自己记一个下标。 */
   const [hovered, setHovered] = useState<number | null>(null)
@@ -59,6 +62,7 @@ export function OutlinePanel({ t, items, open, onToggle, onClose, onJump }: Prop
               <span style={countStyle}>{tpl(t('outline.count'), { n: items.length })}</span>
             )}
           </div>
+          <div style={sourceStyle}>{sourceLabel}</div>
 
           {items === null && <p style={emptyStyle}>{t('outline.loading')}</p>}
 
@@ -67,18 +71,21 @@ export function OutlinePanel({ t, items, open, onToggle, onClose, onJump }: Prop
           {items !== null && items.length > 0 && (
             <div style={listStyle}>
               {items.map((item, index) => {
-                const target = item.page
+                const target = item.target
+                const hint = target === null
+                  ? item.title
+                  : `${item.title}\n${target.kind === 'page'
+                    ? tpl(t('outline.jump'), { page: target.page })
+                    : t('outline.jumpHeading')}`
                 return (
                   <button
                     key={`${index}-${item.title}`}
                     type="button"
                     disabled={target === null}
-                    onClick={() => {
-                      if (target !== null) onJump(target)
-                    }}
+                    onClick={() => onJump(item)}
                     onMouseEnter={() => setHovered(index)}
                     onMouseLeave={() => setHovered((current) => (current === index ? null : current))}
-                    title={target === null ? item.title : `${item.title}\n${tpl(t('outline.jump'), { page: target })}`}
+                    title={hint}
                     style={{
                       ...rowStyle,
                       paddingLeft: 6 + Math.min(item.depth, MAX_INDENT_DEPTH) * INDENT,
@@ -179,6 +186,14 @@ const countStyle = {
   fontSize: 11,
   fontWeight: 400,
   opacity: 0.65,
+} as const
+
+/** 来源说明：三种文档解析出来的目录长得不一样，给用户一句口径。 */
+const sourceStyle = {
+  flexShrink: 0,
+  padding: '0 4px 6px',
+  fontSize: 11,
+  opacity: 0.58,
 } as const
 
 const listStyle = {

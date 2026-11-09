@@ -12,9 +12,10 @@
  * - 点标注的编辑卡片：`AnnotationCard`（换色 / 评论 / 换类型 / 删除）
  * 渲染器自己只负责「选区从哪来」与「点在哪个标注上」这两件事。
  *
- * 目录（左上角那个浮层）同理：有书签、能跳页的渲染器自己解析出来调
- * `onOutlineChange(items)` 就行，面板不用改；`pageNavigation: false` 的渲染器
- * 连目录按钮都不会出现（见 `ItemDetail`）。
+ * 目录（左上角那个浮层）只有一份：PDF 解析书签、快照 iframe 解析网页标题、
+ * 文本渲染器解析笔记 / 全文标题，各自调 `onOutlineChange(items)` 上报，点一条时
+ * 由面板把 `target` 原样交回 `goToOutline()`。解析约定见 `outline.ts`。
+ * `capabilities.outline` 只决定按钮出不出现，与有没有页码无关。
  *
  * 浮层的「点别处 / Esc 收起」也不用渲染器操心：`dismiss.ts` 订阅父页面 `document`
  * 已经覆盖 PDF / 文本这类跑在父 DOM 里的渲染器；只有**自带独立文档表面**的渲染器
@@ -32,13 +33,13 @@ import { isHtml, isPdf, type DocumentRenderer, type DocumentSource } from './typ
 export const RENDERERS: readonly DocumentRenderer[] = [
   {
     id: 'snapshot',
-    capabilities: { zoom: false, pageNavigation: false },
+    capabilities: { zoom: false, pageNavigation: false, outline: true },
     match: (source) => source !== null && isHtml(source),
     Component: SnapshotViewer,
   },
   {
     id: 'pdf',
-    capabilities: { zoom: true, pageNavigation: true },
+    capabilities: { zoom: true, pageNavigation: true, outline: true },
     match: (source) => source !== null && isPdf(source),
     Component: PdfViewer,
   },
@@ -48,14 +49,14 @@ export const RENDERERS: readonly DocumentRenderer[] = [
      * 必须排在 pdf 之后：挂了大 PDF 的 webpage 条目应该看 PDF 而不是这句提示。
      */
     id: 'webpage',
-    capabilities: { zoom: false, pageNavigation: false },
+    capabilities: { zoom: false, pageNavigation: false, outline: true },
     match: (source, detail) =>
       detail.itemType === 'webpage' && (source === null || (!isPdf(source) && !isHtml(source))),
     Component: WebpageViewer,
   },
   {
     id: 'text',
-    capabilities: { zoom: false, pageNavigation: false },
+    capabilities: { zoom: false, pageNavigation: false, outline: true },
     match: () => true,
     Component: TextViewer,
   },
