@@ -8,6 +8,9 @@
  * 主面板 = 目录树 + 标签面板 + 条目列表；条目详情在独立 tab 里，状态不在这里。
  * 列表与标签请求都用「请求序号 + AbortController」防竞态：快速切分类、连续点标签时
  * 旧响应不能覆盖新结果。
+ *
+ * 目录树的「选中 + 展开」另存一份到 localStorage：模块状态只活到页面刷新为止，
+ * 存档让刷新页面 / 重开面板后回到上次选中的目录。
  */
 
 import { useEffect, useState } from 'react'
@@ -33,6 +36,12 @@ const TOAST_MS = 3000
 /** 列表排序的存储键（localStorage，跨会话与重启都记住）。 */
 const SORT_KEY = 'dsh-plugin-zotero.itemSort'
 
+/** 目录树状态的存储键：刷新页面 / 重开面板后回到上次选中的目录。 */
+const TREE_STATE_KEY = 'dsh-plugin-zotero.treeState'
+
+/** 合法的虚拟分类范围（存档里的 scope 不在其中就丢弃）。 */
+const KNOWN_SCOPES: readonly ZoteroItemScope[] = ['library', 'publications', 'unfiled', 'trash']
+
 /** 文库根节点的 id（只存在于客户端，不对应任何 Zotero 分类）。 */
 export const TREE_ROOT_ID = '__library__'
 
@@ -51,6 +60,86 @@ function readSort(): ItemSort {
   } catch {
     return 'none'
   }
+}
+
+/**
+ * 存档里的目录树状态。
+ *
+ * 只记 key 不记整棵节点：真实分类刷新后按 key 重查最新名字与条目数（分类会改名、
+ * 条目数一定变了）。虚拟分类的名字来自界面文案，故连 name 一起存下，省得刷新后
+ * 头部短暂空一行字。
+ */
+interface SavedTreeState {
+  selected: { key: string; name: string; scope?: ZoteroItemScope } | null
+  expanded: string[]
+}
+
+/** 读目录树存档；缺失、坏 JSON、结构不认识都退回「文库根 + 只展开根」。 */
+function readTreeState(): SavedTreeState {
+  const blank: SavedTreeState = { selected: null, expanded: [] }
+  try {
+    const raw = window.localStorage.getItem(TREE_STATE_KEY)
+    if (raw === null) return blank
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return blank
+    const record = parsed as { selected?: unknown; expanded?: unknown }
+    const expanded = Array.isArray(record.expanded)
+      ? record.expanded.filter((id): id is string => typeof id === 'string')
+      : []
+    const saved = record.selected as { key?: unknown; name?: unknown; scope?: unknown } | null | undefined
+    if (saved === null || typeof saved !== 'object' || typeof saved.key !== 'string' || saved.key === '') {
+      return { selected: null, expanded }
+    }
+    const scope = KNOWN_SCOPES.find((item) => item === saved.scope)
+    return {
+      selected: {
+        key: saved.key,
+        name: typeof saved.name === 'string' ? saved.name : '',
+        ...(scope === undefined ? {} : { scope }),
+      },
+      expanded,
+    }
+  } catch {
+    // 隐私模式禁用 localStorage / 存档是坏 JSON：都退回文库根，存档不能挡住面板。
+    return blank
+  }
+}
+
+/**
+ * 把当前选中与展开写盘。
+ *
+ * 文库根是默认值，不存（存档为空即代表文库根），免得和「没有存档」两种状态打架。
+ */
+function saveTreeState(): void {
+  const collection = state.selectedCollection
+  const saved: SavedTreeState = {
+    selected: collection === null || collection.key === TREE_ROOT_ID
+      ? null
+      : {
+          key: collection.key,
+          name: collection.name,
+          ...(collection.scope === undefined ? {} : { scope: collection.scope }),
+        },
+    expanded: [...state.expanded],
+  }
+  try {
+    window.localStorage.setItem(TREE_STATE_KEY, JSON.stringify(saved))
+  } catch {
+    // 隐私模式等禁用 localStorage 时忽略，本次会话内的选择仍然正确。
+  }
+}
+
+/** 选中分类的祖先 key 链（由内到外）；结构异常时中断，避免死循环。 */
+function ancestorKeys(collections: ZoteroCollection[], key: string): string[] {
+  const byKey = new Map(collections.map((node) => [node.key, node]))
+  const chain: string[] = []
+  let node = byKey.get(key)
+  while (node !== undefined && node.parentKey !== false) {
+    if (chain.includes(node.parentKey)) break
+    chain.push(node.parentKey)
+    node = byKey.get(node.parentKey)
+  }
+  return chain
 }
 
 export interface PaneState {
@@ -100,6 +189,8 @@ export interface PaneState {
 }
 
 function initialState(): PaneState {
+  // 刷新页面后模块会被重新求值，选择只能从存档里捞回来（分类树本身仍要重拉）。
+  const saved = readTreeState()
   return {
     health: null,
     libraryName: '',
@@ -107,9 +198,16 @@ function initialState(): PaneState {
     treeError: null,
     treeLoading: true,
     loaded: false,
-    expanded: new Set([TREE_ROOT_ID]),
+    expanded: new Set([TREE_ROOT_ID, ...saved.expanded]),
     treeQuery: '',
-    selectedCollection: null,
+    selectedCollection: saved.selected === null
+      ? null
+      : {
+          key: saved.selected.key,
+          name: saved.selected.name,
+          parentKey: false,
+          ...(saved.selected.scope === undefined ? {} : { scope: saved.selected.scope }),
+        },
     items: [],
     itemsTotal: 0,
     itemsLoading: false,
@@ -229,14 +327,24 @@ export function loadTree(force = false): Promise<void> {
             ?? libraryRoot(tree.libraryName)
         }
       }
+      // 顺带把选中节点的祖先撑开：分类可能在 Zotero 里被挪到别的父级下，
+      // 存档里的展开集不含新父级，不补的话刷新后选中项藏在折叠的父级里。
+      const expanded = new Set(state.expanded)
+      expanded.add(TREE_ROOT_ID)
+      if (selected.key !== TREE_ROOT_ID && selected.scope === undefined) {
+        for (const key of ancestorKeys(tree.collections, selected.key)) expanded.add(key)
+      }
       patch({
         health: healthData,
         collections: tree.collections,
         libraryName: tree.libraryName,
         treeError: null,
         loaded: true,
+        expanded,
         selectedCollection: selected,
       })
+      // 选中的分类若已被删掉（回落到文库根），把回落结果写回存档。
+      saveTreeState()
       reloadItems({ reset: true })
       loadTagUsage()
     } catch (error) {
@@ -256,6 +364,7 @@ export function toggleTreeNode(nodeId: string): void {
   if (expanded.has(nodeId)) expanded.delete(nodeId)
   else expanded.add(nodeId)
   patch({ expanded })
+  saveTreeState()
 }
 
 /**
@@ -288,6 +397,7 @@ export function selectCollection(collection: ZoteroCollection): void {
     selectedTags: new Set(),
     tagQuery: '',
   })
+  saveTreeState()
   reloadItems({ reset: true })
   loadTagUsage()
 }

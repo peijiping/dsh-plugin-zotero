@@ -9,7 +9,8 @@
  * - 顶部筛选框只筛目录名（同 Zotero 左栏）：命中分类保留、非命中的祖先作为
  *   上下文行保留、未命中的子分类隐藏；筛选期间自动展开命中路径。
  * - 展开状态放在 {@link paneStore}：右侧栏切 tab 时正文会被卸载重挂，
- *   只有模块级 store 能让树保持原样。
+ *   只有模块级 store 能让树保持原样；store 再把「选中 + 展开」写进 localStorage，
+ *   页面刷新后也能回到上次的位置。
  */
 
 import { useState, type ReactElement, type ReactNode } from 'react'
