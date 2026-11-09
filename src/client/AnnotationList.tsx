@@ -18,7 +18,7 @@
 
 import { Fragment, useState, type ReactElement, type ReactNode } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from './ui'
 
 import type { ZoteroAnnotation, ZoteroAnnotationPatch } from '../zotero/types'
 import { ANNOTATION_COLORS } from '../zotero/palette'
@@ -33,7 +33,13 @@ import {
 } from './annotationRuns'
 import { tpl, type Translate } from './locales'
 import { showToast } from './paneStore'
-import { ACCENT } from './styles'
+import {
+  ACCENT,
+  SOFT_BUTTON_ACTIVE_STYLE,
+  SOFT_BUTTON_CLASS,
+  SOFT_BUTTON_STYLE,
+  softButtonClass,
+} from './styles'
 
 interface Props {
   t: Translate
@@ -149,9 +155,11 @@ function Chip({ active, onClick, children }: { active: boolean; onClick(): void;
   return (
     <button
       type="button"
+      className={softButtonClass(active)}
       onClick={onClick}
       aria-pressed={active}
       style={{
+        ...(active ? SOFT_BUTTON_ACTIVE_STYLE : SOFT_BUTTON_STYLE),
         display: 'inline-flex',
         alignItems: 'center',
         gap: 4,
@@ -160,9 +168,6 @@ function Chip({ active, onClick, children }: { active: boolean; onClick(): void;
         fontSize: 11,
         lineHeight: 1.2,
         borderRadius: 10,
-        color: 'inherit',
-        background: active ? 'rgba(80,140,255,0.18)' : 'transparent',
-        border: `1px solid ${active ? 'rgba(80,140,255,0.65)' : 'rgba(127,127,127,0.3)'}`,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
       }}
@@ -520,6 +525,7 @@ export function AnnotationList({
                 {located && text === '' && (
                   <button
                     type="button"
+                    className={SOFT_BUTTON_CLASS}
                     onClick={() => onLocate(annotation)}
                     style={locateButtonStyle}
                   >
@@ -588,15 +594,13 @@ const insertButtonStyle = {
 } as const
 
 const locateButtonStyle = {
+  ...SOFT_BUTTON_STYLE,
   flexShrink: 0,
   height: 20,
   padding: '0 6px',
   fontSize: 11,
   lineHeight: 1.2,
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.3)',
-  background: 'transparent',
-  color: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const

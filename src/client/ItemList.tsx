@@ -11,7 +11,7 @@
 
 import { useState, type ReactElement } from 'react'
 
-import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
 import { ItemTypeIcon, itemTypeLabel } from './itemType'
@@ -21,6 +21,7 @@ import type { ItemSort } from './paneStore'
 import { TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
 import { SearchField } from './SearchField'
+import { Button, SectionTitle } from './ui'
 
 interface Props {
   t: Translate
@@ -73,7 +74,7 @@ const headerStyle: React.CSSProperties = {
 
 const titleRowStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'baseline',
+  alignItems: 'center',
   gap: 8,
   minWidth: 0,
 }
@@ -141,10 +142,15 @@ const itemMetaTextStyle: React.CSSProperties = {
 
 const itemBodyStyle: React.CSSProperties = { flex: 1, minWidth: 0 }
 
+/** 图标固定占位 24px，只居中图标本身，不铺底色。 */
 const itemIconStyle: React.CSSProperties = {
   display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
   flexShrink: 0,
-  marginTop: 3,
+  width: 24,
+  height: 24,
+  marginTop: 1,
 }
 
 /** 头部引用按钮的紧凑尺寸。 */
@@ -323,9 +329,7 @@ export function ItemList(props: Props): ReactElement {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={headerStyle}>
         <div style={titleRowStyle}>
-          <strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {name}
-          </strong>
+          <SectionTitle title={name}>{name}</SectionTitle>
           <span style={{ flexShrink: 0, fontSize: 11.5, opacity: 0.55 }}>
             {tpl(t('list.count'), { n: itemsTotal })}
           </span>

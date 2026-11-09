@@ -20,6 +20,7 @@ import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ZoteroCollection, ZoteroItemScope } from '../zotero/types'
 import type { Translate } from './locales'
 import { toggleTreeNode, TREE_ROOT_ID, usePaneState } from './paneStore'
+import { TREE_BLUE, TREE_GREEN, TREE_ORANGE, TREE_RED } from './styles'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -72,35 +73,68 @@ interface Props {
 }
 
 // ---- 图标（内联 SVG，避免依赖宿主图标导出名） -----------------------------
+//
+// 形状与配色对齐 Zotero 客户端左栏：蓝色柱廊 = 文库根、蓝色文件夹 = 分类、
+// 绿色文稿 = 我的出版物、橙色散页 = 未分类条目、红色垃圾桶 = 回收站。
+// 图标是固定彩色（不随主题变），这正是 Zotero 原生左栏的样子。
 
-function glyph(path: string): ReactNode {
+interface TreeIcon {
+  path: string
+  color: string
+}
+
+function glyph(icon: TreeIcon, size = 15): ReactNode {
   return (
     <svg
-      width={14}
-      height={14}
+      width={size}
+      height={size}
       viewBox="0 0 16 16"
       fill="none"
-      stroke="currentColor"
-      strokeWidth={1.3}
+      stroke={icon.color}
+      strokeWidth={1.4}
       strokeLinejoin="round"
-      style={{ opacity: 0.65 }}
+      strokeLinecap="round"
+      aria-hidden
     >
-      <path d={path} />
+      <path d={icon.path} />
     </svg>
   )
 }
 
-const FOLDER_ICON = 'M2.5 12.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z'
-const LIBRARY_ICON = 'M2.5 3.5h5v9h-5zM8.5 3.5h5v9h-5z'
+/** 蓝色古典柱廊：对应 Zotero 的「我的文库」。 */
+const LIBRARY_ICON: TreeIcon = {
+  path: 'M1.7 5.9 8 2.5l6.3 3.4zM2.7 6.5h10.6M3.7 7.1v4.7M6.5 7.1v4.7M9.5 7.1v4.7M12.3 7.1v4.7M2.2 12.1h11.6M2.7 12.1v1.4h10.6v-1.4',
+  color: TREE_BLUE,
+}
 
-/** 虚拟分类图标：我的出版物（书）/ 未分类条目（文件夹）/ 回收站（垃圾桶）。 */
-const BOOK_ICON = 'M3 2.8 8 2l5 0.8v10.4L8 14l-5-0.8zM8 2v12'
-const TRASH_ICON = 'M3.2 4.5h9.6M6.3 4.5V3h3.4v1.5M4.6 4.5l0.6 9.2h5.6l0.6-9.2M6.8 7v4.4M9.2 7v4.4'
+/** 蓝色文件夹：左上带 tab、中间一道盖线，Zotero 分类图标的轮廓。 */
+const FOLDER_ICON: TreeIcon = {
+  path: 'M2.3 5.1V4.4a.8.8 0 0 1 .8-.8h3.4L7.9 5.3h5.8a.8.8 0 0 1 .8.8v6.6a.8.8 0 0 1-.8.8H3.1a.8.8 0 0 1-.8-.8zM2.3 6.7h12.2',
+  color: TREE_BLUE,
+}
 
-/** 虚拟分类的图标 path（键与 {@link VIRTUAL_NODES.icon} 对应）。 */
-const VIRTUAL_ICON: Record<string, string> = {
-  BOOK: BOOK_ICON,
-  UNFILED: FOLDER_ICON,
+/** 绿色文稿：我的出版物。 */
+const PUBLICATIONS_ICON: TreeIcon = {
+  path: 'M4 2.4h5.4L12 5v8.6H4zM9.4 2.4V5H12M6.2 8h4M6.2 10.4h4',
+  color: TREE_GREEN,
+}
+
+/** 橙色文稿（右上角折角 + 参差文字行）：未分类条目。 */
+const UNFILED_ICON: TreeIcon = {
+  path: 'M4.2 2.5h5.2L12 5v8.5H4.2zM9.4 2.5V5H12M6.3 8.1h4M6.3 10.4h2.7',
+  color: TREE_ORANGE,
+}
+
+/** 红色垃圾桶：回收站。 */
+const TRASH_ICON: TreeIcon = {
+  path: 'M3.2 4.5h9.6M6.3 4.5V3h3.4v1.5M4.6 4.5l0.6 9.2h5.6l0.6-9.2M6.8 7v4.4M9.2 7v4.4',
+  color: TREE_RED,
+}
+
+/** 虚拟分类的图标（键与 {@link VIRTUAL_NODES.icon} 对应）。 */
+const VIRTUAL_ICON: Record<string, TreeIcon> = {
+  BOOK: PUBLICATIONS_ICON,
+  UNFILED: UNFILED_ICON,
   TRASH: TRASH_ICON,
 }
 
@@ -162,8 +196,11 @@ function rowIndent(depth: number): React.CSSProperties {
   return { paddingLeft: BASE_INDENT + depth * INDENT }
 }
 
+/** 选中行：浅蓝底 + 蓝色文字，与 Zotero 的灰底相比更贴合整套配色。 */
 function rowBackground(selected: boolean): React.CSSProperties {
-  return { background: selected ? 'rgba(127,127,127,0.16)' : 'transparent' }
+  return selected
+    ? { background: 'rgba(74,134,232,0.15)', color: TREE_BLUE, fontWeight: 600 }
+    : { background: 'transparent' }
 }
 
 const iconBox: React.CSSProperties = {

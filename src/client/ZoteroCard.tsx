@@ -24,7 +24,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
 import {
-  Button,
   SettingsFormModel,
   SettingsValueField,
   Switch,
@@ -40,6 +39,7 @@ import {
 import type { ZoteroWriteStatus } from '../zotero/types'
 import { authorizeWrites, fetchWriteStatus } from './api'
 import { tpl, type Translate } from './locales'
+import { Button } from './ui'
 
 /** 设置命名空间 id（= cordis.patch.yml 的 insert 行 id）。 */
 export const ROW_ID = 'dsh-plugin-zotero'

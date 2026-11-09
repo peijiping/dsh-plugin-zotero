@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, SectionTitle } from './ui'
 
 import { CollectionTree } from './CollectionTree'
 import type { InputActions } from './inline'
@@ -167,7 +167,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
           flexShrink: 0,
         }}
       >
-        <strong style={{ fontSize: 13 }}>{libraryName === '' ? t('tab.title') : libraryName}</strong>
+        <SectionTitle>{libraryName === '' ? t('tab.title') : libraryName}</SectionTitle>
         <StatusDot ok={health?.zotero.running === true} label={t(health?.zotero.running === true ? 'status.zoteroOn' : 'status.zoteroOff')} />
         <StatusDot ok={health?.mcp.running === true} label={t(health?.mcp.running === true ? 'status.mcpOn' : 'status.mcpOff')} />
         <div style={{ flex: 1 }} />

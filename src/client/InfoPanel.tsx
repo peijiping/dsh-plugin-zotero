@@ -27,7 +27,7 @@ import {
 import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { NoteList } from './NoteList'
-import { ACCENT } from './styles'
+import { ACCENT, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
 
 interface Props {
   t: Translate
@@ -149,7 +149,13 @@ export function InfoPanel({
 
       {/* 笔记类条目自己就是正文，没有「把条目加入对话」这回事（同浮层头部的旧规则）。 */}
       {!selfNote && (
-        <button type="button" onClick={onCite} title={t('action.insertItem')} style={citeTriggerStyle}>
+        <button
+          type="button"
+          className={SOFT_BUTTON_CLASS}
+          onClick={onCite}
+          title={t('action.insertItem')}
+          style={citeTriggerStyle}
+        >
           {t('action.insertItemShort')}
         </button>
       )}
@@ -353,6 +359,7 @@ const panelTitleStyle = {
 
 /** 收在 `i` 右边、跟它同一行：是每次读文献都要点的主操作，不藏进浮层。 */
 const citeTriggerStyle = {
+  ...SOFT_BUTTON_STYLE,
   position: 'absolute',
   pointerEvents: 'auto',
   top: 4,
@@ -366,9 +373,6 @@ const citeTriggerStyle = {
   lineHeight: 1,
   whiteSpace: 'nowrap',
   borderRadius: 11,
-  border: '1px solid rgba(127,127,127,0.4)',
-  background: 'Canvas',
-  color: 'CanvasText',
   cursor: 'pointer',
   boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
   zIndex: 21,

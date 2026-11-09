@@ -21,7 +21,7 @@
 
 import { useEffect, useState, type ReactElement } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from './ui'
 
 import type { ZoteroNote } from '../zotero/types'
 import { createNote, deleteNote, fetchNoteRaw, updateNote } from './api'

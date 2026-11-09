@@ -20,6 +20,7 @@ import { createAnnotations } from '../api'
 import { notifyDocumentPress, useDismiss } from '../dismiss'
 import { tpl } from '../locales'
 import { showToast } from '../paneStore'
+import { SOFT_BUTTON_STYLE } from '../styles'
 import { AnnotationCard } from './AnnotationCard'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import {
@@ -420,13 +421,11 @@ const noticeStyle: CSSProperties = {
 } as const
 
 const retryStyle = {
+  ...SOFT_BUTTON_STYLE,
   marginLeft: 'auto',
   padding: '2px 8px',
   fontSize: 11.5,
   borderRadius: 5,
-  border: '1px solid rgba(127,127,127,0.35)',
-  background: 'transparent',
-  color: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const

@@ -92,20 +92,34 @@ const PATH: Record<IconFamily, string> = {
 /** 已读图标的粉色：不用主题蓝，蓝色容易被读成「未读消息」徽标。 */
 const READ_ICON_COLOR = '#e8798d'
 
-/** 条目类型图标；未知类型显示文档图标，已读条目整体转粉色。 */
-export function ItemTypeIcon({ itemType, read = false }: { itemType: string; read?: boolean }): ReactElement {
+/** 未读图标用 Zotero 蓝：列表行里比中性灰更醒目，也与树、按钮同一支蓝。 */
+const ICON_COLOR = '#4a86e8'
+
+/**
+ * 条目类型图标；未知类型显示文档图标，已读条目整体转粉色。
+ * 无底衬，默认 22px（比 Zotero 原生 16px 放大，列表里才看得清）。
+ */
+export function ItemTypeIcon({
+  itemType,
+  read = false,
+  size = 22,
+}: {
+  itemType: string
+  read?: boolean
+  size?: number
+}): ReactElement {
   const family = FAMILY[itemType] ?? 'document'
   return (
     <svg
-      width={14}
-      height={14}
+      width={size}
+      height={size}
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.3}
+      strokeWidth={1.35}
       strokeLinejoin="round"
       strokeLinecap="round"
-      style={{ opacity: read ? 0.9 : 0.65, color: read ? READ_ICON_COLOR : undefined }}
+      style={{ opacity: read ? 0.95 : 0.9, color: read ? READ_ICON_COLOR : ICON_COLOR }}
       aria-hidden
     >
       <path d={PATH[family]} />

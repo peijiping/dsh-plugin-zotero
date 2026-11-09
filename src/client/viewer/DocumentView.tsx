@@ -9,6 +9,7 @@ import { useCallback, useRef, useState, type MutableRefObject, type ReactElement
 
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import { tpl, type Translate } from '../locales'
+import { SOFT_BUTTON_STYLE } from '../styles'
 import { pickRenderer } from './registry'
 import type { DocumentOutlineItem, DocumentSource, ViewerHandle } from './types'
 
@@ -294,6 +295,7 @@ const iconButtonStyle = {
 } as const
 
 const toolButtonStyle = {
+  ...SOFT_BUTTON_STYLE,
   flexShrink: 0,
   display: 'inline-flex',
   alignItems: 'center',
@@ -304,9 +306,6 @@ const toolButtonStyle = {
   fontSize: 11.5,
   lineHeight: 1,
   borderRadius: 5,
-  border: '1px solid rgba(127,127,127,0.3)',
-  background: 'transparent',
-  color: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const

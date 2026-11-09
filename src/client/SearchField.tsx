@@ -28,7 +28,7 @@ function Magnifier(): ReactElement {
       stroke="currentColor"
       strokeWidth={1.6}
       strokeLinecap="round"
-      style={{ flexShrink: 0, opacity: 0.55 }}
+      style={{ flexShrink: 0, color: '#4a86e8', opacity: 0.85 }}
     >
       <circle cx="7" cy="7" r="4.4" />
       <path d="m10.4 10.4 3 3" />
@@ -78,8 +78,8 @@ export function SearchField({ value, placeholder, clearLabel, onChange }: Props)
         boxSizing: 'border-box',
         padding: '0 7px',
         borderRadius: 6,
-        border: `1px solid ${focused ? 'rgba(80,140,255,0.7)' : 'rgba(127,127,127,0.28)'}`,
-        background: 'rgba(127,127,127,0.06)',
+        border: `1px solid ${focused ? 'rgba(74,134,232,0.75)' : 'rgba(74,134,232,0.32)'}`,
+        background: 'rgba(74,134,232,0.05)',
         cursor: 'text',
         color: 'inherit',
       }}

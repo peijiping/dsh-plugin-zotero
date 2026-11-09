@@ -14,6 +14,12 @@ import { useState, type ReactElement } from 'react'
 import { ANNOTATION_COLORS } from '../../zotero/palette'
 import { showToast } from '../paneStore'
 import { type Translate } from '../locales'
+import {
+  SOFT_BUTTON_ACTIVE_STYLE,
+  SOFT_BUTTON_CLASS,
+  SOFT_BUTTON_STYLE,
+  softButtonClass,
+} from '../styles'
 
 /** 本插件能新建的标注类型，与 Zotero 阅读器浮条上的两个按钮同集合。 */
 export type MarkType = 'highlight' | 'underline'
@@ -62,6 +68,7 @@ export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate }: P
     return (
       <button
         type="button"
+        className={softButtonClass(active)}
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => setType(value)}
         disabled={annotate?.busy === true}
@@ -92,6 +99,7 @@ export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate }: P
           ))}
           <button
             type="button"
+            className={softButtonClass(commentOpen)}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setCommentOpen((open) => !open)}
             style={{ ...chipStyle, ...(commentOpen ? chipActiveStyle : null) }}
@@ -120,17 +128,18 @@ export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate }: P
         </div>
       )}
       <div style={groupStyle}>
-        <button type="button" onClick={copy} style={buttonStyle}>
+        <button type="button" className={SOFT_BUTTON_CLASS} onClick={copy} style={buttonStyle}>
           {t('action.copy')}
         </button>
         <button
           type="button"
+          className={SOFT_BUTTON_CLASS}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => {
             onInsert(text)
             finish()
           }}
-          style={{ ...buttonStyle, borderLeft: '1px solid rgba(127,127,127,0.25)' }}
+          style={buttonStyle}
         >
           {t('action.insertItemShort')}
         </button>
@@ -168,30 +177,24 @@ const groupStyle = {
 } as const
 
 const buttonStyle = {
+  ...SOFT_BUTTON_STYLE,
   padding: '3px 8px',
-  border: 'none',
-  background: 'transparent',
-  color: 'inherit',
+  borderRadius: 5,
   font: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const
 
 const chipStyle = {
+  ...SOFT_BUTTON_STYLE,
   padding: '2px 6px',
-  border: '1px solid rgba(127,127,127,0.25)',
   borderRadius: 5,
-  background: 'transparent',
-  color: 'inherit',
   font: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const
 
-const chipActiveStyle = {
-  borderColor: 'rgba(80, 140, 255, 0.6)',
-  background: 'rgba(80, 140, 255, 0.14)',
-} as const
+const chipActiveStyle = SOFT_BUTTON_ACTIVE_STYLE
 
 const swatchStyle = {
   width: 15,

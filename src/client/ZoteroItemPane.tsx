@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from './ui'
 
 import type { ZoteroItemDetail } from '../zotero/types'
 import { fetchItem } from './api'

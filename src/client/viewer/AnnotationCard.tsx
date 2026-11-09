@@ -21,7 +21,7 @@ import { annotationColor } from '../annotationRuns'
 import { deleteAnnotation, patchAnnotation } from '../api'
 import { tpl, type Translate } from '../locales'
 import { showToast } from '../paneStore'
-import { ACCENT } from '../styles'
+import { ACCENT, SOFT_BUTTON_STYLE } from '../styles'
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -379,14 +379,12 @@ const footStyle = {
 } as const
 
 const smallButtonStyle = {
+  ...SOFT_BUTTON_STYLE,
   height: 22,
   padding: '0 8px',
   fontSize: 11.5,
   lineHeight: 1.2,
   borderRadius: 5,
-  border: '1px solid rgba(127,127,127,0.35)',
-  background: 'transparent',
-  color: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const

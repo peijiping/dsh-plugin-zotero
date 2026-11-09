@@ -11,13 +11,22 @@
 
 import { useRef, useState, type ReactElement } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, SectionTitle } from './ui'
 
 import type { ZoteroTag } from '../zotero/types'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import { MAX_TAG_REFERENCE } from './reference'
 import { SearchField } from './SearchField'
+import {
+  MODE_BUTTON_ACTIVE_STYLE,
+  SOFT_BUTTON_CLASS,
+  SOFT_BUTTON_STYLE,
+  TAG_IDLE_STYLE,
+  TAG_SELECTED_STYLE,
+  softButtonClass,
+  tagButtonClass,
+} from './styles'
 
 /** 面板高度与折叠状态的存储键。 */
 const HEIGHT_KEY = 'dsh-plugin-zotero.tagPanelHeight'
@@ -87,8 +96,13 @@ const tagFlowStyle: React.CSSProperties = {
 /** 自动标签的淡化程度（Zotero 用斜体区分，这里斜体 + 略淡）。 */
 const AUTOMATIC_OPACITY = 0.72
 
+/**
+ * 标签胶囊：未选中透明无底色（中性灰细描边），选中 Zotero 深灰底白字。
+ * 自动标签的斜体 + 淡化保留，但选中态不被淡化盖过识别度。
+ */
 function pillStyle(selected: boolean, automatic: boolean): React.CSSProperties {
   return {
+    ...(selected ? TAG_SELECTED_STYLE : TAG_IDLE_STYLE),
     padding: '1px 7px',
     fontSize: 11.5,
     lineHeight: '17px',
@@ -96,12 +110,9 @@ function pillStyle(selected: boolean, automatic: boolean): React.CSSProperties {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    color: 'inherit',
-    background: selected ? 'rgba(80,140,255,0.18)' : 'transparent',
-    border: `1px solid ${selected ? 'rgba(80,140,255,0.55)' : 'rgba(127,127,127,0.32)'}`,
     borderRadius: 9,
     cursor: 'pointer',
-    opacity: automatic ? AUTOMATIC_OPACITY : 1,
+    opacity: automatic && !selected ? AUTOMATIC_OPACITY : 1,
     fontStyle: automatic ? 'italic' : 'normal',
   }
 }
@@ -122,12 +133,36 @@ function TagPill({ t, tag, selected, scopeCount, scoped, onToggle }: {
   return (
     <button
       type="button"
+      className={tagButtonClass(selected)}
       onClick={onToggle}
       title={hints.join('\n')}
       style={pillStyle(selected, automatic)}
     >
       {tag.name}
     </button>
+  )
+}
+
+/**
+ * 折叠按钮里的实心三角：画布 10px = 20px 外框的 50%，路径再几乎撑满画布，
+ * 比原来的字符 `▴/▾`（11px 字号下字形只有几像素）醒目得多。
+ * 两个方向用完全镜像的 path，不用 CSS rotate（SVG 的 transform-origin 易出偏差）。
+ */
+function CollapseArrow({ collapsed }: { collapsed: boolean }): ReactElement {
+  return (
+    <svg
+      width={10}
+      height={10}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth={1.1}
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+      aria-hidden
+    >
+      <path d={collapsed ? 'M8 13.6 L1 2.4 H15 Z' : 'M8 2.4 L1 13.6 H15 Z'} />
+    </svg>
   )
 }
 
@@ -240,31 +275,31 @@ export function TagPanel(props: Props): ReactElement {
           flexShrink: 0,
         }}
       >
-        <strong style={{ fontSize: 12 }}>{t('tags.title')}</strong>
+        <SectionTitle style={{ fontSize: 12 }}>{t('tags.title')}</SectionTitle>
         {scopedTags !== null && (
           <span style={{ fontSize: 11, opacity: 0.5 }}>{tpl(t('tags.count'), { n: scopedTags.length })}</span>
         )}
         <div style={{ flex: 1 }} />
         <button
           type="button"
+          className={SOFT_BUTTON_CLASS}
           onClick={toggleCollapsed}
           aria-expanded={!collapsed}
           aria-label={t(collapsed ? 'tags.expand' : 'tags.collapse')}
           title={t(collapsed ? 'tags.expand' : 'tags.collapse')}
           style={{
+            ...SOFT_BUTTON_STYLE,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             width: 20,
             height: 20,
             padding: 0,
-            fontSize: 11,
-            lineHeight: 1,
-            color: '#508cff',
-            background: 'transparent',
-            border: '1px solid rgba(80,140,255,0.4)',
             borderRadius: 5,
             cursor: 'pointer',
           }}
         >
-          {collapsed ? '▾' : '▴'}
+          <CollapseArrow collapsed={collapsed} />
         </button>
       </div>
 
@@ -282,6 +317,7 @@ export function TagPanel(props: Props): ReactElement {
               <span style={{ opacity: 0.7 }}>{tpl(t('tags.selected'), { n: selected.length })}</span>
               <button
                 type="button"
+                className={softButtonClass(tagMode === 'all')}
                 onClick={() => onSetTagMode('all')}
                 title={t('tags.matchAllHint')}
                 aria-pressed={tagMode === 'all'}
@@ -291,6 +327,7 @@ export function TagPanel(props: Props): ReactElement {
               </button>
               <button
                 type="button"
+                className={softButtonClass(tagMode === 'any')}
                 onClick={() => onSetTagMode('any')}
                 title={t('tags.matchAnyHint')}
                 aria-pressed={tagMode === 'any'}
@@ -298,7 +335,7 @@ export function TagPanel(props: Props): ReactElement {
               >
                 {t('tags.matchAny')}
               </button>
-              <button type="button" onClick={onClearTags} style={plainButtonStyle}>
+              <button type="button" className={SOFT_BUTTON_CLASS} onClick={onClearTags} style={plainButtonStyle}>
                 {t('tags.clear')}
               </button>
               <div style={{ flex: 1 }} />
@@ -353,26 +390,24 @@ export function TagPanel(props: Props): ReactElement {
   )
 }
 
+/** 「全部 / 任一」互斥开关：与全站按钮同色，只把选中底色加深。 */
 function modeButtonStyle(active: boolean): React.CSSProperties {
   return {
+    ...(active ? MODE_BUTTON_ACTIVE_STYLE : SOFT_BUTTON_STYLE),
     padding: '0 5px',
     fontSize: 11,
     lineHeight: '16px',
-    color: 'inherit',
-    background: active ? 'rgba(80,140,255,0.18)' : 'transparent',
-    border: active ? '1px solid rgba(80,140,255,0.5)' : '1px solid rgba(127,127,127,0.3)',
     borderRadius: 5,
     cursor: 'pointer',
   }
 }
 
+/** 「清除」是普通动作，没有选中态：与全站按钮同色。 */
 const plainButtonStyle: React.CSSProperties = {
+  ...SOFT_BUTTON_STYLE,
   padding: '0 5px',
   fontSize: 11,
   lineHeight: '16px',
-  color: 'inherit',
-  background: 'transparent',
-  border: '1px solid rgba(127,127,127,0.3)',
   borderRadius: 5,
   cursor: 'pointer',
   opacity: 0.8,

@@ -43,6 +43,7 @@ import type { ZoteroAnnotation } from '../../zotero/types'
 import { EDITABLE_TYPES } from '../annotationRuns'
 import { createAnnotations, fetchAttachmentInfo } from '../api'
 import { useDismiss } from '../dismiss'
+import { SOFT_BUTTON_STYLE } from '../styles'
 import { tpl, type Translate } from '../locales'
 import { showToast } from '../paneStore'
 import { AnnotationCard } from './AnnotationCard'
@@ -1276,14 +1277,12 @@ const hintOverlayStyle = {
 } as const
 
 const smallButtonStyle = {
+  ...SOFT_BUTTON_STYLE,
   height: 22,
   padding: '0 8px',
   fontSize: 11.5,
   lineHeight: 1.2,
   borderRadius: 5,
-  border: '1px solid rgba(127,127,127,0.35)',
-  background: 'transparent',
-  color: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 } as const
