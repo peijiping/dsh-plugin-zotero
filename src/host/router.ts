@@ -26,6 +26,7 @@ import type {
   ApiEnvelope,
   ApiError,
   ApiErrorCode,
+  ApiFix,
   ZoteroAuthResult,
   ZoteroAttachmentInfo,
   ZoteroCollectionBib,
@@ -81,6 +82,7 @@ export function isTrusted(req: IncomingMessage): boolean {
  */
 const WRITE_ACTIONS = new Set([
   'open-in-zotero',
+  'open-settings',
   'authorize',
   'note-create',
   'note-update',
@@ -108,8 +110,14 @@ function sendJson(res: ServerResponse, status: number, payload: ApiEnvelope<unkn
   res.end(body)
 }
 
-function fail(res: ServerResponse, status: number, code: ApiErrorCode, message: string): void {
-  const error: ApiError = { code, message }
+function fail(
+  res: ServerResponse,
+  status: number,
+  code: ApiErrorCode,
+  message: string,
+  fix?: ApiFix,
+): void {
+  const error: ApiError = fix === undefined ? { code, message } : { code, message, fix }
   sendJson(res, status, { ok: false, error })
 }
 
@@ -138,7 +146,10 @@ const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
 
 function toApiError(error: unknown): { status: number; error: ApiError } {
   if (error instanceof ZoteroError) {
-    return { status: STATUS_BY_CODE[error.code] ?? 500, error: { code: error.code, message: error.message } }
+    const apiError: ApiError = error.fix === undefined
+      ? { code: error.code, message: error.message }
+      : { code: error.code, message: error.message, fix: error.fix }
+    return { status: STATUS_BY_CODE[error.code] ?? 500, error: apiError }
   }
   const message = error instanceof Error ? error.message : String(error)
   return { status: 500, error: { code: 'internal_error', message } }
@@ -422,7 +433,7 @@ function openExternal(url: string): Promise<void> {
       resolvePromise()
     })
     child.once('error', (error) => {
-      reject(new ZoteroError('internal_error', `无法打开 Zotero：${error.message}`))
+      reject(new ZoteroError('internal_error', `无法打开外部应用：${error.message}`))
     })
   })
 }
@@ -464,6 +475,27 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
     if (record.page !== undefined) url += `?page=${record.page}`
   }
   await openExternal(url)
+  ok(res, { opened: true })
+}
+
+/**
+ * 打开「去那儿修」的系统面板。
+ *
+ * 目前只认 macOS 的「文件与文件夹」授权：插件读不到 Zotero 附件时，绝大多数是
+ * 这个开关没给（Zotero 自己有权限，所以「Zotero 里正常」）。入口埋得深
+ * （系统设置 → 隐私与安全性 → 文件与文件夹），与其让用户自己找，不如给个按钮。
+ */
+async function handleOpenSettings(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, 4096)
+  if (record.target !== 'privacy-files') {
+    fail(res, 400, 'bad_request', '未知的设置面板')
+    return
+  }
+  if (process.platform !== 'darwin') {
+    fail(res, 400, 'bad_request', '只有 macOS 提供「文件与文件夹」授权面板')
+    return
+  }
+  await openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders')
   ok(res, { opened: true })
 }
 
@@ -650,6 +682,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['read-position', 'GET'],
   ['note-raw', 'GET'],
   ['open-in-zotero', 'POST'],
+  ['open-settings', 'POST'],
   ['authorize', 'POST'],
   ['note-create', 'POST'],
   ['note-update', 'POST'],
@@ -723,6 +756,9 @@ export function createHandler(
         case 'open-in-zotero':
           await handleOpenInZotero(req, res)
           return
+        case 'open-settings':
+          await handleOpenSettings(req, res)
+          return
         case 'mcp-tools':
           await handleMcpTools(res, deps)
           return
@@ -765,7 +801,7 @@ export function createHandler(
       }
     } catch (error) {
       const { status, error: apiError } = toApiError(error)
-      fail(res, status, apiError.code, apiError.message)
+      fail(res, status, apiError.code, apiError.message, apiError.fix)
     }
   }
 }

@@ -43,9 +43,9 @@ import {
   type PageViewport,
 } from 'pdfjs-dist'
 
-import type { ZoteroAnnotation } from '../../zotero/types'
+import type { ApiFix, ZoteroAnnotation } from '../../zotero/types'
 import { EDITABLE_TYPES } from '../annotationRuns'
-import { createAnnotations, fetchAttachmentInfo } from '../api'
+import { ApiFailure, createAnnotations, fetchAttachmentInfo, openSystemSettings } from '../api'
 import { useDismiss } from '../dismiss'
 import { SOFT_BUTTON_STYLE } from '../styles'
 import { tpl, type Translate } from '../locales'
@@ -108,11 +108,23 @@ function tidyLoadError(message: string): string {
 }
 
 /**
+ * 一次加载失败的展示内容。
+ *
+ * `fix` 有值时表示「这个错误可以一键去修」——比如 macOS 的目录授权，
+ * 界面上会在「重试 / 在 Zotero 中打开」旁边多出一个跳转按钮。
+ */
+interface LoadError {
+  text: string
+  fix?: ApiFix
+}
+
+/**
  * 把「服务器返回 404」翻译成人话。
  *
  * `/api/file` 成功时发的是二进制流，失败时 pdf.js 只拿得到状态码，于是界面上
  * 只剩一句看不懂的 404。这里补一次 `/api/attachment-info` 探测：
- * - 探测失败 → 那条错误消息就是真相（「附件文件不存在：/path」「没有权限读取」）；
+ * - 探测失败 → 那条错误消息就是真相（「附件文件不存在：/path」「没有权限读取」），
+ *   能一键修的错误还会带上 `fix`；
  * - 探测成功 → 文件本身读得到，这次 404 是瞬时的（Zotero 重启、正在重建索引），
  *   提示重试比解释原因有用。
  *
@@ -123,17 +135,23 @@ async function explainLoadFailure(
   key: string,
   t: Translate,
   signal?: AbortSignal,
-): Promise<string | null> {
+): Promise<LoadError | null> {
   const status = SERVER_RESPONSE.exec(errorText(error))?.[1]
   if (status === undefined || key === '') return null
   try {
     const info = await fetchAttachmentInfo(key, signal)
     // 415 之类由类型不支持引起：文件读得到也没用，别劝用户重试。
-    if (!info.servable) return tpl(t('viewer.unsupported'), { type: info.contentType || info.filename })
-    return tpl(t('viewer.serverResponse'), { status })
+    if (!info.servable) {
+      return { text: tpl(t('viewer.unsupported'), { type: info.contentType || info.filename }) }
+    }
+    return { text: tpl(t('viewer.serverResponse'), { status }) }
   } catch (probeError) {
     // 探测请求本身也可能失败（Host 没起来等），那就把它的原话带上。
-    return tpl(t('viewer.attachmentUnavailable'), { message: tidyLoadError(errorText(probeError)) })
+    const fix = probeError instanceof ApiFailure ? probeError.fix : undefined
+    return {
+      text: tpl(t('viewer.attachmentUnavailable'), { message: tidyLoadError(errorText(probeError)) }),
+      ...(fix === undefined ? {} : { fix }),
+    }
   }
 }
 
@@ -660,7 +678,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
 
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<LoadError | null>(null)
   const [retry, setRetry] = useState(0)
   const [pageCount, setPageCount] = useState(0)
   const [baseSize, setBaseSize] = useState<{ width: number; height: number } | null>(null)
@@ -749,7 +767,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         if (disposed) return
         // 先上 pdf.js 原文（带状态码），再去问一次真正的原因；探测慢一点也不碍事，
         // 有「重试 / 在 Zotero 中打开」两个按钮兜着。
-        setError(tpl(t('viewer.failed'), { message: tidyLoadError(errorText(loadError)) }))
+        setError({ text: tpl(t('viewer.failed'), { message: tidyLoadError(errorText(loadError)) }) })
         setLoading(false)
         // 明确报「没有目录」：不然面板会永远停在「正在读取目录…」。
         outlineRef.current?.([])
@@ -1299,9 +1317,9 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
 
       {error !== null && (
         <div style={hintOverlayStyle}>
-          <div style={{ maxWidth: 260, textAlign: 'center' }}>
-            <p style={{ margin: '0 0 8px' }}>{error}</p>
-            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+          <div style={{ maxWidth: 300, textAlign: 'center' }}>
+            <p style={{ margin: '0 0 8px', lineHeight: 1.5 }}>{error.text}</p>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setRetry((value) => value + 1)} style={smallButtonStyle}>
                 {t('action.retry')}
               </button>
@@ -1312,6 +1330,19 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
               >
                 {t('viewer.openInZotero')}
               </button>
+              {error.fix !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    openSystemSettings(error.fix as ApiFix).catch((reason: unknown) => {
+                      showToast(tpl(t('viewer.openSettingsFailed'), { message: errorText(reason) }))
+                    })
+                  }}
+                  style={smallButtonStyle}
+                >
+                  {t('viewer.openPrivacySettings')}
+                </button>
+              )}
             </div>
           </div>
         </div>

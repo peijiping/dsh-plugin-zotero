@@ -1091,28 +1091,72 @@ export function normalizeContentType(contentType: string, filename: string): str
 }
 
 /** 读不到文件时的**人话**原因：用户据此能自己判断该去哪修。 */
-function unreadableReason(error: unknown, path: string): string {
+function unreadableReason(error: unknown, path: string): { message: string; fix?: ApiFix } {
   const code = typeof error === 'object' && error !== null && 'code' in error
     ? String((error as { code?: unknown }).code ?? '')
     : ''
-  if (code === 'ENOENT' || code === 'ENOTDIR') return `附件文件不存在：${path}`
+  if (code === 'ENOENT' || code === 'ENOTDIR') return { message: `附件文件不存在：${path}` }
   if (code === 'EACCES' || code === 'EPERM') {
     // Zotero 自己读得到、插件读不到时，八成是系统级目录授权（macOS 的 TCC）没过：
     // 那个弹窗每台机器只问一次，误点「不允许」之后就只会一直失败。
-    const hint = process.platform === 'darwin'
-      ? '（macOS 需在「系统设置 → 隐私与安全性 → 文件与文件夹」里允许 DSH 读取该目录）'
-      : '（检查该目录的访问权限）'
-    return `没有权限读取附件文件：${path}${hint}`
+    if (process.platform === 'darwin') {
+      return {
+        message: `没有权限读取附件文件：${path}`
+          + '（在「系统设置 → 隐私与安全性 → 文件与文件夹」里允许 DSH 读取该目录）',
+        fix: 'privacy-files',
+      }
+    }
+    return { message: `没有权限读取附件文件：${path}（检查该目录的访问权限）` }
   }
-  if (code === 'ELOOP') return `附件文件是失效的符号链接：${path}`
+  if (code === 'ELOOP') return { message: `附件文件是失效的符号链接：${path}` }
   const detail = error instanceof Error ? error.message : String(error)
-  return `无法读取附件文件：${path}（${code === '' ? detail : code}）`
+  return { message: `无法读取附件文件：${path}（${code === '' ? detail : code}）` }
+}
+
+/** 数据目录：prefs 优先，其次 Zotero 的默认位置 `~/Zotero`。 */
+async function dataDirectory(): Promise<string> {
+  const { dataDir } = await readZoteroPaths()
+  return dataDir === '' ? join(homedir(), 'Zotero') : dataDir
+}
+
+/**
+ * 把 Zotero 条目里的 `path` 字段解析成磁盘路径。
+ *
+ * 只在 `links.enclosure` 缺席时才会走到这里，`path` 有三种形态：
+ * - `attachments:xxx`——相对「链接附件的基础目录」。补全这层目录只发生在 Zotero
+ *   进程内，所以插件必须自己去 prefs 里把基础目录读出来，否则「Zotero 打得开、
+ *   插件 404」；
+ * - `storage:xxx`——相对数据目录下的 `storage/<附件key>/`；
+ * - 绝对路径——Zotero 已经指好位置，直接用。
+ *
+ * 解析不出来返回 `null`，由调用方给出可操作的提示。
+ */
+async function resolveAttachmentPath(key: string, raw: string, filename: string): Promise<string | null> {
+  const at = raw.indexOf(':')
+  const scheme = at === -1 ? '' : raw.slice(0, at).toLowerCase()
+  const rest = at === -1 ? raw : raw.slice(at + 1)
+  if (scheme === '' || scheme === 'file') {
+    return isAbsolute(raw) ? raw : null
+  }
+  if (scheme === 'storage') {
+    return join(await dataDirectory(), 'storage', key, rest === '' ? filename : rest)
+  }
+  if (scheme === 'attachments') {
+    const { baseAttachmentPath } = await readZoteroPaths()
+    if (baseAttachmentPath === '') return null
+    // 基础目录本身也可能被写成相对数据目录的形式。
+    const base = isAbsolute(baseAttachmentPath)
+      ? baseAttachmentPath
+      : join(await dataDirectory(), baseAttachmentPath)
+    return join(base, rest)
+  }
+  return null
 }
 
 /**
  * 解析附件在磁盘上的真实路径。
  *
- * 路径只来自 Zotero 条目 JSON 的 `links.enclosure.href`（`file://` URL），
+ * 路径只来自 Zotero 条目 JSON（`links.enclosure.href`，其次 `data.path`），
  * 客户端传来的任何路径都不接受。用 `stat` 而不是 `lstat`：把大文件放外置盘、
  * storage 里留软链是很常见的用法，`lstat` 会把这种附件当成「不是普通文件」拒掉。
  * 链接附件（`linkMode: linked_file`）同样走这里，不限制必须在 storage 下。
@@ -1123,39 +1167,47 @@ export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFi
   if (data.itemType !== 'attachment') {
     throw new ZoteroError('bad_request', `条目 ${key} 不是附件`)
   }
+  const filename = data.filename ?? attachmentTitle(raw)
   const href = raw.links?.enclosure?.href ?? ''
-  if (href === '') {
-    // 没有 enclosure：附件记录在，但 Zotero 没有给出这个文件的绝对路径。
-    // 相对路径的链接附件（`attachments:`）是最典型的一种：补全基础目录只发生在
-    // Zotero 进程里，Zotero 自己打得开、本地 API 却给不出路径 —— 这正是
-    // 「Zotero 里正常、插件里 404」最容易被误判成插件 bug 的情形，所以点名说清。
-    const relative = typeof data.path === 'string' ? data.path : ''
-    if (relative.startsWith('attachments:')) {
+  const zoteroPath = typeof data.path === 'string' ? data.path : ''
+
+  let path: string | null = null
+  if (href !== '') {
+    try {
+      path = fileURLToPath(href)
+    } catch {
+      const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(href)?.[1] ?? ''
       throw new ZoteroError(
         'zotero_not_found',
-        `附件 ${key} 是相对路径的链接附件（${relative}）：请在 Zotero「设置 → 高级 → 文件和文件夹」`
-        + '里确认「链接附件的基础目录」已设置，并在 Zotero 里重新链接一次该文件',
+        scheme === '' || scheme === 'file'
+          ? `附件 ${key} 的文件地址无法解析：${href}`
+          : `附件 ${key} 不是本地文件（${scheme}:）`,
       )
     }
-    throw new ZoteroError('zotero_not_found', `附件 ${key} 没有本地文件（Zotero 里可能尚未下载）`)
+  } else if (zoteroPath !== '') {
+    path = await resolveAttachmentPath(key, zoteroPath, filename)
+    if (path === null) {
+      // 相对路径但没有可用的基础目录 —— 这就是「Zotero 里正常、插件里 404」的
+      // 典型形态：Zotero 自己知道基础目录，插件只能靠 prefs 猜。
+      throw new ZoteroError(
+        'zotero_not_found',
+        `附件 ${key} 是相对路径的链接附件（${zoteroPath}），而 Zotero 里还没有设置「链接附件的基础目录」：`
+        + '请在 Zotero「设置 → 高级 → 文件和文件夹」里设置后重试',
+      )
+    }
   }
-  let path: string
-  try {
-    path = fileURLToPath(href)
-  } catch {
-    const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(href)?.[1] ?? ''
+  if (path === null) {
     throw new ZoteroError(
       'zotero_not_found',
-      scheme === '' || scheme === 'file'
-        ? `附件 ${key} 的文件地址无法解析：${href}`
-        : `附件 ${key} 不是本地文件（${scheme}:）`,
+      `附件 ${key} 没有本地文件（Zotero 里可能尚未下载）：可在 Zotero 里对它「查找可用的 PDF」或重新下载`,
     )
   }
   let stats
   try {
     stats = await stat(path)
   } catch (error) {
-    throw new ZoteroError('zotero_not_found', unreadableReason(error, path))
+    const reason = unreadableReason(error, path)
+    throw new ZoteroError('zotero_not_found', reason.message, reason.fix)
   }
   if (!stats.isFile()) {
     throw new ZoteroError('zotero_not_found', `附件路径不是文件：${path}`)
@@ -1166,9 +1218,9 @@ export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFi
   try {
     await (await open(path, 'r')).close()
   } catch (error) {
-    throw new ZoteroError('zotero_not_found', unreadableReason(error, path))
+    const reason = unreadableReason(error, path)
+    throw new ZoteroError('zotero_not_found', reason.message, reason.fix)
   }
-  const filename = data.filename ?? attachmentTitle(raw)
   return {
     key,
     path,

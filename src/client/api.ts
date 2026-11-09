@@ -5,6 +5,7 @@
  */
 
 import type {
+  ApiFix,
   ZoteroAnnotationDraft,
   ZoteroAnnotationPatch,
   ZoteroAttachmentInfo,
@@ -29,11 +30,14 @@ const WRITE_HEADER = 'x-dsh-zotero-write'
 /** Host 返回的错误，携带 §6 的错误码。 */
 export class ApiFailure extends Error {
   readonly code: string
+  /** 有值时表示这个错误可以一键去修（页面上多一个按钮）。 */
+  readonly fix?: ApiFix
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, fix?: ApiFix) {
     super(message)
     this.name = 'ApiFailure'
     this.code = code
+    this.fix = fix
   }
 }
 
@@ -59,10 +63,10 @@ function buildUrl(action: string, query: Query = {}): string {
 async function readEnvelope<T>(res: Response): Promise<T> {
   const payload = (await res.json().catch(() => null)) as
     | { ok: true; data: T }
-    | { ok: false; error: { code: string; message: string } }
+    | { ok: false; error: { code: string; message: string; fix?: ApiFix } }
     | null
   if (payload === null) throw new ApiFailure('internal_error', `Host 返回了非 JSON 响应（HTTP ${res.status}）`)
-  if (!payload.ok) throw new ApiFailure(payload.error.code, payload.error.message)
+  if (!payload.ok) throw new ApiFailure(payload.error.code, payload.error.message, payload.error.fix)
   return payload.data
 }
 
@@ -182,6 +186,16 @@ export async function openInZotero(
   input: { key: string; kind: 'item' | 'attachment'; page?: number },
 ): Promise<void> {
   await post<{ opened: boolean }>('open-in-zotero', input)
+}
+
+/**
+ * 打开「去那儿修」的系统面板。
+ *
+ * 目前只支持 macOS 的「文件与文件夹」授权：插件读不到 Zotero 附件时，最需要
+ * 用户动手的那一步就在那里，让他在系统设置里翻半天不如给个按钮。
+ */
+export async function openSystemSettings(target: ApiFix): Promise<void> {
+  await post<{ opened: boolean }>('open-settings', { target })
 }
 
 /** 写通道当前状态（开关 + 内存里有没有 key）。 */

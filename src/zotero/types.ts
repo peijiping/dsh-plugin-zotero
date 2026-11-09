@@ -401,13 +401,11 @@ export type ApiErrorCode =
 /**
  * 可由页面一键执行的修复动作。
  *
- * `message` 只说「哪儿坏了」，这个字段说「点一下能去哪儿修」——像目录授权、
- * 链接附件基础目录这类问题，光给文字用户找不到入口。
- *
- * - `privacy-files`：macOS 的「隐私与安全性 → 文件与文件夹」面板；
- * - `zotero-settings`：Zotero 首选项（链接附件基础目录那一页）。
+ * `message` 只说「哪儿坏了」，这个字段说「点一下能去哪儿修」——像目录授权这类
+ * 问题，光给文字用户找不到入口。目前只有 macOS 的「文件与文件夹」授权面板
+ * 有稳定可用的 URL scheme，其余情况仍走纯文案。
  */
-export type ApiFix = 'privacy-files' | 'zotero-settings'
+export type ApiFix = 'privacy-files'
 
 export interface ApiError {
   code: ApiErrorCode
