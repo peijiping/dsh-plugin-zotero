@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-zotero",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Map your Zotero library into DSH: let AI operate Zotero for you and help you read papers. Browse collections and tags in the sidebar, read PDFs with highlights in place, and cite excerpts, annotations, notes or whole items into the chat. The model works from the source text for reviews, comparisons and data extraction, and can also search and organize the library, import papers and attach translations back to items; first use needs the Zotero MCP plugin and the local API enabled.",
   "keywords": [
     "dsh",
