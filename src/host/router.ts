@@ -27,6 +27,7 @@ import type {
   ApiError,
   ApiErrorCode,
   ZoteroAuthResult,
+  ZoteroAttachmentInfo,
   ZoteroCollectionBib,
   ZoteroHealth,
   ZoteroItemDetail,
@@ -338,7 +339,8 @@ async function handleFile(req: IncomingMessage, res: ServerResponse, params: URL
     return
   }
   const file = await zotero.getAttachmentFile(key)
-  const contentType = file.contentType.split(';')[0].trim().toLowerCase()
+  // `getAttachmentFile` 已经把 MIME 规范化过了（小写、无参数、缺失时按后缀兜底）。
+  const contentType = file.contentType
   if (!SERVABLE_TYPES.has(contentType)) {
     fail(res, 415, 'bad_request', `暂不支持预览 ${file.contentType || '该附件类型'}`)
     return
@@ -370,8 +372,37 @@ async function handleFile(req: IncomingMessage, res: ServerResponse, params: URL
     res.writeHead(206, headers)
     stream = createReadStream(file.path, { start: range.start, end: range.end })
   }
+  // 客户端中途关掉（关面板、pdf.js 放弃这次请求）就把文件句柄一起放掉，
+  // 否则大 PDF 的读流会一直挂到进程结束。
+  res.on('close', () => stream.destroy())
   stream.on('error', () => res.destroy())
   stream.pipe(res)
+}
+
+/**
+ * 附件可读性探测：只回答「这个附件的文件在不在、是什么、能不能预览」。
+ *
+ * 存在的唯一理由是**把 `/api/file` 的失败原因说清楚**。那条路径的响应体是
+ * 二进制流，失败时 pdf.js 只能看到状态码，用户拿到的是
+ * 「Unexpected server response (404) while retrieving PDF "dsh-app://…"」；
+ * 前端在此之后调一次本端点，就能把「附件文件不存在：/path/xxx.pdf」
+ * 这种能自己动手修的信息显示出来。
+ */
+async function handleAttachmentInfo(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const key = params.get('key') ?? ''
+  if (!KEY_PATTERN.test(key)) {
+    fail(res, 400, 'bad_request', '附件 key 格式不合法')
+    return
+  }
+  const file = await zotero.getAttachmentFile(key)
+  const data: ZoteroAttachmentInfo = {
+    key: file.key,
+    filename: file.filename,
+    contentType: file.contentType,
+    size: file.size,
+    servable: SERVABLE_TYPES.has(file.contentType),
+  }
+  ok(res, data)
 }
 
 /** 用系统默认处理器打开 `zotero://` URL；参数数组传递，不经过 shell。 */
@@ -613,6 +644,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['item', 'GET'],
   ['collection-bib', 'GET'],
   ['file', 'GET'],
+  ['attachment-info', 'GET'],
   ['mcp-tools', 'GET'],
   ['auth-status', 'GET'],
   ['read-position', 'GET'],
@@ -684,6 +716,9 @@ export function createHandler(
           return
         case 'file':
           await handleFile(req, res, url.searchParams)
+          return
+        case 'attachment-info':
+          await handleAttachmentInfo(res, url.searchParams)
           return
         case 'open-in-zotero':
           await handleOpenInZotero(req, res)

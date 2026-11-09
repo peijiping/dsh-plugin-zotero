@@ -7,6 +7,7 @@
 import type {
   ZoteroAnnotationDraft,
   ZoteroAnnotationPatch,
+  ZoteroAttachmentInfo,
   ZoteroAuthResult,
   ZoteroHealth,
   ZoteroItemDetail,
@@ -155,6 +156,16 @@ export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Pro
 /** 附件文件地址；直接交给 PDF.js / Word 渲染器按 Range 取流。 */
 export function fileUrl(key: string): string {
   return buildUrl('file', { key })
+}
+
+/**
+ * 附件可读性探测。
+ *
+ * 文件流的失败只会给 pdf.js 一个 HTTP 状态码，真正的原因（文件不存在 /
+ * 无权限 / 没有本地文件）在这个端点里以 `ApiFailure.message` 给出。
+ */
+export function fetchAttachmentInfo(key: string, signal?: AbortSignal): Promise<ZoteroAttachmentInfo> {
+  return get<ZoteroAttachmentInfo>('attachment-info', { key }, signal)
 }
 
 /**

@@ -309,6 +309,9 @@ const zh: Record<string, string> = {
 
   'viewer.loading': '正在加载文档…',
   'viewer.failed': '文档加载失败：{message}',
+  'viewer.serverResponse': 'Zotero 返回了 {status}，但附件本身可以读取，请重试一次。',
+  'viewer.attachmentUnavailable': '附件打不开：{message}',
+  'viewer.unsupported': '暂不支持预览 {type}，可用「在 Zotero 中打开」。',
   'viewer.page': '第 {n} 页',
   'viewer.pageJump': '跳转到页码（回车确认，Esc 取消）',
   'viewer.pageTotal': '/ {total}',
@@ -649,6 +652,9 @@ const en: Record<string, string> = {
 
   'viewer.loading': 'Loading document…',
   'viewer.failed': 'Failed to load the document: {message}',
+  'viewer.serverResponse': 'Zotero returned {status}, but the attachment itself is readable — please retry.',
+  'viewer.attachmentUnavailable': 'Cannot open the attachment: {message}',
+  'viewer.unsupported': 'Preview is not supported for {type} — use “Open in Zotero”.',
   'viewer.page': 'Page {n}',
   'viewer.pageJump': 'Jump to page (Enter to confirm, Esc to cancel)',
   'viewer.pageTotal': '/ {total}',

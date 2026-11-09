@@ -41,9 +41,9 @@ import {
 
 import type { ZoteroAnnotation } from '../../zotero/types'
 import { EDITABLE_TYPES } from '../annotationRuns'
-import { createAnnotations } from '../api'
+import { createAnnotations, fetchAttachmentInfo } from '../api'
 import { useDismiss } from '../dismiss'
-import { tpl } from '../locales'
+import { tpl, type Translate } from '../locales'
 import { showToast } from '../paneStore'
 import { AnnotationCard } from './AnnotationCard'
 import { draftsFromSelection } from './annotationFactory'
@@ -86,6 +86,52 @@ const OUTLINE_MAX_DEPTH = 8
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * pdf.js 的「服务器返回 N」：形如
+ * `Unexpected server response (404) while retrieving PDF "dsh-app://app/…".`
+ */
+const SERVER_RESPONSE = /Unexpected server response \((\d{3})\)/u
+
+/**
+ * 去掉 pdf.js 文案里的 URL。
+ *
+ * 那串 `dsh-app://app/dsh-zotero/api/file?key=…` 对用户没有任何用处，只会让
+ * 提示看起来像内部报错；状态码留着，真正的原因由 {@link explainLoadFailure} 补。
+ */
+function tidyLoadError(message: string): string {
+  return message.replace(/\s*while retrieving PDF\s*"[^"]*"\.?/u, '').trim()
+}
+
+/**
+ * 把「服务器返回 404」翻译成人话。
+ *
+ * `/api/file` 成功时发的是二进制流，失败时 pdf.js 只拿得到状态码，于是界面上
+ * 只剩一句看不懂的 404。这里补一次 `/api/attachment-info` 探测：
+ * - 探测失败 → 那条错误消息就是真相（「附件文件不存在：/path」「没有权限读取」）；
+ * - 探测成功 → 文件本身读得到，这次 404 是瞬时的（Zotero 重启、正在重建索引），
+ *   提示重试比解释原因有用。
+ *
+ * 非 HTTP 类失败（加密、损坏、内存不足）一律返回 `null`，让原文案照原样显示。
+ */
+async function explainLoadFailure(
+  error: unknown,
+  key: string,
+  t: Translate,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const status = SERVER_RESPONSE.exec(errorText(error))?.[1]
+  if (status === undefined || key === '') return null
+  try {
+    const info = await fetchAttachmentInfo(key, signal)
+    // 415 之类由类型不支持引起：文件读得到也没用，别劝用户重试。
+    if (!info.servable) return tpl(t('viewer.unsupported'), { type: info.contentType || info.filename })
+    return tpl(t('viewer.serverResponse'), { status })
+  } catch (probeError) {
+    // 探测请求本身也可能失败（Host 没起来等），那就把它的原话带上。
+    return tpl(t('viewer.attachmentUnavailable'), { message: tidyLoadError(errorText(probeError)) })
+  }
 }
 
 /**
@@ -629,6 +675,10 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       return
     }
     let disposed = false
+    // 失败解释只认这一条 url 对应的附件（effect 创建时的闭包值，与 url 同源）。
+    const key = source?.attachmentKey ?? ''
+    /** 换文档/卸载时把探测请求一起取消，别让它在后台白跑。 */
+    const probe = new AbortController()
     setLoading(true)
     setError(null)
     setPdf(null)
@@ -669,14 +719,22 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       })
       .catch((loadError: unknown) => {
         if (disposed) return
-        setError(errorText(loadError))
+        // 先上 pdf.js 原文（带状态码），再去问一次真正的原因；探测慢一点也不碍事，
+        // 有「重试 / 在 Zotero 中打开」两个按钮兜着。
+        setError(tpl(t('viewer.failed'), { message: tidyLoadError(errorText(loadError)) }))
         setLoading(false)
         // 明确报「没有目录」：不然面板会永远停在「正在读取目录…」。
         outlineRef.current?.([])
+        // 只读这一条 url 对应的附件；effect 的依赖里不放 `t` / `source`，
+        // 否则切语言或每次渲染新建的 source 对象都会把 PDF 重新加载一遍。
+        void explainLoadFailure(loadError, key, t, probe.signal).then((reason) => {
+          if (!disposed && reason !== null) setError(reason)
+        })
       })
 
     return () => {
       disposed = true
+      probe.abort()
       void task.destroy()
     }
   }, [url, retry, onReady])
@@ -1156,7 +1214,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       {error !== null && (
         <div style={hintOverlayStyle}>
           <div style={{ maxWidth: 260, textAlign: 'center' }}>
-            <p style={{ margin: '0 0 8px' }}>{tpl(t('viewer.failed'), { message: error })}</p>
+            <p style={{ margin: '0 0 8px' }}>{error}</p>
             <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
               <button type="button" onClick={() => setRetry((value) => value + 1)} style={smallButtonStyle}>
                 {t('action.retry')}

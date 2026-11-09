@@ -60,6 +60,23 @@ export interface ZoteroAttachmentFile {
   filename: string
 }
 
+/**
+ * 附件可读性探测（`/api/attachment-info`）。
+ *
+ * 存在的意义是**解释失败**：`/api/file` 的 4xx 只会被 pdf.js 回显成一句
+ * 「Unexpected server response (404)」，真正的原因（文件不存在 / 无权限 /
+ * 没有本地文件）在这个端点里以普通 JSON 给出，前端据此显示人话。
+ */
+export interface ZoteroAttachmentInfo {
+  key: string
+  filename: string
+  /** 规范化后的 MIME：小写、不含参数；无法判断时为空串。 */
+  contentType: string
+  size: number
+  /** 该类型能否由插件直接流式预览。 */
+  servable: boolean
+}
+
 /** 条目上的一条标签（`data.tags` 的元素，标注与笔记同构）。 */
 export interface ZoteroTagRef {
   tag: string

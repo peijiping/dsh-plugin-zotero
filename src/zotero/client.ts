@@ -13,7 +13,7 @@
  * - `?include=bib` 会让响应**丢掉 `data`**，因此条目详情与 bib 必须分两次请求。
  */
 
-import { lstat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { fileURLToPath } from 'node:url'
 
@@ -1052,11 +1052,47 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
   }
 }
 
+/** 按后缀兜底的 MIME（Zotero 记录里 `contentType` 偶尔为空）。 */
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  html: 'text/html',
+  htm: 'text/html',
+  xhtml: 'text/html',
+  epub: 'application/epub+zip',
+  txt: 'text/plain',
+}
+
+/**
+ * 附件内容类型的规范形态：小写、去掉 `;` 之后的参数，缺失时按后缀兜底。
+ *
+ * 不规范化的后果是同一份 PDF 在有的库里能预览、有的库里被 415 挡掉——判断
+ * 「能不能直接流出去」和「用哪个渲染器」都依赖这一个值。
+ */
+export function normalizeContentType(contentType: string, filename: string): string {
+  const base = contentType.split(';')[0].trim().toLowerCase()
+  if (base !== '') return base
+  const ext = /\.([a-z0-9]+)$/iu.exec(filename)?.[1]?.toLowerCase() ?? ''
+  return MIME_BY_EXT[ext] ?? ''
+}
+
+/** 读不到文件时的**人话**原因：用户据此能自己判断该去哪修。 */
+function unreadableReason(error: unknown, path: string): string {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : ''
+  if (code === 'ENOENT' || code === 'ENOTDIR') return `附件文件不存在：${path}`
+  if (code === 'EACCES' || code === 'EPERM') return `没有权限读取附件文件：${path}`
+  if (code === 'ELOOP') return `附件文件是失效的符号链接：${path}`
+  const detail = error instanceof Error ? error.message : String(error)
+  return `无法读取附件文件：${path}（${code === '' ? detail : code}）`
+}
+
 /**
  * 解析附件在磁盘上的真实路径。
  *
  * 路径只来自 Zotero 条目 JSON 的 `links.enclosure.href`（`file://` URL），
- * 客户端传来的任何路径都不接受。`lstat` 拒绝目录与非普通文件；
+ * 客户端传来的任何路径都不接受。用 `stat` 而不是 `lstat`：把大文件放外置盘、
+ * storage 里留软链是很常见的用法，`lstat` 会把这种附件当成「不是普通文件」拒掉。
  * 链接附件（`linkMode: linked_file`）同样走这里，不限制必须在 storage 下。
  */
 export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFile> {
@@ -1067,29 +1103,38 @@ export async function getAttachmentFile(key: string): Promise<ZoteroAttachmentFi
   }
   const href = raw.links?.enclosure?.href ?? ''
   if (href === '') {
-    throw new ZoteroError('zotero_not_found', `附件 ${key} 没有可读取的本地文件`)
+    // 没有 enclosure：附件记录在，但 Zotero 那边没有对应的本地文件（未下载、
+    // 只同步了元数据、或网页链接型附件）。这是「打不开 PDF」最常见的一种。
+    throw new ZoteroError('zotero_not_found', `附件 ${key} 没有本地文件（Zotero 里可能尚未下载）`)
   }
   let path: string
   try {
     path = fileURLToPath(href)
   } catch {
-    throw new ZoteroError('zotero_not_found', `附件 ${key} 的文件地址无法解析`)
+    const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(href)?.[1] ?? ''
+    throw new ZoteroError(
+      'zotero_not_found',
+      scheme === '' || scheme === 'file'
+        ? `附件 ${key} 的文件地址无法解析：${href}`
+        : `附件 ${key} 不是本地文件（${scheme}:）`,
+    )
   }
   let stats
   try {
-    stats = await lstat(path)
-  } catch {
-    throw new ZoteroError('zotero_not_found', `附件文件不存在：${path}`)
+    stats = await stat(path)
+  } catch (error) {
+    throw new ZoteroError('zotero_not_found', unreadableReason(error, path))
   }
   if (!stats.isFile()) {
-    throw new ZoteroError('zotero_not_found', `附件路径不是普通文件：${path}`)
+    throw new ZoteroError('zotero_not_found', `附件路径不是文件：${path}`)
   }
+  const filename = data.filename ?? attachmentTitle(raw)
   return {
     key,
     path,
     size: stats.size,
-    contentType: data.contentType ?? '',
-    filename: data.filename ?? attachmentTitle(raw),
+    contentType: normalizeContentType(data.contentType ?? '', filename),
+    filename,
   }
 }
 
