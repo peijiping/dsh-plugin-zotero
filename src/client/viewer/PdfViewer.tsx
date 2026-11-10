@@ -54,6 +54,7 @@ import { AnnotationCard } from './AnnotationCard'
 import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
+import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS, pageTarget } from './outline'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import {
@@ -1326,8 +1327,9 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
               <button
                 type="button"
                 onClick={() => onOpenInZotero(1)}
-                style={smallButtonStyle}
+                style={zoteroButtonStyle}
               >
+                <OpenInZoteroIcon />
                 {t('viewer.openInZotero')}
               </button>
               {error.fix !== undefined && (
@@ -1401,4 +1403,12 @@ const smallButtonStyle = {
   borderRadius: 5,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+} as const
+
+/** 只有跳 Zotero 这个按钮带图标：单独补 flex 对齐，不动旁边的「重试 / 打开系统设置」。 */
+const zoteroButtonStyle = {
+  ...smallButtonStyle,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
 } as const

@@ -22,6 +22,7 @@ import { deleteAnnotation, patchAnnotation } from '../api'
 import { tpl, type Translate } from '../locales'
 import { showToast } from '../paneStore'
 import { ACCENT, SOFT_BUTTON_STYLE } from '../styles'
+import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -243,7 +244,8 @@ export function AnnotationCard({
         <button type="button" onClick={() => onInsert(annotation)} style={smallButtonStyle}>
           {t('action.insertItemShort')}
         </button>
-        <button type="button" onClick={onOpenInZotero} style={smallButtonStyle}>
+        <button type="button" onClick={onOpenInZotero} style={zoteroButtonStyle}>
+          <OpenInZoteroIcon />
           {t('viewer.openInZoteroShort')}
         </button>
         {canEdit && (
@@ -387,6 +389,14 @@ const smallButtonStyle = {
   borderRadius: 5,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+} as const
+
+/** 只有跳 Zotero 这个按钮带图标：单独补 flex 对齐，不动卡片里其它纯文字按钮。 */
+const zoteroButtonStyle = {
+  ...smallButtonStyle,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
 } as const
 
 /** 删除的二次确认态：只换描边与文字色，不铺红底（深色主题下红底会糊成一块）。 */

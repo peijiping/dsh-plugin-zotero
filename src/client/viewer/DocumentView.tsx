@@ -10,6 +10,7 @@ import { useCallback, useRef, useState, type MutableRefObject, type ReactElement
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import { tpl, type Translate } from '../locales'
 import { SOFT_BUTTON_STYLE } from '../styles'
+import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 import { pickRenderer } from './registry'
 import type { DocumentOutlineItem, DocumentSource, ViewerHandle } from './types'
 
@@ -176,6 +177,7 @@ export function DocumentView({
           style={{ ...toolButtonStyle, marginLeft: GROUP_GAP }}
           title={t('viewer.openInZotero')}
         >
+          <OpenInZoteroIcon />
           {t('viewer.openInZoteroShort')}
         </button>
       </div>
@@ -300,6 +302,7 @@ const toolButtonStyle = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
+  gap: 4,
   height: 22,
   minWidth: 22,
   padding: '0 5px',
