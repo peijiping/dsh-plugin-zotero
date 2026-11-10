@@ -8,7 +8,8 @@
  * 面板不解释跳转目标，点一条就把 `target` 原样交回 `ItemDetail` 转给渲染器——
  * 于是 PDF 跳页、HTML 滚到标题可以共用同一份 UI。
  *
- * 点条目跳转后立刻收起：浮层压在文档左侧，留着就把刚跳过去的内容挡了一半。
+ * 点条目只跳转、不收起：浮层要留着让用户连点几条反复导航，关闭统一交给
+ * {@link useDismiss}（点浮层外 / 按 Esc）或再点一次目录按钮。
  */
 
 import { useRef, useState, type ReactElement } from 'react'

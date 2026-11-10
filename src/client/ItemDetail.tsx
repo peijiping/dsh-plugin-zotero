@@ -230,10 +230,10 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
    * 跳到一条目录项。
    *
    * 目标原样交给渲染器：PDF 按页、网页快照 / 笔记按标题锚点，面板不解释。
-   * 跳完就收起目录：浮层压在文档左边，留着会把刚跳过去的内容挡掉一半。
+   * **跳完不收起**：目录浮层保持打开，可以连着点好几条反复导航；收起交给
+   * `OutlinePanel` 的 `useDismiss`（点浮层外 / 按 Esc）或再点一次目录按钮。
    */
   function jumpToOutline(item: DocumentOutlineItem): void {
-    setOutlineOpen(false)
     if (item.target !== null) viewerRef.current?.goToOutline(item.target)
   }
 
