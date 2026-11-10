@@ -117,7 +117,8 @@ function ZoomIcon({ kind }: { kind: 'in' | 'out' }): ReactElement {
 /**
  * 页面级刷新按钮的循环箭头。
  *
- * 进行中靠全局 `.dsh-zp-refresh-spin` 转起来；文字换成「正在刷新…」只是给个明确反馈，
+ * 进行中靠全局 `.dsh-zp-refresh-spin` 转起来，文字不再换成「正在刷新…」——
+ * 按钮窄了放不下长文案，进度改由图标旋转 + 禁用态 + `title`/`aria-label` 表达。
  * 防重复点击靠的是 `disabled` 与 `ZoteroItemPane` 里的请求序号。
  */
 function RefreshIcon({ spinning }: { spinning: boolean }): ReactElement {
@@ -213,7 +214,7 @@ export function DocumentView({
           style={refreshing ? { ...refreshButtonStyle, cursor: 'default' } : refreshButtonStyle}
         >
           <RefreshIcon spinning={refreshing} />
-          <span>{refreshing ? t('detail.refreshing') : t('action.refresh')}</span>
+          <span style={refreshLabelStyle}>{t('action.refresh')}</span>
         </button>
         <button
           type="button"
@@ -360,9 +361,12 @@ const toolButtonStyle = {
 /**
  * 页面级刷新：紧挨 `Zotero` 按钮左边（中间隔 4，与缩放组之间隔 GROUP_GAP）。
  *
- * 宽度按较长文案「正在刷新…」定死：换成进行中文案时按钮不变宽，工具条里的
- * 页码与标题不会被推得左右跳。文字居中，常态「刷新」两边留白即可。
+ * 宽度从 106 收到 64（约 -40%）：因为文案恒定「刷新」两字，进行中按钮不变宽，
+ * 工具条里的页码与标题不会左右跳。`minWidth` 只定下限，中文取 64，英文
+ * 「Refresh」按内容自然撑宽一点，不会挤到换行或溢出。
  */
+const REFRESH_BUTTON_MIN_WIDTH = 64
+
 const refreshButtonStyle = {
   ...SOFT_BUTTON_STYLE,
   flexShrink: 0,
@@ -370,7 +374,7 @@ const refreshButtonStyle = {
   alignItems: 'center',
   justifyContent: 'center',
   gap: 4,
-  width: 106,
+  minWidth: REFRESH_BUTTON_MIN_WIDTH,
   height: 22,
   padding: '0 5px',
   marginLeft: GROUP_GAP,
@@ -378,5 +382,11 @@ const refreshButtonStyle = {
   lineHeight: 1,
   borderRadius: 5,
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
+} as const
+
+/** 文案不许被 flex 压窄后换行；按钮宽度只按内容撑，不靠截断。 */
+const refreshLabelStyle = {
+  flexShrink: 0,
   whiteSpace: 'nowrap',
 } as const

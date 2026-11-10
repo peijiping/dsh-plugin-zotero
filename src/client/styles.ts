@@ -157,7 +157,7 @@ export const THEME_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 页面级刷新按钮进行中：只转图标，宽度由工具条定死。SVG 默认绕左上角转，center 必须显式写。 */
+/* 页面级刷新按钮进行中：只转图标，文字与宽度都保持不变。SVG 默认绕左上角转，center 必须显式写。 */
 .dsh-zp-refresh-spin {
   transform-origin: center;
   animation: dsh-zp-refresh-rotate 900ms linear infinite;
