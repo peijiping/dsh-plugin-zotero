@@ -21,6 +21,7 @@ import type { InsertionSpan } from './inline'
 import {
   annotationCitation,
   collectionCitation,
+  excerptCitation,
   itemCitation,
   noteCitation,
   tagCitation,
@@ -36,6 +37,14 @@ const ITEM_PREFIX = 'item:'
 const COLLECTION_PREFIX = 'col:'
 const NOTE_PREFIX = 'note:'
 const ANNOTATION_PREFIX = 'ann:'
+/**
+ * 划选摘录：`exc:<编码后的 itemKey>:<编码后的标题>:<编码后的原文>`。
+ *
+ * 与按 key 现取的引用不同，摘录是插入那一刻定格的文本，文库里根本没有对应对象，
+ * 所以三段数据全部自包含在 ref 里：草稿跨重启恢复后照样能展开，也不依赖 Zotero 在线。
+ * `encodeURIComponent` 把 `:` 与所有空白都编码掉，用 `:` 分段不会歧义。
+ */
+const EXCERPT_PREFIX = 'exc:'
 /** 单个标签：`tag:<编码后的标签名>`。 */
 const TAG_PREFIX = 'tag:'
 /** 标签组：`tags:<all|any>:<编码后的标签名>,…`。 */
@@ -43,6 +52,14 @@ const TAG_SET_PREFIX = 'tags:'
 
 /** 一次最多引用的标签数（防止 URL 与提示文本过长）。 */
 export const MAX_TAG_REFERENCE = 20
+
+/**
+ * 单段摘录的字符上限。
+ *
+ * ref 与 chip 的 clipboardText 都会带着编码后的原文存进会话草稿，划选整页时
+ * 不做限制会把草稿撑到几十万字符。超限时提示缩小选区，不静默截断原文。
+ */
+export const MAX_EXCERPT_CHARS = 4000
 
 /** 笔记 / 标注是子条目，单靠自身 key 取不到所属条目，ref 存「父 key/子 key」。 */
 const REF_SEPARATOR = '/'
@@ -95,6 +112,7 @@ export function citationForRef(t: Translate, ref: string, signal: AbortSignal): 
   if (ref.startsWith(ANNOTATION_PREFIX)) {
     return annotationCitation(t, ref.slice(ANNOTATION_PREFIX.length), signal)
   }
+  if (ref.startsWith(EXCERPT_PREFIX)) return excerptCitation(t, ref.slice(EXCERPT_PREFIX.length))
   if (ref.startsWith(TAG_SET_PREFIX)) return tagSetCitation(t, ref.slice(TAG_SET_PREFIX.length), signal)
   if (ref.startsWith(TAG_PREFIX)) return tagCitation(t, ref.slice(TAG_PREFIX.length), signal)
   return Promise.reject(new Error(`无法识别的 Zotero 引用：${ref}`))
@@ -155,6 +173,30 @@ export function noteReference(parentKey: string, noteKey: string, title: string)
 /** 一条标注（高亮 / 划线）的 chip。 */
 export function annotationReference(parentKey: string, annotationKey: string, label: string): ReferenceInsert {
   return reference(childPrefix(ANNOTATION_PREFIX, parentKey), annotationKey, label, 'file')
+}
+
+/**
+ * 一段划选摘录的 chip。
+ *
+ * 原文原样编码进 ref，提交时由 {@link excerptCitation} 解码后重建完整引文；
+ * `label` 只是胶囊上显示的短摘要，与展开文本无关。
+ */
+export function excerptReference(
+  key: string,
+  title: string,
+  quote: string,
+  label: string,
+): ReferenceInsert {
+  const ref = `${EXCERPT_PREFIX}${[key, title, quote].map((part) => encodeURIComponent(part)).join(':')}`
+  return {
+    source: REF_SOURCE,
+    ref,
+    label,
+    appearance: 'file',
+    // 与其余 Zotero chip 同规则：草稿里这段文本必须无空格，否则 chip 的
+    // 偏移校验会对不上。编码后的原文天然满足这一点。
+    clipboardText: `@${ref}`,
+  }
 }
 
 /**

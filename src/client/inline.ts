@@ -1,9 +1,14 @@
 /**
- * 往会话输入框草稿插入文本。
+ * 会话输入框的插入动作（只声明本插件用到的子集）。
  *
  * `inputActions` 由 ui-conversation 通过 `uiSession.provide` 作为会话级标准
- * prop 下发；`insertText` 要求 span 里的 draftRev 未变，因此**必须先
- * captureInsertion()、后取（可能异步的）文本、再 insertText()**。
+ * prop 下发。本插件所有引用（条目 / 目录 / 笔记 / 标注 / 标签 / 划选摘录）都走
+ * chip 路径：只取 `captureInsertion()` 的 span，连同 ReferenceInsert 一起派给
+ * 会话事件 `slash/input-insert-reference`（见 reference.ts）。
+ *
+ * 宿主另有 `insertText(text, span)`，早期用它把摘录灌成一大段纯文本，已废弃：
+ * 别再走回这条路。span 里的 `draftRev` 是插入时的草稿版本校验，取到 span 后
+ * 必须立刻插入，中间不能夹异步取数。
  */
 
 export interface InsertionSpan {
@@ -14,24 +19,7 @@ export interface InsertionSpan {
 
 export interface InputActions {
   captureInsertion(): InsertionSpan
-  insertText(text: string, span: InsertionSpan): boolean
 }
 
 /** 插入结果：失败原因用于提示用户。 */
 export type InsertOutcome = 'inserted' | 'no-editor' | 'draft-changed'
-
-/**
- * 捕获草稿当前位置，再构建文本并插入。
- *
- * @param actions 面板从 props 拿到的 `inputActions`（缺失表示不在会话上下文）
- * @param build 文本构建器；在捕获之后才执行，允许异步取数据
- */
-export async function insertBuilt(
-  actions: InputActions | undefined,
-  build: () => string | Promise<string>,
-): Promise<InsertOutcome> {
-  if (!actions) return 'no-editor'
-  const span = actions.captureInsertion()
-  const text = await build()
-  return actions.insertText(text, span) ? 'inserted' : 'draft-changed'
-}

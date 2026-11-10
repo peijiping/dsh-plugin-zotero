@@ -40,11 +40,34 @@ export function itemText(t: Translate, detail: ZoteroItemDetail): string {
   return lines.join('\n')
 }
 
-/** 选中片段的摘录文本。 */
-export function excerptText(t: Translate, detail: ZoteroItemDetail, quote: string): string {
+/**
+ * 选中片段的摘录文本。
+ *
+ * 只需要 key 与标题：提交时 codec 从摘录 chip 的 ref 里取回这两段，不再重新
+ * 请求 Zotero，所以参数放宽到 {@link ZoteroItemDetail} 的最小子集。
+ */
+export function excerptText(
+  t: Translate,
+  detail: Pick<ZoteroItemDetail, 'key' | 'title'>,
+  quote: string,
+): string {
   const head = tpl(t('cmp.excerpt.header'), { title: detail.title, key: detail.key })
   const body = tpl(t('cmp.excerpt.quote'), { value: quote })
   return `${head}\n${body}`
+}
+
+/**
+ * 摘录 chip 的标签：只放原文开头，胶囊自己会省略过长部分。
+ *
+ * PDF 抽取会在汉字之间插空格，标签里顺手清掉（展开给模型的原文不动）。
+ */
+export function excerptChipLabel(t: Translate, quote: string): string {
+  const source = tidyAnnotation(quote)
+  const chars = Array.from(source)
+  const summary = chars.length > CHIP_LABEL_LIMIT
+    ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…`
+    : source
+  return tpl(t('cmp.excerpt.chipLabel'), { value: summary })
 }
 
 /**

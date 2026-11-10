@@ -1,16 +1,16 @@
 /**
  * 「添加到会话」的共享动作集。
  *
- * 主面板与条目 tab 都挂一份，行为必须一致：引用类插 chip（提交时由 codec 展开），
- * 摘录插纯文本，结果统一走 toast。`inputActions` 缺失表示当前面板不在会话上下文。
+ * 主面板与条目 tab 都挂一份，行为必须一致：所有引用（包括划选摘录）都插 chip，
+ * 输入框里只有胶囊，完整文本在提交时由 codec 展开；结果统一走 toast。
+ * `inputActions` 缺失表示当前面板不在会话上下文。
  */
 
 import { useCallback } from 'react'
 
 import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
-import { annotationChipLabel, excerptText, tagSetChipLabel } from './compose'
+import { annotationChipLabel, excerptChipLabel, tagSetChipLabel } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
-import { insertBuilt } from './inline'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import { showToast } from './paneStore'
@@ -18,7 +18,9 @@ import type { ReferenceInsert, SessionsFace } from './reference'
 import {
   annotationReference,
   collectionReference,
+  excerptReference,
   insertChip,
+  MAX_EXCERPT_CHARS,
   MAX_TAG_REFERENCE,
   itemReference,
   noteReference,
@@ -30,7 +32,8 @@ export interface InsertionActions {
   report(outcome: InsertOutcome): void
   insertReference(reference: ReferenceInsert): void
   insertItem(key: string, title: string): void
-  insertExcerpt(target: ZoteroItemDetail, quote: string): Promise<void>
+  /** 一段划选摘录：插一枚自带原文的 chip，不再是灌进草稿的一大段纯文本。 */
+  insertExcerpt(target: ZoteroItemDetail, quote: string): void
   insertAnnotation(target: ZoteroItemDetail, annotation: ZoteroAnnotation): void
   insertNote(target: ZoteroItemDetail, note: ZoteroNote): void
   insertCollection(collection: ZoteroCollection): void
@@ -98,9 +101,22 @@ export function useInsertion(
       : tpl(t('error.partialInsert'), { n: inserted }))
   }, [inputActions, report, sessionId, sessions, t])
 
-  const insertExcerpt = useCallback(async (target: ZoteroItemDetail, quote: string): Promise<void> => {
-    report(await insertBuilt(inputActions, () => excerptText(t, target, quote)))
-  }, [inputActions, report, t])
+  const insertExcerpt = useCallback((target: ZoteroItemDetail, quote: string): void => {
+    if (quote.trim() === '') {
+      showToast(t('error.empty'))
+      return
+    }
+    if (Array.from(quote).length > MAX_EXCERPT_CHARS) {
+      showToast(tpl(t('error.excerptTooLong'), { n: MAX_EXCERPT_CHARS }))
+      return
+    }
+    insertReference(excerptReference(
+      target.key,
+      target.title,
+      quote,
+      excerptChipLabel(t, quote),
+    ))
+  }, [insertReference, t])
 
   const insertAnnotation = useCallback((
     target: ZoteroItemDetail,

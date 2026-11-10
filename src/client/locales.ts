@@ -182,6 +182,7 @@ const zh: Record<string, string> = {
   'error.partialInsert': '输入框草稿已变化，只插入 {n} 条；请避免在插入期间编辑草稿',
   'error.empty': '没有可插入的内容',
   'error.tooManyTags': '一次最多加入 {n} 个标签',
+  'error.excerptTooLong': '摘录过长（上限 {n} 字），请缩小选区或改用条目引用',
 
   'toast.inserted': '已添加到会话草稿',
   'toast.insertedItems': '已把 {n} 条加入会话草稿',
@@ -352,6 +353,7 @@ const zh: Record<string, string> = {
   'cmp.item.url': '链接：{value}',
   'cmp.excerpt.header': '【Zotero 摘录｜{title}｜{key}】',
   'cmp.excerpt.quote': '“{value}”',
+  'cmp.excerpt.chipLabel': '摘录：{value}',
   'cmp.collection.header': '【Zotero 目录｜{name}｜{key}】共 {n} 条',
   'cmp.collection.line': '- {title}（{meta}）',
   'cmp.collection.more': '……（仅列出前 {n} 条；完整清单可用 mcp__zotero__get_collection_items 获取）',
@@ -536,6 +538,7 @@ const en: Record<string, string> = {
   'error.partialInsert': 'The draft changed; only {n} were inserted. Avoid editing while inserting.',
   'error.empty': 'Nothing to insert',
   'error.tooManyTags': 'Add at most {n} tags at once',
+  'error.excerptTooLong': 'This excerpt is too long (limit {n} characters). Select less text or cite the whole item instead.',
 
   'toast.inserted': 'Added to the conversation draft',
   'toast.insertedItems': 'Added {n} to the conversation draft',
@@ -706,6 +709,7 @@ const en: Record<string, string> = {
   'cmp.item.url': 'URL: {value}',
   'cmp.excerpt.header': '[Zotero excerpt | {title} | {key}]',
   'cmp.excerpt.quote': '“{value}”',
+  'cmp.excerpt.chipLabel': 'Excerpt: {value}',
   'cmp.collection.header': '[Zotero collection | {name} | {key}] {n} items',
   'cmp.collection.line': '- {title} ({meta})',
   'cmp.collection.more': '… (first {n} only; use mcp__zotero__get_collection_items for the full list)',

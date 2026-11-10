@@ -17,6 +17,7 @@ import {
   COLLECTION_PREVIEW_LIMIT,
   annotationText,
   collectionText,
+  excerptText,
   itemText,
   noteText,
   tagSetText,
@@ -121,13 +122,38 @@ export async function annotationCitation(
   return annotationText(t, detail, annotation)
 }
 
-/** 解码标签名；ref 结构坏了直接抛出（不是「对象已删除」）。 */
-function decodeTagName(encoded: string): string {
+/**
+ * 一段划选摘录的引用。
+ *
+ * 与按 key 现取的引用不同，摘录没有「文库里被删掉」这回事：itemKey、标题、
+ * 原文都在 ref 里定格，所以这里不请求 Host，也不需要 AbortSignal。
+ * 结构坏了（不是三段 / 某段解码失败）说明这个 chip 不是本插件写的，抛出去让
+ * 宿主还原草稿，别把一截乱码发给模型。
+ */
+export async function excerptCitation(t: Translate, body: string): Promise<string> {
+  const parts = body.split(':')
+  const [rawKey, rawTitle, rawQuote] = parts
+  if (parts.length !== 3 || rawKey === undefined || rawTitle === undefined || rawQuote === undefined) {
+    throw new Error(`无法识别的 Zotero 摘录引用：${body}`)
+  }
+  return excerptText(t, {
+    key: decodeRefPart('摘录', rawKey),
+    title: decodeRefPart('摘录', rawTitle),
+  }, decodeRefPart('摘录', rawQuote))
+}
+
+/** 解码 ref 里的一段；坏转义会抛 URIError，换成带来源的可辨认错误。 */
+function decodeRefPart(kind: '摘录' | '标签', encoded: string): string {
   try {
     return decodeURIComponent(encoded)
   } catch {
-    throw new Error(`无法识别的 Zotero 标签引用：${encoded}`)
+    throw new Error(`无法识别的 Zotero ${kind}引用：${encoded}`)
   }
+}
+
+/** 解码标签名；ref 结构坏了直接抛出（不是「对象已删除」）。 */
+function decodeTagName(encoded: string): string {
+  return decodeRefPart('标签', encoded)
 }
 
 /**

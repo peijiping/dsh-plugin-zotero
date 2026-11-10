@@ -165,7 +165,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
           t={t}
           detail={detail}
           onInsertItem={() => insertItem(detail.key, detail.title)}
-          onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
+          onInsertExcerpt={(quote) => insertExcerpt(detail, quote)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
           onInsertNote={(note) => insertNote(detail, note)}
           onChanged={() => void refresh()}
