@@ -20,17 +20,24 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "./lib/index.d.ts",
+  "icon": "./icon.svg",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": "./client/client.js"
+    "./client": "./client/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "lib",
     "client",
-    "cordis.patch.yml"
+    "client/client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.3 <0.3.0-0"
