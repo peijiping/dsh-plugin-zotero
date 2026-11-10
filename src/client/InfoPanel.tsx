@@ -10,6 +10,9 @@
  *
  * 各区块的开合全局记一份（见 {@link useInfoSections}）：用户按自己的习惯折过
  * 一次之后，换文献、关浮层、重启都保持原样，不用每篇重新折。
+ *
+ * 刷新整份详情的按钮在**阅读器工具条**（页面级，见 `DocumentView`），不放在这里：
+ * 它同时影响页面上的标注，浮层收着的时候也应该能点。
  */
 
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'

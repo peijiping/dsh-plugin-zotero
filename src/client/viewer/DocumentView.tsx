@@ -9,7 +9,7 @@ import { useCallback, useRef, useState, type MutableRefObject, type ReactElement
 
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import { tpl, type Translate } from '../locales'
-import { SOFT_BUTTON_STYLE } from '../styles'
+import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from '../styles'
 import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 import { pickRenderer } from './registry'
 import type { DocumentOutlineItem, DocumentSource, ViewerHandle } from './types'
@@ -25,6 +25,12 @@ interface Props {
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   onChanged(): void
+  /**
+   * 页面级刷新：重取整份详情（含页面上的标注）。状态由 {@link ItemDetail} 持有，
+   * 工具条只显示；进行中禁用按钮、文案换成「正在刷新…」。
+   */
+  refreshing: boolean
+  onRefresh(): void
   /** 渲染器报上来的目录（PDF 书签 / 网页标题 / 笔记标题），交给左上角统一的目录浮层。 */
   onOutlineChange(outline: DocumentOutlineItem[]): void
 }
@@ -108,6 +114,30 @@ function ZoomIcon({ kind }: { kind: 'in' | 'out' }): ReactElement {
   )
 }
 
+/**
+ * 页面级刷新按钮的循环箭头。
+ *
+ * 进行中靠全局 `.dsh-zp-refresh-spin` 转起来；文字换成「正在刷新…」只是给个明确反馈，
+ * 防重复点击靠的是 `disabled` 与 `ZoteroItemPane` 里的请求序号。
+ */
+function RefreshIcon({ spinning }: { spinning: boolean }): ReactElement {
+  return (
+    <svg
+      className={spinning ? 'dsh-zp-refresh-spin' : undefined}
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <g fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M13 8a5 5 0 1 1-1.5-3.55" />
+        <path d="M13.2 3.1v3.2H10" />
+      </g>
+    </svg>
+  )
+}
+
 export function DocumentView({
   t,
   detail,
@@ -119,6 +149,8 @@ export function DocumentView({
   onInsertAnnotation,
   onOpenInZotero,
   onChanged,
+  refreshing,
+  onRefresh,
   onOutlineChange,
 }: Props): ReactElement {
   const renderer = pickRenderer(source, detail)
@@ -173,8 +205,20 @@ export function DocumentView({
         )}
         <button
           type="button"
+          className={SOFT_BUTTON_CLASS}
+          onClick={onRefresh}
+          disabled={refreshing}
+          aria-label={refreshing ? t('detail.refreshing') : t('action.refresh')}
+          title={refreshing ? t('detail.refreshing') : t('detail.refreshHint')}
+          style={refreshing ? { ...refreshButtonStyle, cursor: 'default' } : refreshButtonStyle}
+        >
+          <RefreshIcon spinning={refreshing} />
+          <span>{refreshing ? t('detail.refreshing') : t('action.refresh')}</span>
+        </button>
+        <button
+          type="button"
           onClick={() => onOpenInZotero(page.current)}
-          style={{ ...toolButtonStyle, marginLeft: GROUP_GAP }}
+          style={{ ...toolButtonStyle, marginLeft: 4 }}
           title={t('viewer.openInZotero')}
         >
           <OpenInZoteroIcon />
@@ -306,6 +350,30 @@ const toolButtonStyle = {
   height: 22,
   minWidth: 22,
   padding: '0 5px',
+  fontSize: 11.5,
+  lineHeight: 1,
+  borderRadius: 5,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+} as const
+
+/**
+ * 页面级刷新：紧挨 `Zotero` 按钮左边（中间隔 4，与缩放组之间隔 GROUP_GAP）。
+ *
+ * 宽度按较长文案「正在刷新…」定死：换成进行中文案时按钮不变宽，工具条里的
+ * 页码与标题不会被推得左右跳。文字居中，常态「刷新」两边留白即可。
+ */
+const refreshButtonStyle = {
+  ...SOFT_BUTTON_STYLE,
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  width: 106,
+  height: 22,
+  padding: '0 5px',
+  marginLeft: GROUP_GAP,
   fontSize: 11.5,
   lineHeight: 1,
   borderRadius: 5,

@@ -111,25 +111,33 @@ export function ZoteroItemPane(props: Props): ReactElement {
   }, [itemKey, retry, signal])
 
   /**
-   * 静默重取当前详情（写操作之后走这条）。
+   * 静默重取整份详情：面板内写操作之后、以及信息栏右上角的刷新按钮都走这条。
+   *
+   * 外部改动（模型通过 MCP 写笔记、在 Zotero 客户端里改元数据）没有推送通道，
+   * 前端只能重取；`ItemDetail` 与渲染器的 key 都不变，所以滚动位置、浮层开合、
+   * 选中的附件一律保留，只是把 detail 换成最新的一份。
    *
    * 不复用 `retry` 那条路径：它会把整棵树换成「加载中」，信息面板随之收起——刚存完
    * 一条笔记就眼看它填的内容消失，比慢半拍更让人以为是写丢了。
    * 失败也只提示，不清空已有详情：写已经落库，这次没刷到而已。
+   *
+   * 返回 Promise 让刷新按钮能显示「进行中」；`source` 只用于区分失败提示的口径
+   * （写后刷新要安慰一句「已写入」，手动刷新并没有写入这回事）。
    */
-  const refresh = useCallback((): void => {
+  const refresh = useCallback(async (source: 'write' | 'manual' = 'write'): Promise<void> => {
     if (itemKey === null) return
     const current = ++seq.current
-    fetchItem(itemKey, 'apa', signal)
-      .then((data) => {
-        if (current !== seq.current) return
-        rememberItemTitle(data.key, data.title)
-        setDetail(data)
-      })
-      .catch((err: unknown) => {
-        if (current !== seq.current || signal.aborted) return
-        showToast(tpl(t('detail.refreshFailed'), { message: errorMessage(err) }))
-      })
+    try {
+      const data = await fetchItem(itemKey, 'apa', signal)
+      if (current !== seq.current) return
+      rememberItemTitle(data.key, data.title)
+      setDetail(data)
+      if (source === 'manual') showToast(t('detail.refreshed'))
+    } catch (err: unknown) {
+      if (current !== seq.current || signal.aborted) return
+      const key = source === 'manual' ? 'detail.refreshFailedManual' : 'detail.refreshFailed'
+      showToast(tpl(t(key), { message: errorMessage(err) }))
+    }
   }, [itemKey, signal, t])
 
   const {
@@ -160,7 +168,8 @@ export function ZoteroItemPane(props: Props): ReactElement {
           onInsertExcerpt={(quote) => void insertExcerpt(detail, quote)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
           onInsertNote={(note) => insertNote(detail, note)}
-          onChanged={refresh}
+          onChanged={() => void refresh()}
+          onRefresh={() => refresh('manual')}
         />
       )}
       <Toast />

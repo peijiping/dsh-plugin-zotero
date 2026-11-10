@@ -42,6 +42,8 @@ interface Props {
   onInsertNote(note: ZoteroNote): void
   /** 面板里写成功后重取详情（静默，不打断当前阅读位置）。 */
   onChanged(): void
+  /** 阅读器工具条上的页面级刷新：重取整份详情，返回 Promise 供按钮显示进行中。 */
+  onRefresh(): Promise<void>
 }
 
 /** 定位重试：渲染器刚就绪时页面占位可能还没提交，最多试几次。 */
@@ -88,12 +90,14 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   return source
 }
 
-export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onChanged }: Props): ReactElement {
+export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertAnnotation, onInsertNote, onChanged, onRefresh }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>({ type: 'all', color: null })
+  /** 页面级刷新的进行中状态：工具条按钮在 `DocumentView`，动作来源在 `ZoteroItemPane`。 */
+  const [refreshing, setRefreshing] = useState(false)
   const [stateKey, setStateKey] = useState(detail.key)
   const viewerRef = useRef<ViewerHandle | null>(null)
   const pendingLocate = useRef<string | null>(null)
@@ -106,6 +110,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
     setAnnotationFilter({ type: 'all', color: null })
     setInfoOpen(false)
     setOutlineOpen(false)
+    setRefreshing(false)
     pendingLocate.current = null
   }
 
@@ -137,6 +142,22 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
 
   /** 收起信息浮层；`InfoPanel` 内部再用 `useDismiss` 接管「点浮层外 / Esc」。 */
   const closeInfo = useCallback((): void => setInfoOpen(false), [])
+
+  /**
+   * 页面级刷新：状态放这一层，工具条按钮与整份详情共用同一份。
+   *
+   * `ZoteroItemPane` 的刷新已经吞掉错误（只出 toast），这里只负责「进行中」，
+   * 按钮在此期间禁用并显示「正在刷新…」，避免连点叠出一串请求。
+   */
+  async function handleRefresh(): Promise<void> {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      await onRefresh()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   // 独立笔记没有附件，光用 attachmentKey 会让两篇笔记共用一份缓存。
   const documentKey = `${detail.key}:${source?.attachmentKey ?? 'self'}`
@@ -229,6 +250,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertA
         onInsertAnnotation={onInsertAnnotation}
         onOpenInZotero={openInZoteroAt}
         onChanged={onChanged}
+        refreshing={refreshing}
+        onRefresh={() => void handleRefresh()}
         onOutlineChange={handleOutlineChange}
       />
       {outlineAvailable && (
