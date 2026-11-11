@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Zotero Library for DSH">
   <defs>
-    <!-- Light blue badge: still deep enough for the white sheet to read as paper. -->
+    <!-- User-picked blue badge (sample #2e9df2): deep enough for the white sheet to read as paper. -->
     <linearGradient id="zp-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#8fb9f4"/>
-      <stop offset="1" stop-color="#6498e8"/>
+      <stop offset="0" stop-color="#359ff2"/>
+      <stop offset="1" stop-color="#279af2"/>
     </linearGradient>
     <linearGradient id="zp-paper" x1="18" y1="14" x2="44" y2="50" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffffff"/>

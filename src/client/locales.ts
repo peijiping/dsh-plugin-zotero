@@ -189,7 +189,7 @@ const zh: Record<string, string> = {
   'toast.copied': '已复制',
   'toast.copyFailed': '复制失败',
 
-  'settings.nav': 'Zotero 插件',
+  'settings.nav': 'Zotero文献库',
   'settings.hint': '这些参数决定面板与模型工具如何连上 Zotero；改完自动保存、即时生效，无需重启。',
   'group.api': 'API 设置',
   'group.mcp': 'MCP 设置',
@@ -545,7 +545,7 @@ const en: Record<string, string> = {
   'toast.copied': 'Copied',
   'toast.copyFailed': 'Copy failed',
 
-  'settings.nav': 'Zotero Plugin',
+  'settings.nav': 'Zotero Library',
   'settings.hint': 'These parameters decide how the panel and the model tools reach Zotero; edits save automatically and take effect immediately, no restart needed.',
   'group.api': 'API settings',
   'group.mcp': 'MCP settings',

@@ -15,11 +15,13 @@
 
 import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
+import { GuideIcon } from './GuideIcon'
 import type { InputActions } from './inline'
 import { ensureItemTitle, rememberItemTitle, useItemTitle } from './itemTitles'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
+import { SettingsNavIcon } from './SettingsNavIcon'
 import { installTheme } from './styles'
 import { ZoteroCardController, ROW_ID, ZoteroSettingsSection } from './ZoteroCard'
 import { ITEM_ADDRESS_PREFIX, itemKeyFromAddress, ZoteroItemPane } from './ZoteroItemPane'
@@ -37,6 +39,12 @@ interface GuideEntry {
   title: () => string
   description?: () => string
   order?: number
+  /**
+   * 卡片图标：宿主用 `entry.icon ?? CubeGlyph` 渲染，没传就是灰色立方体占位。
+   * 它要的是 React 组件（接 size / className），不是图片路径；`package.json` 的
+   * `icon` 只服务插件市场与插件列表，管不到这里。
+   */
+  icon?: ComponentType<{ size?: number; className?: string }>
 }
 
 /** 右侧栏 tab 类型定义。 */
@@ -132,6 +140,7 @@ export function apply(ctx: ClientContext): void {
         title: () => t('guide.title'),
         description: () => t('guide.desc'),
         order: 10,
+        icon: GuideIcon,
       }],
     }),
     'dsh-plugin-zotero: sidebar tab',
@@ -260,20 +269,36 @@ export function apply(ctx: ClientContext): void {
   const controller = new ZoteroCardController(ctx.configForms.get(ROW_ID))
   ctx.effect(() => () => controller.dispose(), 'dsh-plugin-zotero: settings form')
   ctx.effect(
-    () => ctx.configForms.whileServed([ROW_ID], () => ctx.slots.inject(
-      'settings.section',
-      () => ctx.slots.register(
-        {
-          name: 'settings.section',
-          id: SETTINGS_SECTION_ID,
-          order: 30,
-          label: () => t('settings.nav'),
-          locale: NS,
-          inject: () => controller.inject(),
-        },
-        ZoteroSettingsSection as ComponentType<never>,
-      ),
-    )),
+    () => ctx.configForms.whileServed([ROW_ID], () => {
+      const offSection = ctx.slots.inject(
+        'settings.section',
+        () => ctx.slots.register(
+          {
+            name: 'settings.section',
+            id: SETTINGS_SECTION_ID,
+            order: 30,
+            label: () => t('settings.nav'),
+            locale: NS,
+            inject: () => controller.inject(),
+          },
+          ZoteroSettingsSection as ComponentType<never>,
+        ),
+      )
+      // 左导航图标是独立席位：外壳按 section id 取 `settings.section.icon`，
+      // 没注册就退回默认齿轮。id 必须与上面一致，两者生命周期也绑在一起，
+      // 免得 Host 不再服务设置命名空间时留下一个没有对应页的图标。
+      const offIcon = ctx.slots.inject(
+        'settings.section.icon',
+        () => ctx.slots.register(
+          { name: 'settings.section.icon', id: SETTINGS_SECTION_ID },
+          SettingsNavIcon as ComponentType<never>,
+        ),
+      )
+      return () => {
+        offSection()
+        offIcon()
+      }
+    }),
     'dsh-plugin-zotero: settings section',
   )
 }

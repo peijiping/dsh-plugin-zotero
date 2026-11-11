@@ -2,7 +2,7 @@
  * 设置页（浏览器半）。
  *
  * 把 Host 导出的 volatile `Config` 表单渲染进「设置」对话框的
- * `settings.section` 席位（左侧导航里独立一页「Zotero 插件」）—— 表单模型照抄官方
+ * `settings.section` 席位（左侧导航里独立一页「Zotero文献库」）—— 表单模型照抄官方
  * 参考实现 `@deepseek-ai/dsh-client-ui-settings-shell` 的 `ShellCard`：
  * 控制器持 `SettingsFormModel`，组件经注入的 hook 读快照。
  *
