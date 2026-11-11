@@ -1,12 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Zotero Library for DSH">
   <defs>
+    <!-- Light blue badge: still deep enough for the white sheet to read as paper. -->
     <linearGradient id="zp-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5b93ef"/>
-      <stop offset="1" stop-color="#3568c4"/>
+      <stop offset="0" stop-color="#8fb9f4"/>
+      <stop offset="1" stop-color="#6498e8"/>
     </linearGradient>
     <linearGradient id="zp-paper" x1="18" y1="14" x2="44" y2="50" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#eaf1fb"/>
+    </linearGradient>
+    <linearGradient id="zp-z" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#ff5a4b"/>
+      <stop offset="1" stop-color="#df2030"/>
     </linearGradient>
   </defs>
 
@@ -14,20 +19,25 @@
   <rect x="4" y="4" width="56" height="56" rx="15" fill="url(#zp-bg)"/>
 
   <!-- A second sheet behind the front page: a library, not one document. -->
-  <path d="M25 16h17a3 3 0 0 1 3 3v26" fill="none" stroke="#ffffff" stroke-opacity=".42" stroke-width="3" stroke-linecap="round"/>
+  <path d="M25 16h17a3 3 0 0 1 3 3v26" fill="none" stroke="#ffffff" stroke-opacity=".6" stroke-width="3" stroke-linecap="round"/>
 
   <!-- Front page. -->
   <rect x="16" y="13" width="27" height="38" rx="3.5" fill="url(#zp-paper)"/>
   <rect x="20" y="18.5" width="14" height="2.8" rx="1.4" fill="#4a86e8"/>
-  <g fill="#9db2ce">
-    <rect x="20" y="25.5" width="19" height="2" rx="1"/>
-    <rect x="20" y="30.5" width="19" height="2" rx="1"/>
-    <rect x="20" y="35.5" width="19" height="2" rx="1"/>
-    <rect x="20" y="40.5" width="12" height="2" rx="1"/>
-  </g>
-  <!-- Highlighted line: annotations are what this plugin is about. -->
-  <rect x="20" y="30.5" width="12" height="2" rx="1" fill="#e8a33d"/>
 
-  <!-- Bookmark tab. -->
-  <path d="M35 13h5.5v11l-2.75-2.6L35 24z" fill="#e8734a"/>
+  <!-- Text lines above the Z: the page must still read as a document. -->
+  <rect x="20" y="24" width="19" height="2" rx="1" fill="#9db2ce"/>
+
+  <!-- Zotero's Z, scaled down to sit between the text lines. Local zero-based
+       path keeps the transform readable; objectBoundingBox gradient keeps the
+       reds in place under the scale. The orange-red bookmark tab is gone. -->
+  <g transform="translate(24 28.5) scale(0.62) translate(0.8 0) skewX(-5)">
+    <path d="M0.5 0H17L18 4.5L5.5 13H18V17.5H1L0 13L12.5 4.5H0.5Z" fill="url(#zp-z)"/>
+  </g>
+
+  <!-- Remaining text lines below the Z, tapering off like a paragraph. -->
+  <g fill="#9db2ce">
+    <rect x="20" y="42" width="17" height="2" rx="1"/>
+    <rect x="20" y="46" width="11" height="2" rx="1"/>
+  </g>
 </svg>
