@@ -2,8 +2,9 @@
  * 条目「已读」标志。
  *
  * Zotero 原生只记录附件最后阅读时间（`lastRead`），没有页码或百分比进度。
- * 画法：已读条目的**类型图标转粉色**（见 `ItemTypeIcon` 的 `read` 参数），
- * 标题同时略微淡化；hover 提示里补一行「最后阅读：…」。
+ * 画法：已读条目的**类型图标去饱和并淡化**（见 `ItemTypeIcon` 的 `read` 参数），
+ * 标题同时略微淡化；hover 提示里补一行「最后阅读：…」。配色保持 Zotero 的中性墨色，
+ * 不再用粉色，避免整列图标泛彩。
  */
 
 import type { CSSProperties } from 'react'

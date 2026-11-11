@@ -2,7 +2,8 @@
  * 右栏共用配色中心。
  *
  * 颜色分两类：
- * - 图标用固定的 Zotero 色（蓝 / 绿 / 橙 / 红），深浅主题下都保持彩色；
+ * - 分类树图标用固定的 Zotero 色（蓝 / 绿 / 橙 / 红），深浅主题下都保持彩色；
+ *   条目类型图标反过来：主体是随主题的近黑墨色，只给书 / 笔记 / 附件留官方特征色；
  * - 按钮用半透明底色叠在宿主背景上；标题不铺底色，只靠渐变竖条与文字色点缀。
  *   文字取宿主主题变量，避免写死亮/暗两套值。伪类（hover / active /
  *   disabled）没法写进内联 style，统一放在 {@link THEME_CSS}，由客户端入口注入一次。
@@ -94,6 +95,26 @@ export function tagButtonClass(selected = false): string {
   return selected ? `${TAG_BUTTON_CLASS} is-selected` : TAG_BUTTON_CLASS
 }
 
+/**
+ * 条目类型图标的 class：配色向 Zotero 7 的 item-type 图标靠拢。
+ *
+ * Zotero 的普通条目是白纸 + 近黑的灰线（#444444），只有书（#4072E5 蓝）、
+ * 笔记（#FAA700 黄）、附件（#DB2C3A 红）带特征色。这里沿用这四支色，
+ * 但仍用自己的单线描边画法：不复制官方 SVG、不铺纸面底色。
+ * 已读态不用粉色，改去饱和 + 淡化，避免整列图标泛彩。
+ */
+export const ITEM_ICON_CLASS = 'dsh-zp-item-icon'
+
+/** 只有这三个家族带 Zotero 特征色，其余一律墨色。 */
+const ITEM_ICON_ACCENT_FAMILIES = new Set(['book', 'note', 'attachment'])
+
+export function itemTypeIconClass(family: string, read = false): string {
+  const parts = [ITEM_ICON_CLASS]
+  if (ITEM_ICON_ACCENT_FAMILIES.has(family)) parts.push(`is-${family}`)
+  if (read) parts.push('is-read')
+  return parts.join(' ')
+}
+
 /** 全局主题样式：只在入口注入一次，portal / 浮层里的按钮同样生效。 */
 export const THEME_CSS = `
 .dsh-zp-soft-btn {
@@ -129,6 +150,26 @@ export const THEME_CSS = `
 }
 .dsh-zp-tag.is-selected:active {
   background-color: #404040 !important;
+}
+/* 条目类型图标：近黑墨色为主，只有书 / 笔记 / 附件留 Zotero 特征色。
+   先给宿主文字色兜底，再用 light-dark() 做深浅两套；老浏览器退成墨色。 */
+.dsh-zp-item-icon {
+  color: var(--dsw-alias-label-primary, #3b3b3b);
+  color: light-dark(#3b3b3b, #d0d0d0);
+  opacity: 0.95;
+}
+.dsh-zp-item-icon.is-book {
+  color: light-dark(#4072e5, #8eaef5);
+}
+.dsh-zp-item-icon.is-note {
+  color: light-dark(#b87b06, #eeb23c);
+}
+.dsh-zp-item-icon.is-attachment {
+  color: light-dark(#d32f3c, #f0727a);
+}
+.dsh-zp-item-icon.is-read {
+  opacity: 0.5;
+  filter: grayscale(1);
 }
 .dsh-zp-title {
   display: inline-flex;

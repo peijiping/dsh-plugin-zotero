@@ -2,13 +2,16 @@
  * 条目类型 → 图标与本地化名称。
  *
  * Zotero 为三十余种条目类型分别提供了图标，但多数在 16px 下都是「纸页」变体；
- * 右栏宽度有限，这里按形态收敛成一组家族（描边风格与树内其它图标一致），
- * 未收录的类型兜底为文档。类型全名由 locales 的 `type.<itemType>` 文案提供。
+ * 右栏宽度有限，这里按形态收敛成一组家族（单线描边），未收录的类型兜底为文档。
+ * 配色向 Zotero 7 靠拢：普通条目是近黑墨色，只给书 / 笔记 / 附件留官方特征色；
+ * 色值与 light/dark 切换集中在 `styles.ts`，不复制官方 SVG、也不铺纸面底色。
+ * 类型全名由 locales 的 `type.<itemType>` 文案提供。
  */
 
 import type { ReactElement } from 'react'
 
 import type { Translate } from './locales'
+import { itemTypeIconClass } from './styles'
 
 type IconFamily =
   | 'document'
@@ -89,14 +92,8 @@ const PATH: Record<IconFamily, string> = {
   attachment: 'M9.6 3.5 4.9 8.2a1.9 1.9 0 0 0 2.7 2.7l4.7-4.7a3 3 0 0 0-4.2-4.2L3.4 6.7a4.2 4.2 0 0 0 5.9 5.9l1.2-1.2',
 }
 
-/** 已读图标的粉色：不用主题蓝，蓝色容易被读成「未读消息」徽标。 */
-const READ_ICON_COLOR = '#e8798d'
-
-/** 未读图标用 Zotero 蓝：列表行里比中性灰更醒目，也与树、按钮同一支蓝。 */
-const ICON_COLOR = '#4a86e8'
-
 /**
- * 条目类型图标；未知类型显示文档图标，已读条目整体转粉色。
+ * 条目类型图标；未知类型显示文档图标，已读条目去饱和并淡化。
  * 无底衬，默认 22px（比 Zotero 原生 16px 放大，列表里才看得清）。
  */
 export function ItemTypeIcon({
@@ -116,10 +113,10 @@ export function ItemTypeIcon({
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.35}
+      strokeWidth={1.2}
       strokeLinejoin="round"
       strokeLinecap="round"
-      style={{ opacity: read ? 0.95 : 0.9, color: read ? READ_ICON_COLOR : ICON_COLOR }}
+      className={itemTypeIconClass(family, read)}
       aria-hidden
     >
       <path d={PATH[family]} />
