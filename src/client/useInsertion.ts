@@ -28,6 +28,8 @@ import {
   tagSetReference,
   translationReference,
 } from './reference'
+import { insertShotToConversation } from './viewer/shot/inserter'
+import type { ShotMeta } from './viewer/shot/types'
 
 export interface InsertionActions {
   report(outcome: InsertOutcome): void
@@ -46,6 +48,12 @@ export interface InsertionActions {
   insertTag(name: string): void
   /** 多个标签合并成一个 chip；超过 {@link MAX_TAG_REFERENCE} 时提示并不插入。 */
   insertTagSet(names: readonly string[], mode: 'all' | 'any'): void
+  /**
+   * 一张截图：PNG 作为图片附件 + 一枚 `shot:` 出处 chip，一起进同一条消息。
+   *
+   * 返回失败态由调用方出 toast；这里不弹，避免与截图遮罩的状态提示重复。
+   */
+  insertShot(png: Blob, meta: ShotMeta): InsertOutcome
 }
 
 export function useInsertion(
@@ -53,11 +61,19 @@ export function useInsertion(
   sessions: SessionsFace,
   sessionId: string | undefined,
   inputActions: InputActions | undefined,
+  /** 惰性取宿主 conversation 服务；apply 期服务未 ACTIVE，绝不能缓存实例。 */
+  conversation?: () => unknown,
 ): InsertionActions {
   const report = useCallback((outcome: InsertOutcome): void => {
-    if (outcome === 'inserted') showToast(t('toast.inserted'))
-    else if (outcome === 'no-editor') showToast(t('error.noEditor'))
-    else showToast(t('error.draftChanged'))
+    switch (outcome) {
+      case 'inserted': showToast(t('toast.inserted')); break
+      case 'no-editor': showToast(t('error.noEditor')); break
+      case 'draft-changed': showToast(t('error.draftChanged')); break
+      case 'no-conversation': showToast(t('shot.noConversation')); break
+      case 'attachment-rejected': showToast(t('shot.attachmentRejected')); break
+      case 'model-no-image': showToast(t('shot.modelNoImage')); break
+      case 'ref-too-long': showToast(t('shot.refTooLong')); break
+    }
   }, [t])
 
   /** 插一个引用 chip：草稿里只留 key，完整文本在提交那一刻由引用源的 codec 现取。 */
@@ -184,6 +200,15 @@ export function useInsertion(
     insertReference(tagSetReference(unique, mode, tagSetChipLabel(t, unique, mode)))
   }, [insertReference, t])
 
+  const insertShot = useCallback((png: Blob, meta: ShotMeta): InsertOutcome =>
+    insertShotToConversation({
+      t,
+      sessions,
+      sessionId,
+      inputActions,
+      getConversation: conversation ?? (() => undefined),
+    }, png, meta), [conversation, inputActions, sessionId, sessions, t])
+
   return {
     report,
     insertReference,
@@ -196,5 +221,6 @@ export function useInsertion(
     insertItems,
     insertTag,
     insertTagSet,
+    insertShot,
   }
 }

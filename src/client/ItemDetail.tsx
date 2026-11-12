@@ -9,16 +9,21 @@
  * 等渲染器就绪后再滚动并闪烁。
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { fileUrl, openInZotero, snapshotUrl } from './api'
 import { isLocatable, type AnnotationFilter } from './annotationRuns'
 import { InfoPanel } from './InfoPanel'
+import type { InsertOutcome } from './inline'
 import { tpl, type Translate } from './locales'
 import { OutlinePanel } from './OutlinePanel'
 import { showToast } from './paneStore'
+import { shotWatermark } from './compose'
 import { DocumentView } from './viewer/DocumentView'
+import { useShotController } from './viewer/shot/controller'
+import { buildShotMeta } from './viewer/shot/metadata'
+import type { ShotMeta } from './viewer/shot/types'
 import { pickRenderer } from './viewer/registry'
 import {
   extensionOf,
@@ -46,6 +51,8 @@ interface Props {
   onChanged(): void
   /** 阅读器工具条上的页面级刷新：重取整份详情，返回 Promise 供按钮显示进行中。 */
   onRefresh(): Promise<void>
+  /** 截图插入（图片附件 + `shot:` chip）；缺失时截图按钮仍可点，插入给出明确提示。 */
+  onInsertShot?(png: Blob, meta: ShotMeta): InsertOutcome
 }
 
 /** 定位重试：渲染器刚就绪时页面占位可能还没提交，最多试几次。 */
@@ -92,7 +99,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   return source
 }
 
-export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh }: Props): ReactElement {
+export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh, onInsertShot }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
@@ -102,6 +109,13 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   const [refreshing, setRefreshing] = useState(false)
   const [stateKey, setStateKey] = useState(detail.key)
   const viewerRef = useRef<ViewerHandle | null>(null)
+  /** 截图范围的唯一边界：正文容器（不含 30px 工具条与左上角悬浮按钮）。 */
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  /** 悬浮按钮行的宽度驱动工具条 paddingLeft；42 = 行 left(34) + 右侧留白(8)。 */
+  const [topbarPad, setTopbarPad] = useState(158)
+  const handleRowWidth = useCallback((width: number): void => {
+    setTopbarPad(Math.ceil(width) + 42)
+  }, [])
   const pendingLocate = useRef<string | null>(null)
   const locateTimer = useRef<number | null>(null)
 
@@ -171,6 +185,22 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   const renderer = pickRenderer(source, detail)
   /** 目录按钮按渲染器能力出现：PDF / 快照 / 笔记 / 全文共用左上角那一个浮层。 */
   const outlineAvailable = renderer.capabilities.outline
+
+  /** 截图状态机：能力来自渲染器，位图统一交给 shot/ 的 adapter 合成。 */
+  const shot = useShotController({
+    t,
+    kind: renderer.capabilities.capture,
+    getRoot: () => contentRef.current,
+    buildMeta: (frame, rect) => buildShotMeta({ detail, source, outline: outlineItems, frame, rect }),
+    watermark: (meta) => shotWatermark(t, meta),
+    insert: (png, meta) => onInsertShot?.(png, meta) ?? 'no-conversation',
+  })
+  /** 启动前显式清场：两个浮层盖在同一块位置，定格图里不该出现它们。 */
+  const startScreenshot = useCallback((): void => {
+    setInfoOpen(false)
+    setOutlineOpen(false)
+    shot.start()
+  }, [shot.start])
   const outlineSourceLabel = t(OUTLINE_SOURCE_LABEL[detail.itemType === 'note' ? 'note' : renderer.id]
     ?? 'outline.source.text')
 
@@ -240,7 +270,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   }
 
   return (
-    <div style={rootStyle}>
+    <div style={{ ...rootStyle, '--dsh-zp-topbar-pad': `${topbarPad}px` } as CSSProperties}>
       <DocumentView
         t={t}
         detail={detail}
@@ -256,7 +286,16 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
         refreshing={refreshing}
         onRefresh={() => void handleRefresh()}
         onOutlineChange={handleOutlineChange}
+        contentRef={contentRef}
+        shot={shot}
       />
+      {/*
+        采集中的短暂提示。故意挂在正文容器**外面**：`html-to-image` 会克隆
+        contentRef 子树，提示层若在里面就会被拍进定格图。
+      */}
+      {shot.phase === 'capturing' && (
+        <div style={capturingStyle} aria-live="polite">{t('shot.capturing')}</div>
+      )}
       {outlineAvailable && (
         <OutlinePanel
           t={t}
@@ -290,6 +329,10 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
         onChanged={onChanged}
         annotationFilter={annotationFilter}
         onAnnotationFilterChange={setAnnotationFilter}
+        onScreenshot={startScreenshot}
+        screenshotAvailable={shot.available}
+        screenshotReason={shot.unavailableReason}
+        onRowWidth={handleRowWidth}
       />
     </div>
   )
@@ -301,4 +344,22 @@ const rootStyle = {
   flexDirection: 'column',
   height: '100%',
   minHeight: 0,
+} as const
+
+/** 采集进行中的覆盖提示：只遮正文（工具条 30px 高），不拦指针。 */
+const capturingStyle = {
+  position: 'absolute',
+  top: 30,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 23,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'rgba(0,0,0,0.18)',
+  color: 'CanvasText',
+  fontSize: 12,
+  letterSpacing: '0.02em',
+  pointerEvents: 'none',
 } as const

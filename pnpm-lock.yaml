@@ -26,6 +26,9 @@ importers:
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
+      html-to-image:
+        specifier: 1.11.13
+        version: 1.11.13
       pdfjs-dist:
         specifier: 6.3.289
         version: 6.3.289
@@ -3751,6 +3754,9 @@ packages:
 
   hookable@6.1.2:
     resolution: {integrity: sha512-+abwxtiEA52GCVIsQqut3S/uKTbUwYIp4Pe/vv+6py5XiXBCqMZHg6pA6Y5qhgLSEys0/cYuPbO0z1QFj5ZCmg==}
+
+  html-to-image@1.11.13:
+    resolution: {integrity: sha512-cuOPoI7WApyhBElTTb9oqsawRvZ0rHhaHwghRLlTuffoD1B2aDemlCruLeZrUIIdvG7gs9xeELEPm6PhuASqrg==}
 
   http-cache-semantics@4.3.0:
     resolution: {integrity: sha512-M5t5LlJpS1UHMjvwRQVdFHvPISGeLAxNcrWuJkeGh0KxsqCHZ1O3NXZU/8x7cD0BDcGW8kapxMKTvwlqrNkHkA==}
@@ -8783,6 +8789,8 @@ snapshots:
       type-fest: 4.41.0
 
   hookable@6.1.2: {}
+
+  html-to-image@1.11.13: {}
 
   http-cache-semantics@4.3.0: {}
 

@@ -15,7 +15,7 @@
  * 它同时影响页面上的标注，浮层收着的时候也应该能点。
  */
 
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { AnnotationList } from './AnnotationList'
@@ -31,6 +31,7 @@ import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { NoteList } from './NoteList'
 import { ACCENT, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
+import { ScreenshotIcon } from './viewer/shot/ScreenshotIcon'
 
 interface Props {
   t: Translate
@@ -49,6 +50,13 @@ interface Props {
   onChanged(): void
   annotationFilter: AnnotationFilter
   onAnnotationFilterChange(filter: AnnotationFilter): void
+  /** 启动截图（「加入对话」右边那枚图标按钮）。 */
+  onScreenshot(): void
+  /** 当前渲染器是否支持截图；不支持时按钮置灰并给出原因。 */
+  screenshotAvailable: boolean
+  screenshotReason: string
+  /** 量出悬浮按钮行宽度，供工具条的 `paddingLeft` 让位（语言/文案会改变宽度）。 */
+  onRowWidth?(width: number): void
 }
 
 interface BlockProps {
@@ -101,8 +109,14 @@ export function InfoPanel({
   onChanged,
   annotationFilter,
   onAnnotationFilterChange,
+  onScreenshot,
+  screenshotAvailable,
+  screenshotReason,
+  onRowWidth,
 }: Props): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
+  /** 悬浮按钮行：宽度随语言与「加入对话」文案变化，量出来给工具条让位。 */
+  const rowRef = useRef<HTMLDivElement | null>(null)
   /** 各区块开合来自全局持久状态，不放在组件里：换条目/重开都是同一份。 */
   const sections = useInfoSections()
   /** 「笔记」新建框是否打开：加号在区块标题行，编辑器在区块内，状态只能放在这里。 */
@@ -116,6 +130,19 @@ export function InfoPanel({
   // 点浮层外 / 按 Esc 收起。根节点同时包着触发按钮，点它不会被判成「外面」，
   // 交给 `onToggle` 自己开合。
   useDismiss(open, rootRef, onClose)
+
+  // 「加入对话」在 zh / en 下宽度不同，笔记类条目还会整枚隐藏；写死 left 或
+  // paddingLeft 必错。量整行宽度上报，由 ItemDetail 写成 CSS 变量给工具条。
+  useLayoutEffect(() => {
+    const node = rowRef.current
+    if (node === null || onRowWidth === undefined) return
+    const report = (): void => onRowWidth(node.getBoundingClientRect().width)
+    report()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(report)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [onRowWidth])
 
   function toggle(id: InfoSectionId): void {
     toggleInfoSection(id)
@@ -139,29 +166,44 @@ export function InfoPanel({
 
   return (
     <div ref={rootRef} style={rootStyle}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-label={t('detail.info')}
-        title={t('detail.info')}
-        style={triggerStyle}
-      >
-        i
-      </button>
+      {/* 目录按钮（left:8）在 OutlinePanel，这一行从 left:34 起按内容排布。 */}
+      <div ref={rowRef} style={rowStyle}>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={t('detail.info')}
+          title={t('detail.info')}
+          style={triggerStyle}
+        >
+          i
+        </button>
 
-      {/* 笔记类条目自己就是正文，没有「把条目加入对话」这回事（同浮层头部的旧规则）。 */}
-      {!selfNote && (
+        {/* 笔记类条目自己就是正文，没有「把条目加入对话」这回事（同浮层头部的旧规则）。 */}
+        {!selfNote && (
+          <button
+            type="button"
+            className={SOFT_BUTTON_CLASS}
+            onClick={onCite}
+            title={t('action.insertItem')}
+            style={citeTriggerStyle}
+          >
+            {t('action.insertItemShort')}
+          </button>
+        )}
+
         <button
           type="button"
           className={SOFT_BUTTON_CLASS}
-          onClick={onCite}
-          title={t('action.insertItem')}
-          style={citeTriggerStyle}
+          onClick={onScreenshot}
+          disabled={!screenshotAvailable}
+          aria-label={t('action.screenshot')}
+          title={screenshotAvailable ? t('action.screenshot') : screenshotReason}
+          style={shotTriggerStyle}
         >
-          {t('action.insertItemShort')}
+          <ScreenshotIcon />
         </button>
-      )}
+      </div>
 
       {open && (
         <div role="dialog" aria-label={t('detail.info')} style={panelStyle}>
@@ -301,12 +343,22 @@ const rootStyle = {
   pointerEvents: 'none',
 } as const
 
-/** 这一行按钮从左往右：目录（8）、文献信息（34）、加入对话（60），每个 22 高、间隔 4。 */
-const triggerStyle = {
+/** 左上角按钮行：目录（8）单独在 OutlinePanel，这里从 34 起按内容排布。 */
+const rowStyle = {
   position: 'absolute',
-  pointerEvents: 'auto',
+  pointerEvents: 'none',
   top: 4,
   left: 34,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  height: 22,
+} as const
+
+const triggerStyle = {
+  position: 'relative',
+  flexShrink: 0,
+  pointerEvents: 'auto',
   width: 22,
   height: 22,
   padding: 0,
@@ -363,10 +415,9 @@ const panelTitleStyle = {
 /** 收在 `i` 右边、跟它同一行：是每次读文献都要点的主操作，不藏进浮层。 */
 const citeTriggerStyle = {
   ...SOFT_BUTTON_STYLE,
-  position: 'absolute',
+  position: 'relative',
+  flexShrink: 0,
   pointerEvents: 'auto',
-  top: 4,
-  left: 60,
   display: 'inline-flex',
   alignItems: 'center',
   height: 22,
@@ -376,6 +427,25 @@ const citeTriggerStyle = {
   lineHeight: 1,
   whiteSpace: 'nowrap',
   borderRadius: 11,
+  cursor: 'pointer',
+  boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
+  zIndex: 21,
+} as const
+
+/** 「加入对话」右边的截图按钮：纯图标 22px，与同行两枚按钮同一套浅蓝描边。 */
+const shotTriggerStyle = {
+  ...SOFT_BUTTON_STYLE,
+  position: 'relative',
+  flexShrink: 0,
+  pointerEvents: 'auto',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  padding: 0,
+  lineHeight: 1,
+  borderRadius: 6,
   cursor: 'pointer',
   boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
   zIndex: 21,

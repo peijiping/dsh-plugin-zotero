@@ -102,6 +102,12 @@ interface ClientContext {
   configForms: ConfigFormsService
   inputTriggers: InputTriggersService
   sessions: SessionsFace
+  /**
+   * cordis 运行时服务查找。**不要在 `inject` 里声明 `conversation`**：宿主
+   * `ConversationController` 注册晚于插件 apply，inject 未就绪会让 fiber 永久
+   * PENDING、apply 静默不执行（第 0 步 Spike 实测 apply=false / click=true）。
+   */
+  get?(name: string): unknown
 }
 
 /** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
@@ -207,6 +213,8 @@ export function apply(ctx: ClientContext): void {
       sessions: ctx.sessions,
       inputActions: props.inputActions,
       sessionId: props.sessionId,
+      // 只透传「取数函数」，不在 apply 闭包里缓存服务实例（服务此时尚未 ACTIVE）。
+      conversation: () => ctx.get?.('conversation'),
     })
 
   /**

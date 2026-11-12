@@ -10,6 +10,7 @@ import type { ComponentType, MutableRefObject } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import type { Translate } from '../locales'
+import type { CaptureKind } from './shot/types'
 
 /** 当前展示的一份文档。 */
 export interface DocumentSource {
@@ -35,6 +36,11 @@ export interface ViewerCapabilities {
    * 笔记标题都由各自的渲染器解析后上报，与「有没有页码」无关。
    */
   outline: boolean
+  /**
+   * 截图采集能力。按钮可用性由它决定，不猜 `renderer.id`：
+   * `pdf` 读页 canvas、`dom` 序列化父 DOM、`iframe` 需二期桥接、`none` 无可截内容。
+   */
+  capture: CaptureKind
 }
 
 /**

@@ -59,6 +59,7 @@
     "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "^24.19.2",
     "@types/react": "~18.3.1",
+    "html-to-image": "1.11.13",
     "pdfjs-dist": "6.3.289",
     "react": "^18.3.1",
     "tsdown": "^0.22.0",

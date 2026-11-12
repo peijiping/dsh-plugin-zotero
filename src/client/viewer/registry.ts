@@ -33,13 +33,13 @@ import { isHtml, isPdf, type DocumentRenderer, type DocumentSource } from './typ
 export const RENDERERS: readonly DocumentRenderer[] = [
   {
     id: 'snapshot',
-    capabilities: { zoom: false, pageNavigation: false, outline: true },
+    capabilities: { zoom: false, pageNavigation: false, outline: true, capture: 'iframe' },
     match: (source) => source !== null && isHtml(source),
     Component: SnapshotViewer,
   },
   {
     id: 'pdf',
-    capabilities: { zoom: true, pageNavigation: true, outline: true },
+    capabilities: { zoom: true, pageNavigation: true, outline: true, capture: 'pdf' },
     match: (source) => source !== null && isPdf(source),
     Component: PdfViewer,
   },
@@ -49,14 +49,14 @@ export const RENDERERS: readonly DocumentRenderer[] = [
      * 必须排在 pdf 之后：挂了大 PDF 的 webpage 条目应该看 PDF 而不是这句提示。
      */
     id: 'webpage',
-    capabilities: { zoom: false, pageNavigation: false, outline: true },
+    capabilities: { zoom: false, pageNavigation: false, outline: true, capture: 'none' },
     match: (source, detail) =>
       detail.itemType === 'webpage' && (source === null || (!isPdf(source) && !isHtml(source))),
     Component: WebpageViewer,
   },
   {
     id: 'text',
-    capabilities: { zoom: false, pageNavigation: false, outline: true },
+    capabilities: { zoom: false, pageNavigation: false, outline: true, capture: 'dom' },
     match: () => true,
     Component: TextViewer,
   },

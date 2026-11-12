@@ -20,10 +20,12 @@ import {
   excerptText,
   itemText,
   noteText,
+  shotText,
   tagSetText,
   tagText,
   translationText,
 } from './compose'
+import type { ShotMeta } from './viewer/shot/types'
 
 /** 文库里已经没有这个对象（与「连不上 Zotero」区分开）。 */
 function isMissing(error: unknown): boolean {
@@ -167,8 +169,29 @@ export async function translationCitation(t: Translate, body: string): Promise<s
   }, decodeRefPart('翻译', rawQuote), decodeRefPart('翻译', rawTranslated))
 }
 
+/**
+ * 一张截图的引用：7 段全自包含，不请求 Host，也不依赖图片对象是否还在。
+ *
+ * 图片附件与这段文本由宿主组装成同一条消息；chip 被删掉时模型仍能看到图，
+ * 图片被删掉时这段文本也不会假装自己有图（末尾那行说明已写明这一点）。
+ */
+export async function shotCitation(t: Translate, body: string): Promise<string> {
+  const parts = body.split(':')
+  if (parts.length !== 7 || parts.some((part) => part === undefined)) {
+    throw new Error(`无法识别的 Zotero 截图引用：${body}`)
+  }
+  const [key, title, byline, pages, section, digest, shotId] = parts.map(
+    (part) => decodeRefPart('截图', part ?? ''),
+  )
+  const meta: ShotMeta = {
+    key: key ?? '', title: title ?? '', byline: byline ?? '', pages: pages ?? '',
+    section: section ?? '', digest: digest ?? '', shotId: shotId ?? '',
+  }
+  return shotText(t, meta)
+}
+
 /** 解码 ref 里的一段；坏转义会抛 URIError，换成带来源的可辨认错误。 */
-function decodeRefPart(kind: '摘录' | '标签' | '翻译', encoded: string): string {
+function decodeRefPart(kind: '摘录' | '标签' | '翻译' | '截图', encoded: string): string {
   try {
     return decodeURIComponent(encoded)
   } catch {

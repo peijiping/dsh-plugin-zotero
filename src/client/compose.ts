@@ -7,6 +7,7 @@
 
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import type { ShotMeta } from './viewer/shot/types'
 import { commentPlain } from './annotationComment'
 import type {
   ZoteroAnnotation,
@@ -38,6 +39,47 @@ export function itemText(t: Translate, detail: ZoteroItemDetail): string {
   if (detail.doi !== '') lines.push(line(t, 'cmp.item.doi', detail.doi))
   if (detail.url !== '') lines.push(line(t, 'cmp.item.url', detail.url))
   return lines.join('\n')
+}
+
+/**
+ * 一张截图提交时展开给模型的说明文本。
+ *
+ * 图片附件与本段文本由宿主组装成**同一条消息**，所以模型既看到图，也知道是哪个
+ * 文献、哪一部分。四项元数据共用 `ShotMeta`，与水印条、chip label 事实源一致。
+ * 末尾明确「以图片为准、文本只用于定位」，避免模型拿摘要当原文引用。
+ */
+export function shotText(t: Translate, meta: ShotMeta): string {
+  const none = t('cmp.shot.none')
+  const lines = [
+    tpl(t('cmp.shot.header'), { title: meta.title, key: meta.key }),
+    tpl(t('cmp.shot.byline'), { value: meta.byline || none }),
+    tpl(t('cmp.shot.pages'), { value: meta.pages || none }),
+    tpl(t('cmp.shot.section'), { value: meta.section || none }),
+    tpl(t('cmp.shot.digest'), { value: meta.digest || t('cmp.shot.digestNone') }),
+    t('cmp.shot.note'),
+  ]
+  return lines.join('\n')
+}
+
+/** chip 上唯一可见的文字；hover 的 title 由宿主按 label 显示。 */
+export function shotChipLabel(t: Translate, meta: ShotMeta): string {
+  const chars = Array.from(meta.title)
+  const title = chars.length > 24 ? `${chars.slice(0, 24).join('')}…` : meta.title
+  const where = meta.pages === '' ? '' : ` · ${tpl(t('cmp.shot.pageTag'), { value: meta.pages })}`
+  return tpl(t('cmp.shot.chipLabel'), { value: `${title}${where}` })
+}
+
+/**
+ * 图片内底部水印条：图片被单独转发时也不丢「哪个文献、哪一部分」。
+ *
+ * 必须以工具署名开头。只写「《标题》 · P1 · 章节」时，模型会把它当成文档
+ * 自带的页脚 / 页签标注（实测如此），而不是工具加的元数据。
+ */
+export function shotWatermark(t: Translate, meta: ShotMeta): string {
+  const parts = [t('cmp.shot.watermark'), `《${meta.title}》`]
+  if (meta.pages !== '') parts.push(`P${meta.pages}`)
+  if (meta.section !== '') parts.push(meta.section)
+  return parts.join(' · ')
 }
 
 /**

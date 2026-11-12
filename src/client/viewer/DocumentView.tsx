@@ -12,6 +12,8 @@ import { tpl, type Translate } from '../locales'
 import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from '../styles'
 import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 import { pickRenderer } from './registry'
+import { ScreenshotOverlay } from './shot/ScreenshotOverlay'
+import type { ShotController } from './shot/controller'
 import type { DocumentOutlineItem, DocumentSource, ViewerHandle } from './types'
 
 interface Props {
@@ -34,6 +36,10 @@ interface Props {
   onRefresh(): void
   /** 渲染器报上来的目录（PDF 书签 / 网页标题 / 笔记标题），交给左上角统一的目录浮层。 */
   onOutlineChange(outline: DocumentOutlineItem[]): void
+  /** 正文容器：覆盖所有渲染器、位于 30px 工具条之下，是截图范围的唯一边界。 */
+  contentRef: MutableRefObject<HTMLDivElement | null>
+  /** 截图状态机；遮罩挂在这层，天然不含工具条与左上角悬浮按钮。 */
+  shot: ShotController
 }
 
 /**
@@ -155,6 +161,8 @@ export function DocumentView({
   refreshing,
   onRefresh,
   onOutlineChange,
+  contentRef,
+  shot,
 }: Props): ReactElement {
   const renderer = pickRenderer(source, detail)
   const Renderer = renderer.Component
@@ -228,7 +236,11 @@ export function DocumentView({
           {t('viewer.openInZoteroShort')}
         </button>
       </div>
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div
+        ref={contentRef}
+        data-dsh-zotero-content=""
+        style={{ flex: 1, minHeight: 0, position: 'relative' }}
+      >
         <Renderer
           key={source?.attachmentKey ?? 'none'}
           t={t}
@@ -246,16 +258,31 @@ export function DocumentView({
           onChanged={onChanged}
           onOutlineChange={onOutlineChange}
         />
+        {shot.url !== null && shot.phase !== 'idle' && shot.phase !== 'capturing' && (
+          <ScreenshotOverlay
+            t={t}
+            url={shot.url}
+            width={shot.width}
+            height={shot.height}
+            selection={shot.selection}
+            busy={shot.phase === 'inserting'}
+            onSelect={shot.select}
+            onCancel={shot.cancel}
+            onConfirm={shot.confirm}
+          />
+        )}
       </div>
     </div>
   )
 }
 
 /**
- * 左侧留出三个悬浮按钮（目录 / 文献信息 / 加入对话）的位置，标题居中显示在剩下这段里。
+ * 左侧留出左上角悬浮按钮行的位置，标题居中显示在剩下这段里。
  *
- * 悬浮按钮是绝对定位、盖在工具条上的（见 `OutlinePanel` / `InfoPanel`：8 + 22 + 4 一格，
- * 第三格「加入对话」到 124 为止），所以这里的 `paddingLeft` 必须一起改，否则标题从按钮底下钻出来。
+ * 悬浮按钮盖在工具条上（见 `OutlinePanel` / `InfoPanel`）：目录固定 `left:8`，
+ * 后面的「文献信息 / 加入对话 / 截图」是一行 flex，宽度随语言与文案变化，所以
+ * `paddingLeft` 改读 CSS 变量 `--dsh-zp-topbar-pad`，由 `ItemDetail` 量完行宽后写入；
+ * 变量缺失时用 158px 兜底（原 132px + 一枚 22px 按钮 + 4px 间隔）。
  */
 const barStyle = {
   display: 'flex',
@@ -263,7 +290,7 @@ const barStyle = {
   gap: 4,
   flexShrink: 0,
   height: 30,
-  padding: '0 8px 0 132px',
+  padding: '0 8px 0 var(--dsh-zp-topbar-pad, 158px)',
   borderBottom: '1px solid rgba(127,127,127,0.2)',
   background: 'transparent',
 } as const

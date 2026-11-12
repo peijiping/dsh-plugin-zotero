@@ -24,10 +24,13 @@ import {
   excerptCitation,
   itemCitation,
   noteCitation,
+  shotCitation,
   tagCitation,
   tagSetCitation,
   translationCitation,
 } from './cite'
+import { MAX_SHOT_REF_CHARS } from './viewer/shot/types'
+import type { ShotMeta } from './viewer/shot/types'
 
 /**
  * 写进 chip 的持久标识：一旦发布就不能改名，老草稿里的 chip 靠它找回 codec。
@@ -56,6 +59,13 @@ const TRANSLATION_PREFIX = 'tr:'
 const TAG_PREFIX = 'tag:'
 /** 标签组：`tags:<all|any>:<编码后的标签名>,…`。 */
 const TAG_SET_PREFIX = 'tags:'
+/**
+ * 一次截图的出处：`shot:<key>:<title>:<byline>:<pages>:<section>:<digest>:<shotId>`。
+ *
+ * 7 段全部 `encodeURIComponent`，与 `exc:` / `tr:` 一样自包含、不请求 Host、
+ * 草稿跨重启可展开。图片本体走宿主附件通道，这里只存「哪个文献、哪一部分」。
+ */
+const SHOT_PREFIX = 'shot:'
 
 /** 一次最多引用的标签数（防止 URL 与提示文本过长）。 */
 export const MAX_TAG_REFERENCE = 20
@@ -125,6 +135,7 @@ export function citationForRef(t: Translate, ref: string, signal: AbortSignal): 
   }
   if (ref.startsWith(TAG_SET_PREFIX)) return tagSetCitation(t, ref.slice(TAG_SET_PREFIX.length), signal)
   if (ref.startsWith(TAG_PREFIX)) return tagCitation(t, ref.slice(TAG_PREFIX.length), signal)
+  if (ref.startsWith(SHOT_PREFIX)) return shotCitation(t, ref.slice(SHOT_PREFIX.length))
   return Promise.reject(new Error(`无法识别的 Zotero 引用：${ref}`))
 }
 
@@ -266,6 +277,30 @@ export function tagSetReference(
     ref,
     label,
     appearance: 'folder',
+    clipboardText: `@${ref}`,
+  }
+}
+
+/**
+ * 一张截图的出处 chip。
+ *
+ * 图片本体由 `shot/inserter.ts` 作为图片附件挂进草稿，这里只放定位信息；发送时
+ * `shotCitation` 把 7 段解码成给模型的说明文本。`MAX_SHOT_REF_CHARS` 按**编码后**
+ * 长度算（`buildShotMeta` 已逐段夹取），仍超限就抛错，不静默截断出处。
+ */
+export function shotReference(meta: ShotMeta, label: string): ReferenceInsert {
+  const ref = `${SHOT_PREFIX}${
+    [meta.key, meta.title, meta.byline, meta.pages, meta.section, meta.digest, meta.shotId]
+      .map((part) => encodeURIComponent(part)).join(':')
+  }`
+  if (ref.length > MAX_SHOT_REF_CHARS) {
+    throw new Error(`Zotero 截图的出处信息过长：${ref.length} > ${MAX_SHOT_REF_CHARS}`)
+  }
+  return {
+    source: REF_SOURCE,
+    ref,
+    label,
+    appearance: 'file',
     clipboardText: `@${ref}`,
   }
 }
