@@ -95,6 +95,8 @@ export interface DocumentRendererProps {
   onZoomChange(state: ZoomState): void
   onPageChange(page: number, total: number): void
   onInsertExcerpt(quote: string): void
+  /** 划词翻译的「加入对话」：原文与译文一起成一条 chip。 */
+  onInsertTranslation(quote: string, translated: string): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   /**

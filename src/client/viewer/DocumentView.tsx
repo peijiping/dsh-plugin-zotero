@@ -22,6 +22,7 @@ interface Props {
   viewerRef: MutableRefObject<ViewerHandle | null>
   onReady(): void
   onInsertExcerpt(quote: string): void
+  onInsertTranslation(quote: string, translated: string): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   onChanged(): void
@@ -147,6 +148,7 @@ export function DocumentView({
   viewerRef,
   onReady,
   onInsertExcerpt,
+  onInsertTranslation,
   onInsertAnnotation,
   onOpenInZotero,
   onChanged,
@@ -238,6 +240,7 @@ export function DocumentView({
           onZoomChange={handleZoomChange}
           onPageChange={handlePageChange}
           onInsertExcerpt={onInsertExcerpt}
+          onInsertTranslation={onInsertTranslation}
           onInsertAnnotation={onInsertAnnotation}
           onOpenInZotero={onOpenInZotero}
           onChanged={onChanged}

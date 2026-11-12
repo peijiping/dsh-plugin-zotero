@@ -26,6 +26,7 @@ import {
   noteCitation,
   tagCitation,
   tagSetCitation,
+  translationCitation,
 } from './cite'
 
 /**
@@ -45,6 +46,12 @@ const ANNOTATION_PREFIX = 'ann:'
  * `encodeURIComponent` 把 `:` 与所有空白都编码掉，用 `:` 分段不会歧义。
  */
 const EXCERPT_PREFIX = 'exc:'
+/**
+ * 划词翻译：`tr:<编码后的 itemKey>:<编码后的标题>:<编码后的原文>:<编码后的译文>`。
+ *
+ * 和摘录同理由：译文只存在于插入那一刻，文库里没有对应对象，四段全自包含。
+ */
+const TRANSLATION_PREFIX = 'tr:'
 /** 单个标签：`tag:<编码后的标签名>`。 */
 const TAG_PREFIX = 'tag:'
 /** 标签组：`tags:<all|any>:<编码后的标签名>,…`。 */
@@ -113,6 +120,9 @@ export function citationForRef(t: Translate, ref: string, signal: AbortSignal): 
     return annotationCitation(t, ref.slice(ANNOTATION_PREFIX.length), signal)
   }
   if (ref.startsWith(EXCERPT_PREFIX)) return excerptCitation(t, ref.slice(EXCERPT_PREFIX.length))
+  if (ref.startsWith(TRANSLATION_PREFIX)) {
+    return translationCitation(t, ref.slice(TRANSLATION_PREFIX.length))
+  }
   if (ref.startsWith(TAG_SET_PREFIX)) return tagSetCitation(t, ref.slice(TAG_SET_PREFIX.length), signal)
   if (ref.startsWith(TAG_PREFIX)) return tagCitation(t, ref.slice(TAG_PREFIX.length), signal)
   return Promise.reject(new Error(`无法识别的 Zotero 引用：${ref}`))
@@ -195,6 +205,30 @@ export function excerptReference(
     appearance: 'file',
     // 与其余 Zotero chip 同规则：草稿里这段文本必须无空格，否则 chip 的
     // 偏移校验会对不上。编码后的原文天然满足这一点。
+    clipboardText: `@${ref}`,
+  }
+}
+
+/**
+ * 一段「原文 + 译文」的 chip。
+ *
+ * 四段全编码，理由同 {@link excerptReference}：译文只存在于插入那一刻。
+ */
+export function translationReference(
+  key: string,
+  title: string,
+  quote: string,
+  translated: string,
+  label: string,
+): ReferenceInsert {
+  const ref = `${TRANSLATION_PREFIX}${
+    [key, title, quote, translated].map((part) => encodeURIComponent(part)).join(':')
+  }`
+  return {
+    source: REF_SOURCE,
+    ref,
+    label,
+    appearance: 'file',
     clipboardText: `@${ref}`,
   }
 }

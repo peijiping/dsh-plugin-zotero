@@ -27,6 +27,8 @@ import { SOFT_BUTTON_STYLE } from '../styles'
 import { AnnotationCard } from './AnnotationCard'
 import { anchorTarget, OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS } from './outline'
 import { SelectionBar, type MarkType } from './SelectionBar'
+import { TranslationCard } from './TranslationCard'
+import { useTranslation } from './useTranslation'
 import {
   asSnapshotEvent,
   commandEnvelope,
@@ -102,6 +104,7 @@ export function SnapshotViewer({
   viewerRef,
   onReady,
   onInsertExcerpt,
+  onInsertTranslation,
   onInsertAnnotation,
   onOpenInZotero,
   onChanged,
@@ -125,6 +128,8 @@ export function SnapshotViewer({
   const [missed, setMissed] = useState(0)
   const [selection, setSelection] = useState<SnapshotSelection | null>(null)
   const [marking, setMarking] = useState(false)
+  /** 划词翻译浮层：在父容器坐标系里，iframe 内滚动不影响它。 */
+  const translation = useTranslation(t)
   /**
    * 打开着的编辑卡片：只记标注 key 与点击位置，内容每次从 `annotations` 里现取。
    *
@@ -387,6 +392,19 @@ export function SnapshotViewer({
           annotate={detail.writeEnabled && source !== null
             ? { busy: marking, onCreate: (type, color, comment) => void createMark(type, color, comment) }
             : undefined}
+          translate={{ onTranslate: translation.open }}
+        />
+      )}
+      {translation.view !== null && (
+        <TranslationCard
+          t={t}
+          view={translation.view}
+          bounds={{ width: rootWidth, height: rootHeight }}
+          engine={translation.engine}
+          onEngineChange={translation.setEngine}
+          onClose={translation.close}
+          onRetry={translation.retry}
+          onInsert={onInsertTranslation}
         />
       )}
       {card !== null && cardAnnotation !== null && (

@@ -53,6 +53,21 @@ const DISABLED_FIELD = 'disabledMcpTools'
 /** 写入总开关的配置字段名。 */
 const WRITE_FIELD = 'writeEnabled'
 
+/** 划词翻译的引擎字段名。 */
+const TRANSLATE_PROVIDER_FIELD = 'translateProvider'
+
+/** 划词翻译的目标语言字段名。 */
+const TRANSLATE_TARGET_FIELD = 'translateTarget'
+
+/** 允许的引擎取值；与 Host `TranslateProvider`、译文浮层下拉同步。 */
+const TRANSLATE_PROVIDERS = ['bing', 'deepseek'] as const
+
+/**
+ * 目标语言候选：首项 `auto` = 按原文语种中英互译（与 Zotero 翻译插件一致），
+ * 其余是手动锁定；够覆盖常见文献语言，再多的用「自定义」不划算。
+ */
+const TRANSLATE_TARGETS = ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'ru'] as const
+
 /** 可配置字段名，与 Host `Config` schema 一一对应。 */
 type FieldName =
   | 'zoteroBaseUrl'
@@ -114,6 +129,8 @@ interface CardState extends SettingsFormState {
   defaultLimit: SettingsFieldState
   disabledMcpTools: SettingsFieldState
   writeEnabled: SettingsFieldState
+  translateProvider: SettingsFieldState
+  translateTarget: SettingsFieldState
 }
 
 /** 席位注册时经 `inject()` 下发给组件的面。 */
@@ -189,6 +206,24 @@ function booleanField(field: string): SettingsFieldSpec {
 }
 
 /**
+ * 枚举字段的规格：值本身就是字符串，但要挡住手改 patch 文件写进来的野值。
+ *
+ * 界面上不出现文本框（引擎与目标语言都是下拉），所以非法值的唯一来源就是
+ * 配置文件；`format` 把野值显示成默认值，用户不动它就不会把野值再存一遍。
+ */
+function enumField(field: string, allowed: readonly string[], fallback: string): SettingsFieldSpec {
+  return {
+    field,
+    format: (value) => (typeof value === 'string' && allowed.includes(value) ? value : fallback),
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      return allowed.includes(trimmed) ? { kind: 'set', value: trimmed } : undefined
+    },
+  }
+}
+
+/**
  * 一张卡片的暂存表单模型：改动先进暂存，由组件的防抖自动保存落盘（没有保存按钮）。
  * `scope` 由 `configForms.get(ROW_ID)` 提供（本条的共享配置表单）。
  */
@@ -203,6 +238,8 @@ export class ZoteroCardController {
         field.numeric ? settingsNumberField(field.name) : settingsTextField(field.name)),
       disabledToolsField(DISABLED_FIELD),
       booleanField(WRITE_FIELD),
+      enumField(TRANSLATE_PROVIDER_FIELD, TRANSLATE_PROVIDERS, 'bing'),
+      enumField(TRANSLATE_TARGET_FIELD, TRANSLATE_TARGETS, 'auto'),
     ])
     this.store = this.form.bind(() => this.projection())
   }
@@ -218,6 +255,8 @@ export class ZoteroCardController {
       defaultLimit: this.form.field('defaultLimit'),
       disabledMcpTools: this.form.field(DISABLED_FIELD),
       writeEnabled: this.form.field(WRITE_FIELD),
+      translateProvider: this.form.field(TRANSLATE_PROVIDER_FIELD),
+      translateTarget: this.form.field(TRANSLATE_TARGET_FIELD),
     }
   }
 
@@ -341,6 +380,21 @@ const TOOL_ROW_STYLE = {
 const TOOL_INFO_STYLE = { minWidth: 0 }
 const TOOL_NAME_STYLE = { fontSize: 12, display: 'block' }
 const TOOL_DESC_STYLE = { fontSize: 11, opacity: 0.66, display: 'block', marginTop: 2 }
+/** 翻译组里的字段名，与写开关那一行同一视觉层级。 */
+const TRANSLATE_LABEL_STYLE = { fontSize: 13, fontWeight: 600, display: 'block' }
+/** 目标语言下拉：原生 select，主题色靠 CSS 变量跟随明暗。 */
+const SELECT_STYLE: CSSProperties = {
+  flexShrink: 0,
+  height: 26,
+  padding: '0 4px',
+  fontSize: 12,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'Canvas',
+  color: 'CanvasText',
+}
+/** 引擎选项比语言名长，限宽免得把左侧的说明文字挤没。 */
+const PROVIDER_SELECT_STYLE: CSSProperties = { ...SELECT_STYLE, maxWidth: '52%' }
 
 /**
  * 写权限操作卡：整块描边 + 浅底，把「必须点按钮」这件事从一片灰字里拎出来。
@@ -405,6 +459,8 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
     state.defaultLimit.text,
     state.disabledMcpTools.text,
     state.writeEnabled.text,
+    state.translateProvider.text,
+    state.translateTarget.text,
   ].join('\u0000')
 
   /**
@@ -649,6 +705,55 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
     </div>
   )
 
+  /**
+   * 「划词翻译」：引擎与目标语言都用原生下拉。
+   *
+   * 引擎早先是两枚分段按钮，光看「Bing 免费 / DeepSeek 精翻」不知道在选什么，
+   * 改成下拉后选项能带一句人话说明；这里选的是**默认**引擎，译文浮层里还能临时换。
+   * 两项都不走 `SettingsValueField`（那是文本框），但值仍是字符串，因此字段规格用
+   * {@link enumField} —— 表单模型只负责「值合法 + 脏了要存」，控件长什么样由这里定。
+   */
+  const renderTranslate = (): ReactElement => {
+    return (
+      <>
+        <div style={TOOL_ROW_STYLE}>
+          <div style={TOOL_INFO_STYLE}>
+            <span style={TRANSLATE_LABEL_STYLE}>{t('field.translateProvider')}</span>
+            <span style={TOOL_DESC_STYLE}>{t('field.translateProviderHint')}</span>
+          </div>
+          <select
+            value={state.translateProvider.text === 'deepseek' ? 'deepseek' : 'bing'}
+            disabled={locked}
+            onChange={(event) => props.edit(TRANSLATE_PROVIDER_FIELD, event.target.value)}
+            style={PROVIDER_SELECT_STYLE}
+            aria-label={t('field.translateProvider')}
+          >
+            {TRANSLATE_PROVIDERS.map((value) => (
+              <option key={value} value={value}>{t(`translate.provider.${value}`)}</option>
+            ))}
+          </select>
+        </div>
+        <div style={TOOL_ROW_STYLE}>
+          <div style={TOOL_INFO_STYLE}>
+            <span style={TRANSLATE_LABEL_STYLE}>{t('field.translateTarget')}</span>
+            <span style={TOOL_DESC_STYLE}>{t('field.translateTargetHint')}</span>
+          </div>
+          <select
+            value={state.translateTarget.text === '' ? 'auto' : state.translateTarget.text}
+            disabled={locked}
+            onChange={(event) => props.edit(TRANSLATE_TARGET_FIELD, event.target.value)}
+            style={SELECT_STYLE}
+            aria-label={t('field.translateTarget')}
+          >
+            {TRANSLATE_TARGETS.map((tag) => (
+              <option key={tag} value={tag}>{t(`translate.target.${tag}`)}</option>
+            ))}
+          </select>
+        </div>
+      </>
+    )
+  }
+
   const renderStatus = (): ReactElement | null => {
     if (state.failed) return <p style={SAVE_FAILED_STYLE} role="status">{t('form.autosaveFailed')}</p>
     if (state.saving) return <p style={SAVE_STATUS_STYLE} role="status">{t('form.autosaving')}</p>
@@ -678,6 +783,10 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
           <h4 style={GROUP_HEAD_STYLE}>{t('tools.title')}</h4>
           {renderTools()}
         </div>
+      </section>
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.translate')}</h4>
+        {renderTranslate()}
       </section>
     </div>
   )

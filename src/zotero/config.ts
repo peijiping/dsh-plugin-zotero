@@ -88,6 +88,50 @@ export const WRITE_HEADER = 'x-dsh-zotero-write'
 /** 授权弹窗里展示给用户的应用名。 */
 export const AUTHORIZE_APP_NAME = 'DSH Zotero 插件'
 
+// ---- 划词翻译 ---------------------------------------------------------------
+
+/**
+ * Bing / Edge 浏览器翻译端点（免密钥）。
+ *
+ * 就是微软网页翻译自己用的那个接口：`POST ["text"]`，`?to=<target>` 指定目标语言。
+ * 国内直连可用，因此作为默认引擎；它是网页接口而非正式 API，协议可能变，
+ * 所以设置里留了 DeepSeek 精翻这条路，Host 侧也有 401 取 token 的兜底。
+ */
+export const TRANSLATE_BING_ENDPOINT = 'https://edge.microsoft.com/translate/translatetext'
+
+/** Edge 翻译的临时 token 端点（上面那个端点偶发要求 Bearer，取一次用一次）。 */
+export const TRANSLATE_BING_AUTH_URL = 'https://edge.microsoft.com/translate/auth'
+
+/** 单次翻译超时：Bing 基本 1 秒内回，DeepSeek 走模型要多给点余量。 */
+export const TRANSLATE_TIMEOUT_MS = 20_000
+
+/** 单次翻译的字符上限，与划选摘录的 4000 字上限保持一致。 */
+export const TRANSLATE_MAX_CHARS = 4000
+
+/** DeepSeek 精翻使用的模型；宿主 provider 若没有它则退到该 provider 的第一个模型。 */
+export const TRANSLATE_MODEL = 'deepseek-flash'
+
+/** 进程内翻译缓存条数上限（同一段反复选不该反复花额度）。 */
+export const TRANSLATE_CACHE_SIZE = 100
+
+/** 默认翻译引擎。 */
+export type TranslateProvider = 'bing' | 'deepseek'
+
+/**
+ * 目标语言的「自动」取值：按选区语种在中 / 英之间互换，与 Zotero 翻译插件一致。
+ * 中文 → 英文，其它语种（英 / 日 / 德…）→ 中文简体。
+ */
+export const TRANSLATE_AUTO = 'auto'
+
+/** 自动判向里，中文原文译入的语言。 */
+export const TRANSLATE_AUTO_CHINESE = 'en'
+
+/** 自动判向里，非中文原文译入的语言。 */
+export const TRANSLATE_AUTO_FOREIGN = 'zh-CN'
+
+/** 默认目标语言：自动判向；设置里仍可手动锁定某一门语言。 */
+export const TRANSLATE_TARGET = TRANSLATE_AUTO
+
 // ---- 运行时设置（可由插件页配置覆盖） ---------------------------------------
 
 /** 可在 dsh「插件」页里编辑的字段；默认值即上面的常量。 */
@@ -107,6 +151,10 @@ export interface ZoteroSettings {
    * 面板是只读的，但写路径一旦可达就可能被误操作，故显式开关比隐式可用安全。
    */
   writeEnabled: boolean
+  /** 划词翻译引擎：`bing` 免密钥直连，`deepseek` 走宿主当前账号模型。 */
+  translateProvider: TranslateProvider
+  /** 翻译目标语言（BCP 47 或 `auto`；auto 按原文语种在中 / 英之间互换）。 */
+  translateTarget: string
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -119,6 +167,8 @@ let readSettings = (): ZoteroSettings => ({
   defaultLimit: DEFAULT_LIMIT,
   disabledMcpTools: [],
   writeEnabled: false,
+  translateProvider: 'bing',
+  translateTarget: TRANSLATE_TARGET,
 })
 
 /**

@@ -21,6 +21,7 @@ import { McpToolBridge } from './host/mcp-bridge.js'
 import { createHandler, type WebServerLike } from './host/router.js'
 import { createSnapshotHandler } from './host/snapshot.js'
 import { createStaticHandler } from './host/static.js'
+import { createTranslator } from './host/translate.js'
 import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
 import {
@@ -33,6 +34,7 @@ import {
   setSettingsReader,
   SNAPSHOT_ROUTE_MATCH,
   STATIC_ROUTE_MATCH,
+  TRANSLATE_TARGET,
   ZOTERO_BASE,
 } from './zotero/config.js'
 
@@ -65,6 +67,10 @@ export const Config = Schema.object({
    * 关掉即彻底回滚到「严格只读」，这也是出问题时的止血手段。
    */
   writeEnabled: Schema.boolean().default(false).volatile(),
+  /** 划词翻译引擎：bing = 免密钥直连，deepseek = 当前账号模型。 */
+  translateProvider: Schema.string().default('bing').volatile(),
+  /** 翻译目标语言（默认 `auto`：按原文语种中英互译，也可手动锁定具体语言）。 */
+  translateTarget: Schema.string().default(TRANSLATE_TARGET).volatile(),
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
@@ -78,6 +84,9 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     defaultLimit: config.defaultLimit.get(),
     disabledMcpTools: [...config.disabledMcpTools.get()],
     writeEnabled: config.writeEnabled.get(),
+    // schema 是纯字符串，这里做一次白名单，防止 patch 文件里写了别的值。
+    translateProvider: config.translateProvider.get() === 'deepseek' ? 'deepseek' : 'bing',
+    translateTarget: config.translateTarget.get() || TRANSLATE_TARGET,
   }))
 
   // 模型侧：自持集成 MCP 连接，按 disabledMcpTools 过滤后注册工具。
@@ -119,6 +128,19 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
         }
         return bridge ? bridge.sync() : listMcpTools()
       },
+      // llm 服务由 `dsh-base` 提供，但不保证每种部署都装了 provider，
+      // 所以这里按需取、取不到就让翻译器只走免密钥端点。
+      translate: createTranslator({
+        getLlm: () => {
+          try {
+            const get = (ctx as unknown as { get?: (name: string) => unknown }).get
+            return typeof get === 'function' ? get.call(ctx, 'llm') : undefined
+          } catch {
+            // 服务还没就绪（或宿主版本没有 llm）时当作没有，别让翻译整体 500。
+            return undefined
+          }
+        },
+      }),
     })
     hostCtx.effect(
       () => webServer.register({ kind: 'prefix', path: ROUTE_MATCH, handler }),

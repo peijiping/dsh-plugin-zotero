@@ -12,6 +12,7 @@
 import { useState, type ReactElement } from 'react'
 
 import { ANNOTATION_COLORS } from '../../zotero/palette'
+import { writeClipboard } from '../clipboard'
 import { showToast } from '../paneStore'
 import { type Translate } from '../locales'
 import {
@@ -30,6 +31,11 @@ interface Annotate {
   onCreate(type: MarkType, color: string, comment: string): void
 }
 
+/** 翻译入口：把原文与锚点交给渲染器，浮层由渲染器自己渲染。 */
+interface TranslateAction {
+  onTranslate(text: string, x: number, y: number): void
+}
+
 interface Props {
   t: Translate
   text: string
@@ -38,9 +44,10 @@ interface Props {
   onInsert(text: string): void
   onDismiss(): void
   annotate?: Annotate
+  translate?: TranslateAction
 }
 
-export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate }: Props): ReactElement {
+export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate, translate }: Props): ReactElement {
   const [type, setType] = useState<MarkType>('highlight')
   const [comment, setComment] = useState('')
   const [commentOpen, setCommentOpen] = useState(false)
@@ -131,6 +138,21 @@ export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate }: P
         <button type="button" className={SOFT_BUTTON_CLASS} onClick={copy} style={buttonStyle}>
           {t('action.copy')}
         </button>
+        {translate !== undefined && (
+          <button
+            type="button"
+            className={SOFT_BUTTON_CLASS}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              translate.onTranslate(text, x, y)
+              // 浮条与译文框都贴着选区，留着会互相压住：点完就收。
+              finish()
+            }}
+            style={buttonStyle}
+          >
+            {t('action.translate')}
+          </button>
+        )}
         <button
           type="button"
           className={SOFT_BUTTON_CLASS}
@@ -221,35 +243,3 @@ const commentInputStyle = {
   color: 'CanvasText',
   boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
 } as const
-
-/**
- * 宿主 webview 里 navigator.clipboard 可能因焦点/权限被拒（DSH 实测会 reject），
- * 再用一个临时 textarea + execCommand 兜底。
- */
-async function writeClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    return legacyCopy(text)
-  }
-}
-
-function legacyCopy(text: string): boolean {
-  const area = document.createElement('textarea')
-  area.value = text
-  area.setAttribute('readonly', '')
-  area.style.position = 'fixed'
-  area.style.top = '-1000px'
-  area.style.opacity = '0'
-  document.body.appendChild(area)
-  area.select()
-  let ok = false
-  try {
-    ok = document.execCommand('copy')
-  } catch {
-    ok = false
-  }
-  area.remove()
-  return ok
-}

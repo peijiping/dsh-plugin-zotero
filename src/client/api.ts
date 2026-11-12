@@ -286,3 +286,32 @@ export function createAnnotations(input: {
 }): Promise<ZoteroWriteRef[]> {
   return post<ZoteroWriteRef[]>('annotation-create', input)
 }
+
+// ---- 划词翻译 ---------------------------------------------------------------
+
+/** 引擎取值；与 Host `TranslateProvider`、设置页下拉、浮层下拉同步。 */
+export type TranslateProvider = 'bing' | 'deepseek'
+
+/** 译文与**实际**用到的引擎（DeepSeek 不可用时会回落到 bing）。 */
+export interface TranslateResult {
+  text: string
+  provider: TranslateProvider
+  target: string
+}
+
+/** 单次翻译的可选覆盖：引擎由译文浮层临时指定，缺省时 Host 读设置里的默认引擎。 */
+export interface TranslateOptions {
+  provider?: TranslateProvider
+  signal?: AbortSignal
+}
+
+/**
+ * 翻译一段选区文本。
+ *
+ * 引擎与目标语言默认由 Host 读设置决定（含按原文语种自动判向）；只有用户在浮层里
+ * 临时切换引擎时才传 `provider` 覆盖 —— 长期默认值仍只有设置页一个来源。
+ * 请求经 Host 代理：webview 直连微软端点会被 CORS 挡掉。
+ */
+export function translateSelection(text: string, options: TranslateOptions = {}): Promise<TranslateResult> {
+  return post<TranslateResult>('translate', { text, provider: options.provider }, options.signal)
+}

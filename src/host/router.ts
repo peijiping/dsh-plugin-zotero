@@ -22,6 +22,7 @@ import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zoter
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
 import { loadPosition, savePosition } from '../zotero/read-position.js'
 import { authorize, writeChannelStatus } from '../zotero/write.js'
+import type { TranslateInput, TranslateResult } from './translate.js'
 import type {
   ApiEnvelope,
   ApiError,
@@ -57,6 +58,8 @@ export interface HandlerDeps {
    * 缺省时只读清单、不动注册。
    */
   syncTools?: () => Promise<zotero.McpToolInfo[]>
+  /** 划词翻译：由入口注入（要拿宿主 llm 服务），缺省时该端点返回不可用。 */
+  translate?: (input: TranslateInput, signal?: AbortSignal) => Promise<TranslateResult>
 }
 
 /** 单条条目列表的条数上限，防止 Client 拉爆宿主。 */
@@ -91,6 +94,8 @@ const WRITE_ACTIONS = new Set([
   'annotation-delete',
   'annotation-create',
   'read-position-save',
+  // 不改 Zotero 数据，但会代表用户外发选中文本，同样要求「本插件的界面在操作」。
+  'translate',
 ])
 
 /** 自定义写头 + JSON content-type：让任何跨源写都变成需要预检的非简单请求。 */
@@ -142,6 +147,8 @@ const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   zotero_stale: 412,
   zotero_conflict: 409,
   zotero_rate_limited: 429,
+  translate_failed: 502,
+  translate_unavailable: 503,
 }
 
 function toApiError(error: unknown): { status: number; error: ApiError } {
@@ -660,6 +667,40 @@ async function handleAnnotationCreate(req: IncomingMessage, res: ServerResponse)
   ok(res, created)
 }
 
+/** 翻译请求的 body 上限：4000 字原文按最坏转义情况留 8 倍余量。 */
+const TRANSLATE_BODY_LIMIT = 64 * 1024
+
+/**
+ * 划词翻译。
+ *
+ * `text` 必填，`provider` / `target` 只是覆盖项，缺省时由翻译器读设置里的默认值 ——
+ * 面板不需要知道用户配了什么，改设置也不用刷新面板。
+ */
+async function handleTranslate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HandlerDeps,
+): Promise<void> {
+  const translate = deps.translate
+  if (translate === undefined) {
+    throw new ZoteroError('translate_unavailable', '翻译通道未就绪：插件入口没有注入翻译器')
+  }
+  const record = await readJsonBody(req, TRANSLATE_BODY_LIMIT)
+  const text = record.text
+  if (typeof text !== 'string') {
+    throw new ZoteroError('bad_request', 'text 必须是字符串')
+  }
+  const provider = record.provider
+  if (provider !== undefined && provider !== 'bing' && provider !== 'deepseek') {
+    throw new ZoteroError('bad_request', 'provider 只能是 bing 或 deepseek')
+  }
+  const target = record.target
+  if (target !== undefined && typeof target !== 'string') {
+    throw new ZoteroError('bad_request', 'target 必须是字符串')
+  }
+  ok(res, await translate({ text, provider, target }))
+}
+
 /**
  * action → 允许的 HTTP 方法。
  *
@@ -691,6 +732,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['annotation-delete', 'POST'],
   ['annotation-create', 'POST'],
   ['read-position-save', 'POST'],
+  ['translate', 'POST'],
 ])
 
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
@@ -794,6 +836,9 @@ export function createHandler(
           return
         case 'read-position-save':
           await handleReadPositionSave(req, res)
+          return
+        case 'translate':
+          await handleTranslate(req, res, deps)
           return
         default:
           fail(res, 404, 'bad_request', `未知 action ${action}`)

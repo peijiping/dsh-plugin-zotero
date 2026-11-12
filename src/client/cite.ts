@@ -22,6 +22,7 @@ import {
   noteText,
   tagSetText,
   tagText,
+  translationText,
 } from './compose'
 
 /** 文库里已经没有这个对象（与「连不上 Zotero」区分开）。 */
@@ -142,8 +143,32 @@ export async function excerptCitation(t: Translate, body: string): Promise<strin
   }, decodeRefPart('摘录', rawQuote))
 }
 
+/**
+ * 一段「原文 + 译文」的引用。
+ *
+ * 四段自包含（key / 标题 / 原文 / 译文），不请求 Host：译文是用户当下看到的那一版，
+ * 重新翻译不会改写已插入的 chip。
+ */
+export async function translationCitation(t: Translate, body: string): Promise<string> {
+  const parts = body.split(':')
+  const [rawKey, rawTitle, rawQuote, rawTranslated] = parts
+  if (
+    parts.length !== 4
+    || rawKey === undefined
+    || rawTitle === undefined
+    || rawQuote === undefined
+    || rawTranslated === undefined
+  ) {
+    throw new Error(`无法识别的 Zotero 翻译引用：${body}`)
+  }
+  return translationText(t, {
+    key: decodeRefPart('翻译', rawKey),
+    title: decodeRefPart('翻译', rawTitle),
+  }, decodeRefPart('翻译', rawQuote), decodeRefPart('翻译', rawTranslated))
+}
+
 /** 解码 ref 里的一段；坏转义会抛 URIError，换成带来源的可辨认错误。 */
-function decodeRefPart(kind: '摘录' | '标签', encoded: string): string {
+function decodeRefPart(kind: '摘录' | '标签' | '翻译', encoded: string): string {
   try {
     return decodeURIComponent(encoded)
   } catch {

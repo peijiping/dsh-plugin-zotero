@@ -9,7 +9,7 @@
 import { useCallback } from 'react'
 
 import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
-import { annotationChipLabel, excerptChipLabel, tagSetChipLabel } from './compose'
+import { annotationChipLabel, excerptChipLabel, tagSetChipLabel, translationChipLabel } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import type { Translate } from './locales'
 import { tpl } from './locales'
@@ -26,6 +26,7 @@ import {
   noteReference,
   tagReference,
   tagSetReference,
+  translationReference,
 } from './reference'
 
 export interface InsertionActions {
@@ -34,6 +35,8 @@ export interface InsertionActions {
   insertItem(key: string, title: string): void
   /** 一段划选摘录：插一枚自带原文的 chip，不再是灌进草稿的一大段纯文本。 */
   insertExcerpt(target: ZoteroItemDetail, quote: string): void
+  /** 一段划词翻译：原文与译文一起定格进 chip，提交时展开成对照文本。 */
+  insertTranslation(target: ZoteroItemDetail, quote: string, translated: string): void
   insertAnnotation(target: ZoteroItemDetail, annotation: ZoteroAnnotation): void
   insertNote(target: ZoteroItemDetail, note: ZoteroNote): void
   insertCollection(collection: ZoteroCollection): void
@@ -118,6 +121,33 @@ export function useInsertion(
     ))
   }, [insertReference, t])
 
+  /**
+   * 插入一段「原文 + 译文」。
+   *
+   * 上限按两段合计算：ref 里存的是双份文本，单看原文会低估草稿体积。
+   */
+  const insertTranslation = useCallback((
+    target: ZoteroItemDetail,
+    quote: string,
+    translated: string,
+  ): void => {
+    if (quote.trim() === '' || translated.trim() === '') {
+      showToast(t('error.empty'))
+      return
+    }
+    if (Array.from(quote).length + Array.from(translated).length > MAX_EXCERPT_CHARS) {
+      showToast(tpl(t('error.excerptTooLong'), { n: MAX_EXCERPT_CHARS }))
+      return
+    }
+    insertReference(translationReference(
+      target.key,
+      target.title,
+      quote,
+      translated,
+      translationChipLabel(t, translated),
+    ))
+  }, [insertReference, t])
+
   const insertAnnotation = useCallback((
     target: ZoteroItemDetail,
     annotation: ZoteroAnnotation,
@@ -159,6 +189,7 @@ export function useInsertion(
     insertReference,
     insertItem,
     insertExcerpt,
+    insertTranslation,
     insertAnnotation,
     insertNote,
     insertCollection,

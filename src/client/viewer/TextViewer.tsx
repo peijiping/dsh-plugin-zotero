@@ -28,6 +28,8 @@ import type { Translate } from '../locales'
 import { NOTE_CSS } from '../NoteList'
 import { OUTLINE_ANCHOR_ATTR, parseHtmlHeadings, parseMarkdownHeadings } from './outline'
 import { SelectionBar } from './SelectionBar'
+import { TranslationCard, isInsideTranslation } from './TranslationCard'
+import { useTranslation } from './useTranslation'
 import type { DocumentRendererProps, OutlineTarget } from './types'
 
 const FLASH_CLASS = 'dsh-zotero-ann-flash'
@@ -99,6 +101,7 @@ export function TextViewer({
   viewerRef,
   onReady,
   onInsertExcerpt,
+  onInsertTranslation,
   onOutlineChange,
 }: DocumentRendererProps): ReactElement {
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -107,6 +110,8 @@ export function TextViewer({
   const flashTimer = useRef<number | null>(null)
   const outlineTimer = useRef<number | null>(null)
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
+  /** 划词翻译浮层。这里是滚动容器本身，浮层坐标按内容算，随正文一起滚。 */
+  const translation = useTranslation(t)
 
   const selfNote = detail.itemType === 'note'
     ? detail.notes.find((note) => note.key === detail.key) ?? null
@@ -228,7 +233,8 @@ export function TextViewer({
     }
     const text = sel.toString().trim()
     const range = sel.getRangeAt(0)
-    if (text === '' || !box.contains(range.commonAncestorContainer)) {
+    // 在译文浮层里拖选复制不算正文选区，否则又会弹一条工具条。
+    if (text === '' || !box.contains(range.commonAncestorContainer) || isInsideTranslation(range.commonAncestorContainer)) {
       setSelection(null)
       return
     }
@@ -274,6 +280,23 @@ export function TextViewer({
           y={selection.y}
           onInsert={onInsertExcerpt}
           onDismiss={() => setSelection(null)}
+          translate={{ onTranslate: translation.open }}
+        />
+      )}
+      {translation.view !== null && (
+        <TranslationCard
+          t={t}
+          view={translation.view}
+          // 浮层挂在滚动容器里，可放范围要按内容高度算，否则贴底的选区会被夹回去。
+          bounds={{
+            width: boxRef.current?.clientWidth ?? 320,
+            height: Math.max(boxRef.current?.clientHeight ?? 400, boxRef.current?.scrollHeight ?? 400),
+          }}
+          engine={translation.engine}
+          onEngineChange={translation.setEngine}
+          onClose={translation.close}
+          onRetry={translation.retry}
+          onInsert={onInsertTranslation}
         />
       )}
     </div>

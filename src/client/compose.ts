@@ -62,12 +62,36 @@ export function excerptText(
  * PDF 抽取会在汉字之间插空格，标签里顺手清掉（展开给模型的原文不动）。
  */
 export function excerptChipLabel(t: Translate, quote: string): string {
-  const source = tidyAnnotation(quote)
+  return tpl(t('cmp.excerpt.chipLabel'), { value: summarize(quote) })
+}
+
+/**
+ * 一段「原文 + 译文」的引用文本。
+ *
+ * 与纯摘录不同，这里把译文单独成段：模型读到的是对照文本，不需要自己再翻一遍。
+ */
+export function translationText(
+  t: Translate,
+  detail: Pick<ZoteroItemDetail, 'key' | 'title'>,
+  quote: string,
+  translated: string,
+): string {
+  const head = tpl(t('cmp.translation.header'), { title: detail.title, key: detail.key })
+  const source = tpl(t('cmp.translation.quote'), { value: quote })
+  const target = tpl(t('cmp.translation.translated'), { value: translated })
+  return `${head}\n${source}\n${target}`
+}
+
+/** 翻译 chip 的标签：用译文开头，比原文更能说明这块内容是什么。 */
+export function translationChipLabel(t: Translate, translated: string): string {
+  return tpl(t('cmp.translation.chipLabel'), { value: summarize(translated) })
+}
+
+/** 截到 chip 能显示的长度；胶囊自己还会再省略，这里只是让 ref 前的标签短一点。 */
+function summarize(text: string): string {
+  const source = tidyAnnotation(text)
   const chars = Array.from(source)
-  const summary = chars.length > CHIP_LABEL_LIMIT
-    ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…`
-    : source
-  return tpl(t('cmp.excerpt.chipLabel'), { value: summary })
+  return chars.length > CHIP_LABEL_LIMIT ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…` : source
 }
 
 /**

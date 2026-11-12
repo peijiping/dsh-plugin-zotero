@@ -79,16 +79,36 @@ const titleRowStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
-/** 行 hover 只染未选中行：选中态用内联背景，优先级更高，不需要额外规则。 */
-const ITEM_CSS = '.dsh-zotero-item-row:hover{background:rgba(127,127,127,0.08)}'
-
-/** 行外壳：只负责那条浅色分隔线，通栏铺满。
+/**
+ * 底色（hover / 选中）统一挂在外壳上，而不是内层行。
  *
- * 用 flex 是为了「撑满」：Menu 的 anchor 外面会包一层按内容收窄的元素，
- * 做成 flex 容器后那层被拉伸到整行宽，里面的标题才有确定的宽度可截断。
+ * Menu 的 anchor 外面会被包一层按内容收窄的元素，内层行即使 `width:100%` 也只能
+ * 铺到「内容最宽的子元素」（标题）为止，于是就出现「只有标题那一截是蓝的」。
+ * 外壳是普通块级容器，宽度必然是通栏的，把背景放这里最稳。
+ */
+const ITEM_CSS = [
+  '.dsh-zotero-item-shell:hover{background:rgba(127,127,127,0.08)}',
+  // Menu 的 anchor 包装自带 `width:fit-content` 之类的收缩规则，光靠 grid 轨道
+  // 拉不动它，这里显式覆盖宽度，内层行 / 标题才能拿到整行宽去截断。
+  '.dsh-zotero-item-shell > *{width:100%;min-width:0}',
+].join('')
+
+/** 选中行底色：整行（外壳）通栏染色，色值与列表 chip 同一支蓝。 */
+const ITEM_SELECTED_BG = 'rgba(80,140,255,0.16)'
+
+/**
+ * 行外壳：承载整行底色 + 那条浅色分隔线，通栏铺满。
+ *
+ * 单列 grid 给内层一个明确的行宽（配合 `ITEM_CSS` 里对 Menu 包装层的宽度覆盖），
+ * 内层行的 `width:100%` 才有确定宽度可用；`minmax(0,1fr)` 允许轨道缩到比内容更窄，
+ * 长标题才能出省略号而不是溢出被裁。
  */
 const itemShellStyle: React.CSSProperties = {
-  display: 'flex',
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  width: '100%',
+  boxSizing: 'border-box',
+  borderRadius: 6,
   borderBottom: '1px solid rgba(127,127,127,0.14)',
 }
 
@@ -100,7 +120,6 @@ const itemRowStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '7px 8px',
-  borderRadius: 6,
   cursor: 'pointer',
 }
 
@@ -246,7 +265,10 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
   const read = isRead(item)
   const typeLabel = itemTypeLabel(t, item.itemType)
   return (
-    <div style={itemShellStyle}>
+    <div
+      className="dsh-zotero-item-shell"
+      style={selected ? { ...itemShellStyle, background: ITEM_SELECTED_BG } : itemShellStyle}
+    >
       <Menu
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
@@ -267,9 +289,7 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
               event.preventDefault()
               setMenuOpen(true)
             }}
-            style={selected
-              ? { ...itemRowStyle, background: 'rgba(80,140,255,0.16)' }
-              : itemRowStyle}
+            style={itemRowStyle}
           >
             <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
             <div style={itemBodyStyle}>

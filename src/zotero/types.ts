@@ -397,6 +397,10 @@ export type ApiErrorCode =
   | 'zotero_conflict'
   /** 授权弹窗过于频繁（每分钟 5 次上限）→ HTTP 429。 */
   | 'zotero_rate_limited'
+  /** 翻译服务返回失败或网络不通 → HTTP 502。 */
+  | 'translate_failed'
+  /** 翻译服务不可用（没接上宿主模型且免密钥端点也失败）→ HTTP 503。 */
+  | 'translate_unavailable'
 
 /**
  * 可由页面一键执行的修复动作。

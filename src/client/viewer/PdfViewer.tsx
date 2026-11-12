@@ -67,6 +67,8 @@ import {
   waitForScrollIdle,
 } from './renderQueue'
 import { SelectionBar, type MarkType } from './SelectionBar'
+import { TranslationCard } from './TranslationCard'
+import { useTranslation } from './useTranslation'
 import type { DocumentOutlineItem, DocumentRendererProps } from './types'
 import { useReadPosition } from './useReadPosition'
 
@@ -639,6 +641,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     onZoomChange,
     onPageChange,
     onInsertExcerpt,
+    onInsertTranslation,
     onInsertAnnotation,
     onOpenInZotero,
     onChanged,
@@ -669,6 +672,8 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
    */
   const rangeRef = useRef<Range | null>(null)
   const [marking, setMarking] = useState(false)
+  /** 划词翻译浮层：选区变了就重开，正文滚动不影响它（相对 root 定位）。 */
+  const translation = useTranslation(t)
 
   /**
    * 目录回调走 ref：加载 effect 只该随 url / 重试重跑，不该因为父级重渲染换了
@@ -1366,6 +1371,20 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
               ? { busy: marking, onCreate: (type, color, comment) => void createMark(type, color, comment) }
               : undefined
           }
+          translate={{ onTranslate: translation.open }}
+        />
+      )}
+
+      {translation.view !== null && (
+        <TranslationCard
+          t={t}
+          view={translation.view}
+          bounds={{ width: rootWidth, height: rootHeight }}
+          engine={translation.engine}
+          onEngineChange={translation.setEngine}
+          onClose={translation.close}
+          onRetry={translation.retry}
+          onInsert={onInsertTranslation}
         />
       )}
 
