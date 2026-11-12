@@ -22,7 +22,7 @@ import type {
 } from '../types'
 
 /** 1×1 浅灰 PNG，作为保留图片 decode 失败时的占位。 */
-const IMAGE_PLACEHOLDER =
+export const IMAGE_PLACEHOLDER =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
 
 const ANIMATION_FREEZE = '*, *::before, *::after { animation: none !important; transition: none !important; }'

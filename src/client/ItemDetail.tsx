@@ -23,7 +23,7 @@ import { shotWatermark } from './compose'
 import { DocumentView } from './viewer/DocumentView'
 import { useShotController } from './viewer/shot/controller'
 import { buildShotMeta } from './viewer/shot/metadata'
-import type { ShotMeta } from './viewer/shot/types'
+import type { CaptureAdapter, ShotMeta } from './viewer/shot/types'
 import { pickRenderer } from './viewer/registry'
 import {
   extensionOf,
@@ -111,6 +111,16 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   const viewerRef = useRef<ViewerHandle | null>(null)
   /** 截图范围的唯一边界：正文容器（不含 30px 工具条与左上角悬浮按钮）。 */
   const contentRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * 网页快照自注册的采集通道；`null` 表示当前渲染器不需要（PDF / 纯文本由
+   * `shot/` 直接采）。切换附件时 `SnapshotViewer` 会重新写一遍。
+   */
+  const captureRef = useRef<CaptureAdapter | null>(null)
+  /** 采集能力变化时重渲染一次，让「截图」按钮的禁用态跟着桥接脚本走。 */
+  const [, bumpCapture] = useState(0)
+  const handleCaptureChange = useCallback((): void => {
+    bumpCapture((value) => value + 1)
+  }, [])
   /** 悬浮按钮行的宽度驱动工具条 paddingLeft；42 = 行 left(34) + 右侧留白(8)。 */
   const [topbarPad, setTopbarPad] = useState(158)
   const handleRowWidth = useCallback((width: number): void => {
@@ -191,6 +201,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
     t,
     kind: renderer.capabilities.capture,
     getRoot: () => contentRef.current,
+    getAdapter: () => captureRef.current,
     buildMeta: (frame, rect) => buildShotMeta({ detail, source, outline: outlineItems, frame, rect }),
     watermark: (meta) => shotWatermark(t, meta),
     insert: (png, meta) => onInsertShot?.(png, meta) ?? 'no-conversation',
@@ -288,6 +299,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
         onOutlineChange={handleOutlineChange}
         contentRef={contentRef}
         shot={shot}
+        captureRef={captureRef}
+        onCaptureChange={handleCaptureChange}
       />
       {/*
         采集中的短暂提示。故意挂在正文容器**外面**：`html-to-image` 会克隆

@@ -14,6 +14,7 @@ import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 import { pickRenderer } from './registry'
 import { ScreenshotOverlay } from './shot/ScreenshotOverlay'
 import type { ShotController } from './shot/controller'
+import type { CaptureAdapter } from './shot/types'
 import type { DocumentOutlineItem, DocumentSource, ViewerHandle } from './types'
 
 interface Props {
@@ -40,6 +41,9 @@ interface Props {
   contentRef: MutableRefObject<HTMLDivElement | null>
   /** 截图状态机；遮罩挂在这层，天然不含工具条与左上角悬浮按钮。 */
   shot: ShotController
+  /** 渲染器自注册的采集能力（网页快照），见 `DocumentRendererProps.captureRef`。 */
+  captureRef: MutableRefObject<CaptureAdapter | null>
+  onCaptureChange(): void
 }
 
 /**
@@ -163,6 +167,8 @@ export function DocumentView({
   onOutlineChange,
   contentRef,
   shot,
+  captureRef,
+  onCaptureChange,
 }: Props): ReactElement {
   const renderer = pickRenderer(source, detail)
   const Renderer = renderer.Component
@@ -257,6 +263,8 @@ export function DocumentView({
           onOpenInZotero={onOpenInZotero}
           onChanged={onChanged}
           onOutlineChange={onOutlineChange}
+          captureRef={captureRef}
+          onCaptureChange={onCaptureChange}
         />
         {shot.url !== null && shot.phase !== 'idle' && shot.phase !== 'capturing' && (
           <ScreenshotOverlay

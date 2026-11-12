@@ -10,7 +10,7 @@ import type { ComponentType, MutableRefObject } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import type { Translate } from '../locales'
-import type { CaptureKind } from './shot/types'
+import type { CaptureAdapter, CaptureKind } from './shot/types'
 
 /** 当前展示的一份文档。 */
 export interface DocumentSource {
@@ -113,6 +113,22 @@ export interface DocumentRendererProps {
    * 「还没读到」是两种状态，面板显示的话不一样。解析逻辑尽量复用 `outline.ts`。
    */
   onOutlineChange?(outline: DocumentOutlineItem[]): void
+  /**
+   * 采集能力自注册。
+   *
+   * PDF / 纯文本的采集由 `shot/` 按正文容器自己做，不需要渲染器参与；网页快照
+   * 例外——它必须经由 iframe 里的桥接脚本，而只有 `SnapshotViewer` 拿得到那个
+   * iframe 与消息通道。所以它在挂载时把适配器写进这个 ref，卸载时清空；
+   * `ItemDetail` 侧只认接口，不认具体渲染器。
+   */
+  captureRef?: MutableRefObject<CaptureAdapter | null>
+  /**
+   * 采集能力变化（`captureRef` 里的适配器换了状态）。
+   *
+   * 网页快照的按钮要等桥接脚本 `ready` 才可用，而那个状态住在 `SnapshotViewer`
+   * 内部。父级据此重渲染一次，按钮就从禁用变可用——状态不冒泡的话它会一直是禁用。
+   */
+  onCaptureChange?(): void
   /**
    * 写成功后的重取。
    *

@@ -12,6 +12,7 @@ import type { Translate } from '../../locales'
 import { showToast } from '../../paneStore'
 import { composeShot } from './composer'
 import { createDomAdapter } from './adapters/dom'
+import { StaleBridgeError } from './adapters/iframe'
 import { createPdfAdapter } from './adapters/pdf'
 import {
   MIN_SELECTION_SIZE,
@@ -27,6 +28,8 @@ export interface ShotControllerDeps {
   t: Translate
   kind: CaptureKind
   getRoot(): HTMLElement | null
+  /** 渲染器自注册的适配器（网页快照），优先级高于内置的 PDF / DOM 两条。 */
+  getAdapter?(): CaptureAdapter | null
   buildMeta(frame: CaptureFrame, rect: ClientRect): ShotMeta
   watermark(meta: ShotMeta): string
   insert(png: Blob, meta: ShotMeta): InsertOutcome
@@ -52,6 +55,11 @@ function adapterFor(kind: CaptureKind): CaptureAdapter | null {
   if (kind === 'pdf') return createPdfAdapter()
   if (kind === 'dom') return createDomAdapter()
   return null
+}
+
+/** 内置适配器优先，其次才是渲染器注册进来的那个（目前只有网页快照）。 */
+function resolveAdapter(deps: ShotControllerDeps): CaptureAdapter | null {
+  return adapterFor(deps.kind) ?? deps.getAdapter?.() ?? null
 }
 
 /** 各失败态对应的用户提示；成功沿用项目统一的 `toast.inserted`。 */
@@ -101,9 +109,9 @@ export function useShotController(deps: ShotControllerDeps): ShotController {
     if (busyRef.current) return
     const current = depsRef.current
     const root = current.getRoot()
-    const adapter = adapterFor(current.kind)
+    const adapter = resolveAdapter(current)
     if (root === null || adapter === null) {
-      showToast(current.t(current.kind === 'iframe' ? 'shot.snapshotPending' : 'shot.unsupported'))
+      showToast(current.t(current.kind === 'iframe' ? 'shot.snapshotNotReady' : 'shot.unsupported'))
       return
     }
     // 清掉已有划词选区与浮条，避免定格图里带着一条蓝色高亮。
@@ -126,8 +134,11 @@ export function useShotController(deps: ShotControllerDeps): ShotController {
         setUrl(objectUrl)
         setSelection(null)
         setPhase('frozen')
-      } catch {
-        showToast(depsRef.current.t('shot.captureFailed'))
+      } catch (error) {
+        // 桥接脚本过旧是「宿主没重启」而不是采集失败，得说清怎么修。
+        showToast(depsRef.current.t(
+          error instanceof StaleBridgeError ? 'shot.snapshotStale' : 'shot.captureFailed',
+        ))
         cancel()
       } finally {
         busyRef.current = false
@@ -165,9 +176,11 @@ export function useShotController(deps: ShotControllerDeps): ShotController {
     })()
   }, [frame, selection, cancel])
 
-  const available = deps.kind === 'pdf' || deps.kind === 'dom'
+  /** 按钮可用性：内置适配器恒可用；快照要等桥接脚本就绪且版本够新。 */
+  const resolved = resolveAdapter(deps)
+  const available = resolved !== null && (resolved.available?.() ?? true)
   const unavailableReason = deps.kind === 'iframe'
-    ? deps.t('shot.snapshotPending')
+    ? deps.t('shot.snapshotNotReady')
     : deps.t('shot.unsupported')
 
   return {

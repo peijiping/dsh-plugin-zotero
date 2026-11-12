@@ -27,6 +27,7 @@ import { SOFT_BUTTON_STYLE } from '../styles'
 import { AnnotationCard } from './AnnotationCard'
 import { anchorTarget, OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS } from './outline'
 import { SelectionBar, type MarkType } from './SelectionBar'
+import { createIframeAdapter } from './shot/adapters/iframe'
 import { TranslationCard } from './TranslationCard'
 import { useTranslation } from './useTranslation'
 import {
@@ -34,6 +35,7 @@ import {
   commandEnvelope,
   SNAPSHOT_BRIDGE_VERSION,
   type SnapshotAnnotationItem,
+  type SnapshotCapturePayload,
   type SnapshotCommand,
   type SnapshotOutlineItem,
   type SnapshotRect,
@@ -43,6 +45,9 @@ import type { DocumentOutlineItem, DocumentRendererProps } from './types'
 
 /** 桥接脚本一般几百毫秒就绪；超过这个时间就认定它没跑起来。 */
 const BRIDGE_TIMEOUT_MS = 8000
+
+/** 整页序列化 + 回传的等待上限；超了就按采集失败处理，不把遮罩一直挂着。 */
+const CAPTURE_TIMEOUT_MS = 8000
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -109,6 +114,8 @@ export function SnapshotViewer({
   onOpenInZotero,
   onChanged,
   onOutlineChange,
+  captureRef,
+  onCaptureChange,
 }: DocumentRendererProps): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
@@ -121,6 +128,12 @@ export function SnapshotViewer({
   /** 目录回调走 ref：message 监听只该挂一次，不该因父级重渲染换了回调身份就重挂。 */
   const outlineRef = useRef(onOutlineChange)
   outlineRef.current = onOutlineChange
+  /** 桥接脚本版本；`0` 表示还没 `ready`。截图按钮的可用性看它。 */
+  const bridgeVersionRef = useRef(0)
+  /** 等 `capture-result` 的那一个 resolve；同一时刻只允许一个采集在跑。 */
+  const captureWaiter = useRef<((payload: SnapshotCapturePayload | null) => void) | null>(null)
+  const onCaptureChangeRef = useRef(onCaptureChange)
+  onCaptureChangeRef.current = onCaptureChange
 
   const [reloadKey, setReloadKey] = useState(0)
   const [bridgeReady, setBridgeReady] = useState(false)
@@ -152,6 +165,34 @@ export function SnapshotViewer({
 
   const pushAnnotations = useCallback((): void => {
     post({ type: 'annotations', items: itemsOf(annotationsRef.current) })
+  }, [post])
+
+  /**
+   * 请桥接脚本把整页序列化回来。
+   *
+   * 超时不是可有可无的兜底：`capture-failed` 与 `capture-result` 都可能因为页面
+   * 脚本把 iframe 搞死而永远不来，没有超时的话「正在采集画面…」会一直挂着。
+   */
+  const requestCapture = useCallback((): Promise<SnapshotCapturePayload | null> => {
+    return new Promise((resolve) => {
+      if (frameRef.current === null) {
+        resolve(null)
+        return
+      }
+      // 上一轮还没收尾（正常不会发生）：先让它失败，避免两个 resolve 抢一个位子。
+      captureWaiter.current?.(null)
+      let settled = false
+      const timer = window.setTimeout(() => settle(null), CAPTURE_TIMEOUT_MS)
+      function settle(payload: SnapshotCapturePayload | null): void {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        captureWaiter.current = null
+        resolve(payload)
+      }
+      captureWaiter.current = settle
+      post({ type: 'capture' })
+    })
   }, [post])
 
   /** 只有真正影响网页上高亮的字段变化才重推。 */
@@ -211,6 +252,8 @@ export function SnapshotViewer({
         readyRef.current = true
         setBridgeReady(true)
         const bridge = data.bridge ?? 1
+        bridgeVersionRef.current = bridge
+        onCaptureChangeRef.current?.()
         setStaleBridge(bridge < SNAPSHOT_BRIDGE_VERSION)
         setBridgeMissing(false)
         // 旧脚本不会报目录：明确报空数组，否则面板永远停在「正在读取目录…」。
@@ -218,6 +261,14 @@ export function SnapshotViewer({
         pushAnnotations()
         flushLocate()
         onReady()
+        return
+      }
+      if (data.type === 'capture-result') {
+        captureWaiter.current?.(data.payload)
+        return
+      }
+      if (data.type === 'capture-failed') {
+        captureWaiter.current?.(null)
         return
       }
       if (data.type === 'outline') {
@@ -269,6 +320,26 @@ export function SnapshotViewer({
   // 卡片开着时点别处 / 按 Esc 就收起，与 PDF 卡片同一套（见 `dismiss.ts`）。
   useDismiss(card !== null, cardRef, () => setCard(null))
 
+  /**
+   * 把采集能力注册给 `ItemDetail`。
+   *
+   * 只有这里拿得到 iframe 与消息通道，`shot/` 那边是通用的；注册进去之后
+   * 「截图」按钮就走 iframe 适配器。卸载时清空，避免切到 PDF 后还留着旧通道。
+   */
+  useEffect(() => {
+    if (captureRef === undefined) return
+    captureRef.current = createIframeAdapter({
+      bridgeVersion: () => bridgeVersionRef.current,
+      request: requestCapture,
+      frame: () => frameRef.current,
+    })
+    onCaptureChangeRef.current?.()
+    return () => {
+      captureRef.current = null
+      onCaptureChangeRef.current?.()
+    }
+  }, [captureRef, requestCapture])
+
   const locate = useCallback((annotationKey: string): boolean => {
     const annotation = annotationsRef.current.find((item) => item.key === annotationKey)
     if (annotation === undefined || annotation.webPosition === null) return false
@@ -300,6 +371,9 @@ export function SnapshotViewer({
     readyRef.current = false
     pendingLocate.current = null
     selectionRef.current = null
+    // 版本归零：重载后要等新文档的桥接脚本重新报到，截图按钮在此期间禁用。
+    bridgeVersionRef.current = 0
+    onCaptureChangeRef.current?.()
     setSelection(null)
     setCard(null)
     setStaleBridge(false)

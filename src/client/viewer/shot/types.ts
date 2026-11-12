@@ -57,9 +57,22 @@ export interface CaptureFrame {
 /** 渲染器声明的采集能力；由 `registry.ts` 给出，按钮不猜 `renderer.id`。 */
 export type CaptureKind = 'pdf' | 'dom' | 'iframe' | 'none'
 
-/** 分类型采集适配器：只吃正文容器 DOM，渲染器组件本身零改动。 */
+/**
+ * 分类型采集适配器。
+ *
+ * PDF / 纯文本由 `shot/` 自己按正文容器现做；网页快照的那份由 `SnapshotViewer`
+ * 提供（它才拿得到 iframe 与消息通道），通过 `DocumentRendererProps.captureRef`
+ * 注册进来。
+ */
 export interface CaptureAdapter {
   capture(root: HTMLElement, box: DOMRectReadOnly): Promise<CaptureFrame | null>
+  /**
+   * 此刻能否采集。缺省视为可以。
+   *
+   * 快照用它表达「iframe 里跑的是旧桥接脚本」：`ready` 还没到、或版本低于
+   * `SNAPSHOT_BRIDGE_VERSION` 时按钮置灰并说明原因，比点下去弹一个失败提示好。
+   */
+  available?(): boolean
 }
 
 /**

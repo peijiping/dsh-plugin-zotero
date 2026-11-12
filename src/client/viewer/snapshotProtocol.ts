@@ -22,8 +22,58 @@ export const SNAPSHOT_VERSION = 1
  *
  * 2：`annotation-click` 携带 `rect`（点击位置）。
  * 3：上报网页标题目录 `outline`，并能响应 `scroll-to-outline`。
+ * 4：响应 `capture`，把整页序列化成自包含 HTML + CSS 回传（截图用）。
  */
-export const SNAPSHOT_BRIDGE_VERSION = 3
+export const SNAPSHOT_BRIDGE_VERSION = 4
+
+/** 桥接脚本响应 `capture` 时回传的自包含页面快照。 */
+export interface SnapshotCapturePayload {
+  /** `<body>` 的 innerHTML，脚本 / 样式 / 外链样式表已剔除。 */
+  html: string
+  /** 页面自己的样式规则（`cssRules` 拼串），与 `html` 一起在父页面重建。 */
+  css: string
+  /** `<body>` 的关键计算样式（字体、颜色、底色），重建时套到容器上。 */
+  bodyStyle: string
+  /** iframe 视口尺寸（CSS 像素）。 */
+  width: number
+  height: number
+  /**
+   * 重建内容的宽度。
+   *
+   * 页面整体滚动时等于 `width`；滚动发生在内部容器时，等于那个容器的
+   * `clientWidth`（内容按它自己的宽度排版，不是按视口）。
+   */
+  stageWidth: number
+  scrollLeft: number
+  scrollTop: number
+  /**
+   * 内容原点的位置：页面整体滚动时是 `0,0`，内部容器滚动时是该容器相对
+   * iframe 视口的左上角。父页面据此把内容摆回它原来在页面里的位置。
+   */
+  offsetLeft: number
+  offsetTop: number
+  dpr: number
+  /** 文字盒（相对 iframe 视口），用于生成区域文字摘要。 */
+  boxes: SnapshotTextBox[]
+  /** 标题盒（相对 iframe 视口），用于反查最近章节。 */
+  headings: SnapshotHeadingBox[]
+}
+
+export interface SnapshotTextBox {
+  text: string
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export interface SnapshotHeadingBox {
+  title: string
+  left: number
+  top: number
+  width: number
+  height: number
+}
 
 /** iframe 侧的一条标注（只带渲染高亮需要的最小字段）。 */
 export interface SnapshotAnnotationItem {
@@ -49,6 +99,8 @@ export type SnapshotCommand =
   | { type: 'locate'; key: string }
   | { type: 'clear-selection' }
   | { type: 'scroll-to-outline'; id: string }
+  /** 截图：把整页序列化回传（不传送位图，栅格化在父页面做）。 */
+  | { type: 'capture' }
 
 /** 相对 iframe 视口的矩形。 */
 export interface SnapshotRect {
@@ -90,6 +142,14 @@ export type SnapshotEvent =
    */
   | { type: 'pointerdown' }
   | { type: 'open-external'; href: string }
+  /**
+   * `capture` 的结果。为什么不在这里出位图：iframe 的 origin 是 opaque，
+   * `blob:` 图像画进 canvas 会 taint（实测 `SecurityError`），而 `data:` SVG
+   * 在 iframe 内栅格化又要另装一份序列化器。改成只回传 HTML + CSS，
+   * 由父页面用已经跑通的 html-to-image 出图，两条路径共用同一套保真度。
+   */
+  | { type: 'capture-result'; payload: SnapshotCapturePayload }
+  | { type: 'capture-failed'; message: string }
 
 const EVENT_TYPES = new Set([
   'ready',
@@ -100,6 +160,8 @@ const EVENT_TYPES = new Set([
   'annotation-click',
   'pointerdown',
   'open-external',
+  'capture-result',
+  'capture-failed',
 ])
 
 /** 给父页面用：把 `MessageEvent.data` 收窄成 {@link SnapshotEvent}。 */
