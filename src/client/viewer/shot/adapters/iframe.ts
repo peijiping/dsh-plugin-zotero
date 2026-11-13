@@ -127,6 +127,21 @@ const OFFSCREEN_LEFT = -10000
 /** 重建层根节点的标记属性，样式规则全部以它为前缀。 */
 const SCOPE = '[data-dsh-zp-shot-root]'
 
+/**
+ * 能不能把媒体查询改成容器查询。
+ *
+ * 这是保真度的关键：快照 iframe 只有五六百像素宽，站点靠 `@media` 断点把两侧
+ * 目录藏了起来。重建层一旦回到父页面，媒体查询就按**宿主窗口**（往往一千多像素）
+ * 求值，宽屏分支被选中 —— 截图里凭空多出侧边栏、标题被放大、正文被挤成窄列，
+ * 而原页面根本没有这些。
+ *
+ * 容器查询让断点重新按「重建层自己的宽度」求值，等于还原了 iframe 的视口。
+ * 不支持时退回媒体查询，至少不比原来更差。
+ */
+const SUPPORTS_CONTAINER = typeof CSS !== 'undefined'
+  && typeof CSS.supports === 'function'
+  && CSS.supports('container-type', 'inline-size')
+
 /** 顶层逗号切分：`:is(a, b)` 里的逗号不算。 */
 function splitSelectors(text: string): string[] {
   const parts: string[] = []
@@ -145,19 +160,38 @@ function splitSelectors(text: string): string[] {
   return parts
 }
 
-/** 单条选择器限定到重建层内；返回空串表示这条规则丢弃。 */
+/**
+ * 单条选择器限定到重建层内。
+ *
+ * 重建层里有**真实的** `html` / `body` 元素（见 `rasterize`），所以这里只加前缀，
+ * 不改写选择器 —— `body > .layout`、`html body .x` 都能原样匹配上。早先版本把
+ * `body` 换成前缀本身，`body > .x` 就变成 `[scope] > .x`，站点的布局容器直接
+ * 失去样式，同样会把该藏的侧栏暴露出来。
+ *
+ * `:root` 是唯一例外：它指文档根，重建层里对应的是那个伪 `html`。
+ */
 function scopeSelector(selector: string): string {
-  const trimmed = selector.trim()
+  const trimmed = selector.replace(/:root/gu, 'html').trim()
   if (trimmed === '') return ''
-  // `html` / `body` / `:root` 就是重建层自己，body 的排版另由 bodyStyle 补。
-  if (/^(?:html|body|:root)$/u.test(trimmed)) return SCOPE
-  const head = /^(?:html|body|:root)(?![\w-])/u.exec(trimmed)
-  if (head !== null) {
-    const rest = trimmed.slice(head[0].length).trim()
-    if (rest === '') return SCOPE
-    return `${SCOPE} ${rest}`
-  }
+  if (trimmed.startsWith(SCOPE)) return trimmed
   return `${SCOPE} ${trimmed}`
+}
+
+/** `@media` 条件拆成「宽度子句」和「其余子句」，宽度那部分可以交给容器查询。 */
+function splitMediaCondition(condition: string): { widths: string[]; others: string[] } {
+  const widths: string[] = []
+  const others: string[] = []
+  for (const raw of condition.split(/\s+and\s+/iu)) {
+    const clause = raw.trim()
+    if (clause === '' || /^(?:screen|all)$/iu.test(clause)) continue
+    const width = /^\(\s*(min|max)-width\s*:\s*([^)]*)\)$/iu.exec(clause)
+    if (width !== null) {
+      widths.push(`(${width[1].toLowerCase()}-width: ${width[2].trim()})`)
+      continue
+    }
+    others.push(clause)
+  }
+  return { widths, others }
 }
 
 /**
@@ -188,7 +222,21 @@ function scopeCss(css: string): string {
         if (scoped.length === 0) continue
         chunks.push(`${scoped.join(',')}{${rule.style.cssText}}`)
       } else if (rule instanceof CSSMediaRule) {
-        chunks.push(`@media ${rule.conditionText}{${walk(rule.cssRules)}}`)
+        const inner = walk(rule.cssRules)
+        const split = SUPPORTS_CONTAINER
+          ? splitMediaCondition(rule.conditionText)
+          : { widths: [], others: [] }
+        if (split.widths.length === 0) {
+          chunks.push(`@media ${rule.conditionText}{${inner}}`)
+        } else {
+          // 宽度断点按重建层求值，其余特性（`prefers-color-scheme` 等）仍交给媒体查询。
+          const container = `@container ${split.widths.join(' and ')}{${inner}}`
+          chunks.push(
+            split.others.length > 0
+              ? `@media ${split.others.join(' and ')}{${container}}`
+              : container,
+          )
+        }
       } else if (rule instanceof CSSSupportsRule) {
         chunks.push(`@supports ${rule.conditionText}{${walk(rule.cssRules)}}`)
       } else if (
@@ -198,6 +246,20 @@ function scopeCss(css: string): string {
       ) {
         // 名字型规则对选择器无关，原样保留（否则动画与自定义字体会失效）。
         chunks.push(rule.cssText)
+      } else if (
+        'cssRules' in rule
+        && typeof (rule as { name?: unknown }).name === 'string'
+      ) {
+        // `@layer`：Tailwind 一类站点把绝大多数样式放在层里，整块丢掉等于整页无样式。
+        const grouped = rule as CSSGroupingRule & { name: string }
+        chunks.push(`@layer ${grouped.name}{${walk(grouped.cssRules)}}`)
+      } else if (Array.isArray((rule as { nameList?: unknown }).nameList)) {
+        // `@layer a, b;` 这种只声明层顺序，必须原样保留。
+        chunks.push(rule.cssText)
+      } else if (typeof CSSContainerRule !== 'undefined' && rule instanceof CSSContainerRule) {
+        // 站点自带的容器查询：容器与元素都在重建层里，原样递归即可。
+        const name = rule.containerName === '' ? '' : `${rule.containerName} `
+        chunks.push(`@container ${name}${rule.conditionText}{${walk(rule.cssRules)}}`)
       }
     }
     return chunks.join('')
@@ -246,17 +308,39 @@ async function rasterize(
   style.textContent = scopeCss(payload.css)
   host.appendChild(style)
 
-  /** body 的替身：字体与内边距套在这一层，和 iframe 里的 body 一致。 */
+  /**
+   * 宽度 = 快照的内容宽，同时充当容器查询的「视口」。
+   *
+   * `container-type: inline-size` 让重建层里的 `@container` 断点按这个宽度求值，
+   * 而不是宿主窗口的宽度（见 `SUPPORTS_CONTAINER`）。滚动补偿的位移也挂在这一层：
+   * 它是 `html` 的父级，位移后 `html` 仍然从 (0,0) 开始排版。
+   */
   const stage = document.createElement('div')
   stage.style.cssText = [
     `width:${payload.stageWidth}px`,
-    payload.bodyStyle,
-    'box-sizing:border-box',
     'overflow:visible',
+    SUPPORTS_CONTAINER ? 'container-type:inline-size' : '',
     // 克隆出来的 DOM 滚动位置恒为 0：先按内容原点摆回它原来的位置，再把整块
     // 内容上移一个滚动量，窗口（= 可见区）里才是用户此刻看到的那一段。
     `transform:translate(${payload.offsetLeft - payload.scrollLeft}px, ${payload.offsetTop - payload.scrollTop}px)`,
     'transform-origin:0 0',
+  ].filter((part) => part !== '').join(';')
+
+  /*
+   * 重建出**真实的** `html` / `body` 元素（`createElement` 造，解析器不会替我们
+   * 生成），而不是拿 div 冒充：站点的样式表里到处是 `body > .x`、`html body .x`、
+   * `body.dark` 这类选择器，标签对不上就整片布局失效。
+   *
+   * body 的排版走 `bodyStyle`（快照侧已把 margin 折成 padding：这里是 border-box
+   * 的裁剪窗口，照抄 margin 会把内容推出可视区）。
+   */
+  const htmlElement = document.createElement('html')
+  htmlElement.style.display = 'block'
+  const bodyElement = document.createElement('body')
+  bodyElement.style.cssText = [
+    'display:block',
+    'margin:0',
+    payload.bodyStyle,
   ].join(';')
 
   /*
@@ -267,7 +351,9 @@ async function rasterize(
   const template = document.createElement('template')
   template.innerHTML = payload.html
   sanitize(template.content)
-  stage.appendChild(template.content)
+  bodyElement.appendChild(template.content)
+  htmlElement.appendChild(bodyElement)
+  stage.appendChild(htmlElement)
   host.appendChild(stage)
   outer.appendChild(host)
 
