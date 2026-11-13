@@ -259,12 +259,34 @@
   var CAPTURE_MAX_BOXES = 4000;
   var CAPTURE_MAX_TEXT = 400;
 
+  /* Read the stylesheet source, not its CSSOM serialisation.
+
+     `sheet.cssRules[i].cssText` re-emits every declaration through
+     CSSStyleDeclaration, which quietly destroys shorthands that reference a
+     custom property: `mask: var(--icon) no-repeat` cannot be substituted at
+     parse time, so it comes back as eight empty longhands (`mask-image: ;`
+     ...). The variable reference is gone, `mask-image` falls back to `none`,
+     and every icon built as `background-color: currentColor` + mask renders
+     as a solid block. `background`, `border`, `font`, `transition` and friends
+     lose their shorthand values the same way.
+
+     An inline <style> keeps the original text verbatim, so read that. Only
+     external sheets (rare in a saved snapshot, and unreadable cross-origin
+     anyway) fall back to the lossy path. */
   function collectCssText() {
     var chunks = [];
     var sheets = document.styleSheets || [];
     for (var i = 0; i < sheets.length; i++) {
+      var sheet = sheets[i];
+      if (sheet.disabled) continue;
+      var owner = sheet.ownerNode;
+      if (owner && owner.tagName === 'STYLE' && typeof owner.textContent === 'string'
+        && owner.textContent !== '') {
+        chunks.push(owner.textContent);
+        continue;
+      }
       try {
-        var rules = sheets[i].cssRules;
+        var rules = sheet.cssRules;
         if (!rules) continue;
         for (var j = 0; j < rules.length; j++) chunks.push(rules[j].cssText);
       } catch (error) {
@@ -272,6 +294,25 @@
       }
     }
     return chunks.join('\n');
+  }
+
+  /* Attributes of html/body, minus the inline style string.
+
+     The parent rebuilds a fresh <html> and <body>; anything that lived as an
+     attribute is lost otherwise. `class` is the one that matters most: sites
+     park `mac` / `dark` / `home` there and drive whole branches of CSS off it,
+     so a dropped class flips the theme or swaps the shortcut hint from Cmd to
+     Ctrl. */
+  function attrsOf(element) {
+    var out = [];
+    if (!element) return out;
+    var list = element.attributes || [];
+    for (var i = 0; i < list.length; i++) {
+      var name = list[i].name;
+      if (name === 'style') continue;
+      out.push([name, list[i].value]);
+    }
+    return out;
   }
 
   /* Body-level typography has to be copied explicitly: the rules above are
@@ -482,6 +523,8 @@
       html: html,
       css: collectCssText(),
       bodyStyle: bodyInlineStyle(),
+      htmlAttrs: attrsOf(document.documentElement),
+      bodyAttrs: attrsOf(document.body),
       width: root.clientWidth,
       height: root.clientHeight,
       stageWidth: stageWidth,

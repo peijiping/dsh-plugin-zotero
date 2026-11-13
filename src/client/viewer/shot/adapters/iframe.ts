@@ -194,6 +194,92 @@ function splitMediaCondition(condition: string): { widths: string[]; others: str
   return { widths, others }
 }
 
+/** 跳过一段字符串字面量，返回结束引号之后的位置。 */
+function skipString(css: string, from: number): number {
+  const quote = css[from]
+  let index = from + 1
+  while (index < css.length) {
+    const char = css[index]
+    if (char === '\\') {
+      index += 2
+      continue
+    }
+    if (char === quote) return index + 1
+    index += 1
+  }
+  return index
+}
+
+/**
+ * 扫到下一条顶层语句的边界。
+ *
+ * 括号里的 `;` 和 `{}` 不算（`@supports (display: grid)`、`[data-x="a;b"]`、
+ * 未加引号的 `url(...)` 都会踩到）。注释与字符串整段跳过。
+ */
+function scanPrelude(css: string, from: number): { stop: number; char: string } {
+  let depth = 0
+  let index = from
+  while (index < css.length) {
+    const char = css[index]
+    if (char === '/' && css[index + 1] === '*') {
+      const close = css.indexOf('*/', index + 2)
+      index = close < 0 ? css.length : close + 2
+      continue
+    }
+    if (char === '"' || char === "'") {
+      index = skipString(css, index)
+      continue
+    }
+    if (char === '(' || char === '[') depth += 1
+    else if (char === ')' || char === ']') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && (char === '{' || char === ';' || char === '}')) {
+      return { stop: index, char }
+    }
+    index += 1
+  }
+  return { stop: css.length, char: '' }
+}
+
+/** `open` 处是 `{`，返回配对 `}` 之后的位置。 */
+function matchBrace(css: string, open: number): number {
+  let depth = 0
+  let round = 0
+  let index = open
+  while (index < css.length) {
+    const char = css[index]
+    if (char === '/' && css[index + 1] === '*') {
+      const close = css.indexOf('*/', index + 2)
+      index = close < 0 ? css.length : close + 2
+      continue
+    }
+    if (char === '"' || char === "'") {
+      index = skipString(css, index)
+      continue
+    }
+    // `url(...)` 里可能有裸花括号（未编码的 data URI），不算块边界。
+    if (char === '(') round += 1
+    else if (char === ')') round = Math.max(0, round - 1)
+    else if (round === 0 && char === '{') depth += 1
+    else if (round === 0 && char === '}') {
+      depth -= 1
+      if (depth === 0) return index + 1
+    }
+    index += 1
+  }
+  return css.length
+}
+
+/** 块内不重写选择器的 at-rule：里面的键是名字或百分比，不是选择器。 */
+const OPAQUE_AT_RULES = new Set([
+  'keyframes', '-webkit-keyframes', 'font-face', 'page', 'property',
+  'counter-style', 'font-feature-values', 'font-palette-values', 'viewport',
+])
+
+/** 需要递归进去加前缀的 at-rule（其余带块的按原样透传）。 */
+const GROUPING_AT_RULES = new Set([
+  'supports', 'layer', 'container', 'scope', 'starting-style', 'document',
+])
+
 /**
  * 把快照样式表限定在重建层内。
  *
@@ -201,71 +287,73 @@ function splitMediaCondition(condition: string): { widths: string[]; others: str
  * 会在采集那几十毫秒里改掉宿主自己的排版（然后随节点移除恢复），用户看到的就是
  * 「点一下截图，界面抖一下」。所以每条规则都要挂前缀。
  *
+ * **只改选择器，声明块一个字符都不动**。早先的实现走
+ * `new CSSStyleSheet().replaceSync()` + `rule.style.cssText`，那是经过
+ * CSSStyleDeclaration 的再序列化，会把「含 `var()` 的简写」碾成空值：
+ * `mask: var(--icon) no-repeat` 输出成 `mask-image: ; mask-mode: ; ...`，
+ * 变量引用彻底丢失，`mask-image` 回落到 `none`。图标元素只剩
+ * `background-color: currentColor`，于是整排图标变成实心黑方块。
+ * `background` / `border` / `font` / `transition` 上带变量的简写也是同样下场。
+ *
  * `@import` 直接丢弃：它会在宿主文档里外发请求。
  */
 function scopeCss(css: string): string {
-  let sheet: CSSStyleSheet
-  try {
-    sheet = new CSSStyleSheet()
-    sheet.replaceSync(css)
-  } catch {
-    return ''
-  }
-
-  const walk = (rules: CSSRuleList): string => {
-    const chunks: string[] = []
-    for (const rule of Array.from(rules)) {
-      if (rule instanceof CSSStyleRule) {
-        const scoped = splitSelectors(rule.selectorText)
-          .map(scopeSelector)
-          .filter((item) => item !== '')
-        if (scoped.length === 0) continue
-        chunks.push(`${scoped.join(',')}{${rule.style.cssText}}`)
-      } else if (rule instanceof CSSMediaRule) {
-        const inner = walk(rule.cssRules)
-        const split = SUPPORTS_CONTAINER
-          ? splitMediaCondition(rule.conditionText)
-          : { widths: [], others: [] }
-        if (split.widths.length === 0) {
-          chunks.push(`@media ${rule.conditionText}{${inner}}`)
-        } else {
-          // 宽度断点按重建层求值，其余特性（`prefers-color-scheme` 等）仍交给媒体查询。
-          const container = `@container ${split.widths.join(' and ')}{${inner}}`
-          chunks.push(
-            split.others.length > 0
-              ? `@media ${split.others.join(' and ')}{${container}}`
-              : container,
-          )
-        }
-      } else if (rule instanceof CSSSupportsRule) {
-        chunks.push(`@supports ${rule.conditionText}{${walk(rule.cssRules)}}`)
-      } else if (
-        rule instanceof CSSKeyframesRule
-        || rule instanceof CSSFontFaceRule
-        || rule instanceof CSSPageRule
-      ) {
-        // 名字型规则对选择器无关，原样保留（否则动画与自定义字体会失效）。
-        chunks.push(rule.cssText)
-      } else if (
-        'cssRules' in rule
-        && typeof (rule as { name?: unknown }).name === 'string'
-      ) {
-        // `@layer`：Tailwind 一类站点把绝大多数样式放在层里，整块丢掉等于整页无样式。
-        const grouped = rule as CSSGroupingRule & { name: string }
-        chunks.push(`@layer ${grouped.name}{${walk(grouped.cssRules)}}`)
-      } else if (Array.isArray((rule as { nameList?: unknown }).nameList)) {
-        // `@layer a, b;` 这种只声明层顺序，必须原样保留。
-        chunks.push(rule.cssText)
-      } else if (typeof CSSContainerRule !== 'undefined' && rule instanceof CSSContainerRule) {
-        // 站点自带的容器查询：容器与元素都在重建层里，原样递归即可。
-        const name = rule.containerName === '' ? '' : `${rule.containerName} `
-        chunks.push(`@container ${name}${rule.conditionText}{${walk(rule.cssRules)}}`)
+  const rewrite = (source: string): string => {
+    let out = ''
+    let index = 0
+    while (index < source.length) {
+      const scan = scanPrelude(source, index)
+      const prelude = source.slice(index, scan.stop)
+      if (scan.char === '') {
+        out += prelude
+        break
       }
+      if (scan.char === ';') {
+        // 只留下 `@layer a, b;` 这种层序声明；`@import` / `@charset` 丢掉。
+        if (!/^\s*@(?:import|charset)\b/iu.test(prelude)) out += `${prelude};`
+        index = scan.stop + 1
+        continue
+      }
+      if (scan.char === '}') {
+        out += prelude
+        index = scan.stop + 1
+        continue
+      }
+      const end = matchBrace(source, scan.stop)
+      const inner = source.slice(scan.stop + 1, Math.max(scan.stop + 1, end - 1))
+      out += block(prelude.trim(), inner)
+      index = end
     }
-    return chunks.join('')
+    return out
   }
 
-  return walk(sheet.cssRules)
+  const block = (prelude: string, inner: string): string => {
+    if (!prelude.startsWith('@')) {
+      const scoped = splitSelectors(prelude).map(scopeSelector).filter((item) => item !== '')
+      return scoped.length === 0 ? '' : `${scoped.join(',')}{${inner}}`
+    }
+    const name = /^@([\w-]+)/u.exec(prelude)?.[1]?.toLowerCase() ?? ''
+    if (name === 'media') {
+      const condition = prelude.slice('@media'.length).trim()
+      const body = rewrite(inner)
+      const split = SUPPORTS_CONTAINER
+        ? splitMediaCondition(condition)
+        : { widths: [], others: [] }
+      if (split.widths.length === 0) return `${prelude}{${body}}`
+      // 宽度断点按重建层求值，其余特性（`prefers-color-scheme` 等）仍交给媒体查询。
+      const container = `@container ${split.widths.join(' and ')}{${body}}`
+      return split.others.length > 0
+        ? `@media ${split.others.join(' and ')}{${container}}`
+        : container
+    }
+    if (OPAQUE_AT_RULES.has(name)) return `${prelude}{${inner}}`
+    if (GROUPING_AT_RULES.has(name)) return `${prelude}{${rewrite(inner)}}`
+    // 认不出来的 at-rule：递归一遍最安全 —— 里面若是选择器就限定住，若不是（名字、
+    // 百分比、描述符）`scanPrelude` 也只会把它当一条普通语句原样带出去。
+    return `${prelude}{${rewrite(inner)}}`
+  }
+
+  return rewrite(css)
 }
 
 /**
@@ -335,8 +423,28 @@ async function rasterize(
    * 的裁剪窗口，照抄 margin 会把内容推出可视区）。
    */
   const htmlElement = document.createElement('html')
+  /*
+   * 把原 `<html>` 上的属性搬过来。`class` 是关键：站点把 `mac` / `dark` / `home`
+   * 挂在这里，整组样式分支靠它切换 —— 丢了会变成浅色主题，快捷键提示也会从
+   * ⌘ 变成 Ctrl。
+   */
+  for (const [name, value] of payload.htmlAttrs ?? []) {
+    try {
+      htmlElement.setAttribute(name, value)
+    } catch {
+      // 非法属性名（含怪字符）跳过，不值得为它中断一次截图。
+    }
+  }
   htmlElement.style.display = 'block'
+
   const bodyElement = document.createElement('body')
+  for (const [name, value] of payload.bodyAttrs ?? []) {
+    try {
+      bodyElement.setAttribute(name, value)
+    } catch {
+      // 同上。
+    }
+  }
   bodyElement.style.cssText = [
     'display:block',
     'margin:0',

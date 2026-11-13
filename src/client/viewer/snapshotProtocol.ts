@@ -30,10 +30,19 @@ export const SNAPSHOT_BRIDGE_VERSION = 4
 export interface SnapshotCapturePayload {
   /** `<body>` 的 innerHTML，脚本 / 样式 / 外链样式表已剔除。 */
   html: string
-  /** 页面自己的样式规则（`cssRules` 拼串），与 `html` 一起在父页面重建。 */
+  /** 页面自己的样式表**原文**（内联 `<style>` 原样取 textContent），与 `html` 一起在父页面重建。 */
   css: string
   /** `<body>` 的关键计算样式（字体、颜色、底色），重建时套到容器上。 */
   bodyStyle: string
+  /**
+   * `<html>` / `<body>` 上的属性（`style` 除外）。
+   *
+   * 重建时会新建一对空的 `html` / `body`，属性得显式搬过去。`class` 最要紧：
+   * 站点常把 `mac` / `dark` / `home` 挂在这里，整组样式分支都靠它切换，丢了
+   * 就会变成浅色主题、快捷键提示从 ⌘ 变 Ctrl。
+   */
+  htmlAttrs?: Array<[string, string]>
+  bodyAttrs?: Array<[string, string]>
   /** iframe 视口尺寸（CSS 像素）。 */
   width: number
   height: number
