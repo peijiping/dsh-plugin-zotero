@@ -133,22 +133,195 @@ const OFFSCREEN_LEFT = -10000
 const SCOPE = '[data-dsh-zp-shot-root]'
 
 /**
- * 能不能把媒体查询改成容器查询。
+ * 站点自带的 `@container` 需要一个容器祖先才能按重建宽度求值。
  *
- * 这是保真度的关键：快照 iframe 只有五六百像素宽，站点靠 `@media` 断点把两侧
- * 目录藏了起来。重建层一旦回到父页面，媒体查询就按**宿主窗口**（往往一千多像素）
- * 求值，宽屏分支被选中 —— 截图里凭空多出侧边栏、标题被放大、正文被挤成窄列，
- * 而原页面根本没有这些。
- *
- * 容器查询让断点重新按「重建层自己的宽度」求值，等于还原了 iframe 的视口。
- * 不支持时退回媒体查询，至少不比原来更差。
+ * 我们自己**不再**把 `@media` 断点改写成 `@container`：那取决于 webview 内核
+ * 是否支持容器查询。实测有环境不支持，`CSS.supports` 一为 false 就退回原样
+ * `@media`，断点重新按宿主窗口（约 1400px）求值 —— 快照里凭空多出左右侧栏、
+ * 标题放大、正文挤成窄列。断点改由 {@link evaluateMedia} 静态求值，不依赖
+ * 任何浏览器特性。
  */
 const SUPPORTS_CONTAINER = typeof CSS !== 'undefined'
   && typeof CSS.supports === 'function'
   && CSS.supports('container-type', 'inline-size')
 
-/** 顶层逗号切分：`:is(a, b)` 里的逗号不算。 */
-function splitSelectors(text: string): string[] {
+/** 重建层要模拟的视口：媒体查询与 vw/vh 都按快照 iframe 的视口求值。 */
+interface ViewportSize {
+  width: number
+  height: number
+}
+
+/** 媒体查询里的长度换算成 px；`em` / `rem` 按 16px 基准，解析不了返回 null。 */
+function mediaLength(value: string): number | null {
+  const match = /^(\d*\.?\d+)\s*(px|em|rem)?$/iu.exec(value.trim())
+  if (match === null) return null
+  const amount = Number.parseFloat(match[1] ?? '')
+  if (!Number.isFinite(amount)) return null
+  return (match[2] ?? 'px').toLowerCase() === 'px' ? amount : amount * 16
+}
+
+/** 一条 media query 的求值结果：恒真、恒假，或还剩需要浏览器判断的条件。 */
+type MediaState =
+  | { kind: 'always' }
+  | { kind: 'never' }
+  | { kind: 'media'; condition: string }
+
+/**
+ * 按重建视口静态判定一条 media query。
+ *
+ * 宽度/高度/方向这些「跟视口尺寸有关」的子句在这里算出真假：命中就把子句
+ * 摘掉，不命中整条判假。`prefers-color-scheme`、`print` 之类与宽度无关的
+ * 子句留在 `@media` 里交给浏览器 —— 重建层和宿主在同一个 webview，结论一致。
+ */
+function evaluateQuery(query: string, viewport: ViewportSize): MediaState {
+  const trimmed = query.trim()
+  if (trimmed === '') return { kind: 'always' }
+  // `not` 会把整条条件取反，不去碰；`only` 只是老浏览器前缀，去掉后照常判。
+  const normalized = trimmed.replace(/^only\s+/iu, '')
+  if (/^not\b/iu.test(normalized)) return { kind: 'media', condition: trimmed }
+
+  const rest: string[] = []
+  for (const raw of normalized.split(/\s+and\s+/iu)) {
+    const clause = raw.trim()
+    if (clause === '' || /^(?:screen|all)$/iu.test(clause)) continue
+
+    const sizeFeature = /^\(\s*(?:(min|max)-)?(width|height)\s*:\s*([^)]*)\)\s*$/iu.exec(clause)
+    if (sizeFeature !== null) {
+      const size = mediaLength(sizeFeature[3] ?? '')
+      // 解析不了的宽度子句保守留在 @media 里，别擅自丢规则。
+      if (size === null) {
+        rest.push(clause)
+        continue
+      }
+      const actual = (sizeFeature[2] ?? '').toLowerCase() === 'height'
+        ? viewport.height : viewport.width
+      const bound = (sizeFeature[1] ?? '').toLowerCase()
+      const matches = bound === 'min' ? actual >= size
+        : bound === 'max' ? actual <= size : actual === size
+      if (!matches) return { kind: 'never' }
+      continue
+    }
+
+    const orientation = /^\(\s*orientation\s*:\s*(portrait|landscape)\s*\)$/iu.exec(clause)
+    if (orientation !== null) {
+      const portrait = viewport.height >= viewport.width
+      if (portrait !== ((orientation[1] ?? '').toLowerCase() === 'portrait')) {
+        return { kind: 'never' }
+      }
+      continue
+    }
+
+    rest.push(clause)
+  }
+  return rest.length === 0 ? { kind: 'always' } : { kind: 'media', condition: rest.join(' and ') }
+}
+
+/** 逗号分隔的 media query list：任一条恒真即整块保留，全假则整块丢弃。 */
+function evaluateMedia(condition: string, viewport: ViewportSize): MediaState {
+  const kept: string[] = []
+  for (const query of splitTopLevel(condition)) {
+    const state = evaluateQuery(query, viewport)
+    if (state.kind === 'always') return { kind: 'always' }
+    if (state.kind === 'media') kept.push(state.condition)
+  }
+  return kept.length === 0 ? { kind: 'never' } : { kind: 'media', condition: kept.join(', ') }
+}
+
+/**
+ * 把 CSS 里的视口单位按重建视口换算成 px。
+ *
+ * `100vw` 在重建层里会按**宿主窗口**求值，站点的全宽容器会突然撑到一千多像素，
+ * 版面照样变。这里做纯文本的数值换算（只动独立的数字+单位 token，注释与字符串
+ * 整段跳过），不经过 CSSOM，所以带 `var()` 的简写不会被碾坏。
+ */
+function rewriteViewportUnits(css: string, viewport: ViewportSize): string {
+  const width = viewport.width / 100
+  const height = viewport.height / 100
+  const short = Math.min(viewport.width, viewport.height) / 100
+  const long = Math.max(viewport.width, viewport.height) / 100
+  const unitPattern = /^((?:[sld])?v(?:min|max|w|h))(?![\w-])/iu
+  const isDigit = (char: string): boolean => char >= '0' && char <= '9'
+
+  let out = ''
+  let index = 0
+  while (index < css.length) {
+    const char = css[index] ?? ''
+    if (char === '/' && css[index + 1] === '*') {
+      const close = css.indexOf('*/', index + 2)
+      const end = close < 0 ? css.length : close + 2
+      out += css.slice(index, end)
+      index = end
+      continue
+    }
+    // 与 scanPrelude / matchBrace 同理：先跳过 CSS 转义，别把 \' 当字符串起点。
+    if (char === '\\') {
+      out += css.slice(index, index + 2)
+      index += 2
+      continue
+    }
+    if (char === '"' || char === "'") {
+      const end = skipString(css, index)
+      out += css.slice(index, end)
+      index = end
+      continue
+    }
+    // `url(data:font/woff2;base64,...)` 里可能恰好出现 `123vw` 这种字面串，
+    // 整段跳过，别把内联字体 / SVG 数据当成 CSS 数值改坏。
+    if (char === 'u' || char === 'U') {
+      const head = /^url\s*\(/iu.exec(css.slice(index, index + 12))
+      if (head !== null) {
+        let cursor = index + (head[0] ?? '').length
+        let round = 1
+        while (cursor < css.length && round > 0) {
+          const next = css[cursor] ?? ''
+          if (next === '\\') {
+            cursor += 2
+            continue
+          }
+          if (next === '"' || next === "'") {
+            cursor = skipString(css, cursor)
+            continue
+          }
+          if (next === '(') round += 1
+          else if (next === ')') round -= 1
+          cursor += 1
+        }
+        out += css.slice(index, cursor)
+        index = cursor
+        continue
+      }
+    }
+    if (isDigit(char) || (char === '.' && isDigit(css[index + 1] ?? ''))) {
+      let cursor = index
+      while (cursor < css.length) {
+        const next = css[cursor] ?? ''
+        if (!isDigit(next) && next !== '.') break
+        cursor += 1
+      }
+      // 常数长度切片：CSS 动辄几百 KB，逐字符 slice 整条余串会退化成 O(n²)。
+      const unit = unitPattern.exec(css.slice(cursor, cursor + 8))
+      if (unit === null) {
+        out += css.slice(index, cursor)
+        index = cursor
+        continue
+      }
+      const name = (unit[1] ?? '').toLowerCase()
+      const factor = name.endsWith('min') ? short
+        : name.endsWith('max') ? long
+          : name.endsWith('w') ? width : height
+      const px = Number.parseFloat(css.slice(index, cursor)) * factor
+      out += `${Math.round(px * 1000) / 1000}px`
+      index = cursor + (unit[0] ?? '').length
+      continue
+    }
+    out += char
+    index += 1
+  }
+  return out
+}
+
+/** 顶层逗号切分：`:is(a, b)`、媒体查询里的括号都不算。 */
+function splitTopLevel(text: string): string[] {
   const parts: string[] = []
   let depth = 0
   let start = 0
@@ -180,23 +353,6 @@ function scopeSelector(selector: string): string {
   if (trimmed === '') return ''
   if (trimmed.startsWith(SCOPE)) return trimmed
   return `${SCOPE} ${trimmed}`
-}
-
-/** `@media` 条件拆成「宽度子句」和「其余子句」，宽度那部分可以交给容器查询。 */
-function splitMediaCondition(condition: string): { widths: string[]; others: string[] } {
-  const widths: string[] = []
-  const others: string[] = []
-  for (const raw of condition.split(/\s+and\s+/iu)) {
-    const clause = raw.trim()
-    if (clause === '' || /^(?:screen|all)$/iu.test(clause)) continue
-    const width = /^\(\s*(min|max)-width\s*:\s*([^)]*)\)$/iu.exec(clause)
-    if (width !== null) {
-      widths.push(`(${width[1].toLowerCase()}-width: ${width[2].trim()})`)
-      continue
-    }
-    others.push(clause)
-  }
-  return { widths, others }
 }
 
 /** 跳过一段字符串字面量，返回结束引号之后的位置。 */
@@ -231,6 +387,14 @@ function scanPrelude(css: string, from: number): { stop: number; char: string } 
       index = close < 0 ? css.length : close + 2
       continue
     }
+    // CSS 转义（`\'` / `\(` / `\}`）既不是字符串边界也不是结构字符，整对跳过。
+    // 站点把图标写成未加引号的 `url(data:image/svg+xml,...\'...\')`，里面的 \'
+    // 若被当成字符串起点，会一路吞到样式表末尾：括号计数从此永久失衡，后面的
+    // 绝大多数规则（含全部 @media）都被当成某个块的内部文本原样透传。
+    if (char === '\\') {
+      index += 2
+      continue
+    }
     if (char === '"' || char === "'") {
       index = skipString(css, index)
       continue
@@ -255,6 +419,11 @@ function matchBrace(css: string, open: number): number {
     if (char === '/' && css[index + 1] === '*') {
       const close = css.indexOf('*/', index + 2)
       index = close < 0 ? css.length : close + 2
+      continue
+    }
+    // 与 scanPrelude 同理：转义字符先整对跳过，否则 \' 会吞掉半个样式表。
+    if (char === '\\') {
+      index += 2
       continue
     }
     if (char === '"' || char === "'") {
@@ -301,8 +470,12 @@ const GROUPING_AT_RULES = new Set([
  * `background` / `border` / `font` / `transition` 上带变量的简写也是同样下场。
  *
  * `@import` 直接丢弃：它会在宿主文档里外发请求。
+ *
+ * 另外，重建层活在父页面里，视口尺寸跟快照 iframe 完全不同：媒体查询与
+ * `vw/vh` 若照原样交给浏览器，就会按宿主窗口求值，宽屏分支被选中。所以先把
+ * 视口单位换算成 px，再把每条 `@media` 按重建视口静态判定（见 `evaluateMedia`）。
  */
-function scopeCss(css: string): string {
+function scopeCss(css: string, viewport: ViewportSize): string {
   const rewrite = (source: string): string => {
     let out = ''
     let index = 0
@@ -334,22 +507,19 @@ function scopeCss(css: string): string {
 
   const block = (prelude: string, inner: string): string => {
     if (!prelude.startsWith('@')) {
-      const scoped = splitSelectors(prelude).map(scopeSelector).filter((item) => item !== '')
+      const scoped = splitTopLevel(prelude).map(scopeSelector).filter((item) => item !== '')
       return scoped.length === 0 ? '' : `${scoped.join(',')}{${inner}}`
     }
     const name = /^@([\w-]+)/u.exec(prelude)?.[1]?.toLowerCase() ?? ''
     if (name === 'media') {
       const condition = prelude.slice('@media'.length).trim()
+      const state = evaluateMedia(condition, viewport)
+      // 不命中的断点整块丢掉（否则宽屏侧栏会被带进重建层），命中的摘掉宽度
+      // 子句后无条件保留；只剩 prefers-* / print 这类子句才继续交给 @media。
+      if (state.kind === 'never') return ''
       const body = rewrite(inner)
-      const split = SUPPORTS_CONTAINER
-        ? splitMediaCondition(condition)
-        : { widths: [], others: [] }
-      if (split.widths.length === 0) return `${prelude}{${body}}`
-      // 宽度断点按重建层求值，其余特性（`prefers-color-scheme` 等）仍交给媒体查询。
-      const container = `@container ${split.widths.join(' and ')}{${body}}`
-      return split.others.length > 0
-        ? `@media ${split.others.join(' and ')}{${container}}`
-        : container
+      if (state.kind === 'always') return body
+      return `@media ${state.condition}{${body}}`
     }
     if (OPAQUE_AT_RULES.has(name)) return `${prelude}{${inner}}`
     if (GROUPING_AT_RULES.has(name)) return `${prelude}{${rewrite(inner)}}`
@@ -358,7 +528,7 @@ function scopeCss(css: string): string {
     return `${prelude}{${rewrite(inner)}}`
   }
 
-  return rewrite(css)
+  return rewrite(rewriteViewportUnits(css, viewport))
 }
 
 /**
@@ -397,16 +567,26 @@ async function rasterize(
     `background:${backgroundColorOf(payload)}`,
   ].join(';')
 
+  /**
+   * 断点与视口单位都按**快照 iframe 的视口**求值，不是重建层的宽、也不是
+   * 宿主窗口。`stageWidth` 是内容排版宽（内部滚动容器可能更窄），媒体查询在原
+   * 页面里看的是 iframe 视口宽，两者不能混用。
+   */
+  const viewport: ViewportSize = {
+    width: payload.width > 0 ? payload.width : (payload.stageWidth > 0 ? payload.stageWidth : width),
+    height: payload.height > 0 ? payload.height : height,
+  }
   const style = document.createElement('style')
-  style.textContent = scopeCss(payload.css)
+  style.textContent = scopeCss(payload.css, viewport)
   host.appendChild(style)
 
   /**
-   * 宽度 = 快照的内容宽，同时充当容器查询的「视口」。
+   * 宽度 = 快照的内容宽。
    *
-   * `container-type: inline-size` 让重建层里的 `@container` 断点按这个宽度求值，
-   * 而不是宿主窗口的宽度（见 `SUPPORTS_CONTAINER`）。滚动补偿的位移也挂在这一层：
-   * 它是 `html` 的父级，位移后 `html` 仍然从 (0,0) 开始排版。
+   * `container-type` 只服务站点**自带**的 `@container`（见 `SUPPORTS_CONTAINER`）；
+   * 页面自己的 `@media` 断点已由 `scopeCss` 静态求值，不再依赖容器查询。
+   * 滚动补偿的位移也挂在这一层：它是 `html` 的父级，位移后 `html` 仍然从 (0,0)
+   * 开始排版。
    */
   const stage = document.createElement('div')
   stage.style.cssText = [
