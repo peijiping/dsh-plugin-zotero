@@ -15,6 +15,7 @@ import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/t
 import { fileUrl, openInZotero, snapshotUrl } from './api'
 import { isLocatable, type AnnotationFilter } from './annotationRuns'
 import { InfoPanel } from './InfoPanel'
+import { itemTypeLabel } from './itemType'
 import type { InsertOutcome } from './inline'
 import { tpl, type Translate } from './locales'
 import { OutlinePanel } from './OutlinePanel'
@@ -202,7 +203,14 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
     kind: renderer.capabilities.capture,
     getRoot: () => contentRef.current,
     getAdapter: () => captureRef.current,
-    buildMeta: (frame, rect) => buildShotMeta({ detail, source, outline: outlineItems, frame, rect }),
+    buildMeta: (frame, rect) => buildShotMeta({
+      detail,
+      source,
+      outline: outlineItems,
+      frame,
+      rect,
+      typeLabel: itemTypeLabel(t, detail.itemType),
+    }),
     watermark: (meta) => shotWatermark(t, meta),
     insert: (png, meta) => onInsertShot?.(png, meta) ?? 'no-conversation',
   })

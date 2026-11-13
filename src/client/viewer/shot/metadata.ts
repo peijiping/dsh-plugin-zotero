@@ -94,6 +94,8 @@ export interface BuildShotMetaInput {
   outline: readonly DocumentOutlineItem[] | null
   frame: CaptureFrame
   rect: ClientRect
+  /** 条目类型的中文名（`itemTypeLabel`）；网页类条目常无作者/年份，靠它兜底。 */
+  typeLabel: string
 }
 
 /**
@@ -120,14 +122,53 @@ function attachmentLabel(source: DocumentSource | null, detail: ZoteroItemDetail
   return GENERIC_ATTACHMENT_TITLES.has(title.toLowerCase()) ? '' : title
 }
 
-export function buildShotMeta({ detail, source, outline, frame, rect }: BuildShotMetaInput): ShotMeta {
-  const byline = [
+/** `https://www.zotero-chinese.com/guide` → `zotero-chinese.com`；取不到给空串。 */
+function hostOf(url: string): string {
+  const trimmed = url.trim()
+  if (trimmed === '') return ''
+  try {
+    return new URL(trimmed).hostname.replace(/^www\./iu, '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 书目字段全空时的兜底身份。
+ *
+ * 网页、网页快照这类条目常常没有作者 / 年份 / 刊物，只剩「未定位到」等于什么都没说；
+ * 条目类型 + 站点域名才是它们真正的身份。附件名可以是站点名，与域名重复时只留一份。
+ */
+function identityFallback(
+  detail: ZoteroItemDetail,
+  source: DocumentSource | null,
+  typeLabel: string,
+): string {
+  const parts = [typeLabel, attachmentLabel(source, detail), hostOf(detail.url)]
+  const seen = new Set<string>()
+  const kept: string[] = []
+  for (const part of parts) {
+    if (part === '' || seen.has(part)) continue
+    seen.add(part)
+    kept.push(part)
+  }
+  return kept.join(' · ')
+}
+
+export function buildShotMeta({
+  detail, source, outline, frame, rect, typeLabel,
+}: BuildShotMetaInput): ShotMeta {
+  // 附件名（「原文」「译本」）是书目信息的补充，不能单独充当文献身份。
+  const extra = attachmentLabel(source, detail)
+  const bibliographic = [
     detail.creators.join('、'),
     detail.year,
     detail.publicationTitle,
     detail.doi !== '' ? `DOI ${detail.doi}` : '',
-    attachmentLabel(source, detail),
   ].filter((part) => part !== '').join(' · ')
+  const byline = bibliographic !== ''
+    ? [bibliographic, extra].filter((part) => part !== '').join(' · ')
+    : identityFallback(detail, source, typeLabel)
 
   return {
     key: detail.key,

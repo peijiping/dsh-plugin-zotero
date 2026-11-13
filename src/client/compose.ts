@@ -53,7 +53,8 @@ export function shotText(t: Translate, meta: ShotMeta): string {
   const lines = [
     tpl(t('cmp.shot.header'), { title: meta.title, key: meta.key }),
     tpl(t('cmp.shot.byline'), { value: meta.byline || none }),
-    tpl(t('cmp.shot.pages'), { value: meta.pages || none }),
+    // 网页快照 / 纯文本 / 笔记没有页码，「未定位到」会被模型读成定位失败，整行省掉。
+    ...(meta.pages === '' ? [] : [tpl(t('cmp.shot.pages'), { value: meta.pages })]),
     tpl(t('cmp.shot.section'), { value: meta.section || none }),
     tpl(t('cmp.shot.digest'), { value: meta.digest || t('cmp.shot.digestNone') }),
     t('cmp.shot.note'),
