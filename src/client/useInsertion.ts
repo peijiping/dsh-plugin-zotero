@@ -34,7 +34,8 @@ import type { ShotMeta } from './viewer/shot/types'
 export interface InsertionActions {
   report(outcome: InsertOutcome): void
   insertReference(reference: ReferenceInsert): void
-  insertItem(key: string, title: string): void
+  /** 条目 / 独立笔记共用：按 `itemType` 决定插元数据引用还是笔记正文引用。 */
+  insertItem(key: string, title: string, itemType?: string): void
   /** 一段划选摘录：插一枚自带原文的 chip，不再是灌进草稿的一大段纯文本。 */
   insertExcerpt(target: ZoteroItemDetail, quote: string): void
   /** 一段划词翻译：原文与译文一起定格进 chip，提交时展开成对照文本。 */
@@ -43,7 +44,7 @@ export interface InsertionActions {
   insertNote(target: ZoteroItemDetail, note: ZoteroNote): void
   insertCollection(collection: ZoteroCollection): void
   /** 选中几条插几个条目 chip（每条一个胶囊）；草稿中途变化就停在已插入的那条。 */
-  insertItems(items: readonly { key: string; title: string }[]): void
+  insertItems(items: readonly { key: string; title: string; itemType?: string }[]): void
   /** 单个标签 chip。 */
   insertTag(name: string): void
   /** 多个标签合并成一个 chip；超过 {@link MAX_TAG_REFERENCE} 时提示并不插入。 */
@@ -54,6 +55,20 @@ export interface InsertionActions {
    * 返回失败态由调用方出 toast；这里不弹，避免与截图遮罩的状态提示重复。
    */
   insertShot(png: Blob, meta: ShotMeta): InsertOutcome
+}
+
+/**
+ * 条目引用分派：独立笔记没有作者 / 年份 / 刊物这些元数据，`item:` 展开出来只剩一个
+ * 标题壳，模型拿不到正文。改插 `note:<key>/<key>`，提交时 `noteCitation` 取回同一份
+ * 详情里的 `notes` 并展开笔记全文。
+ *
+ * 详情接口对任何 note key 都把自身塞进 `notes`（见 `zotero/client.ts`），所以
+ * 父 key = 子 key 的自引用恒成立，挂在父条目下的子笔记同样适用。
+ */
+function itemRefFor(item: { key: string; title: string; itemType?: string }): ReferenceInsert {
+  return item.itemType === 'note'
+    ? noteReference(item.key, item.key, item.title)
+    : itemReference(item.key, item.title)
 }
 
 export function useInsertion(
@@ -85,8 +100,8 @@ export function useInsertion(
     report(insertChip(sessions, sessionId, reference, inputActions.captureInsertion()) ? 'inserted' : 'draft-changed')
   }, [inputActions, report, sessionId, sessions])
 
-  const insertItem = useCallback((key: string, title: string): void => {
-    insertReference(itemReference(key, title))
+  const insertItem = useCallback((key: string, title: string, itemType?: string): void => {
+    insertReference(itemRefFor({ key, title, itemType }))
   }, [insertReference])
 
   /**
@@ -96,7 +111,7 @@ export function useInsertion(
    * 会被宿主的 rev 校验挡掉。宿主每次插入都是同步落盘的编辑器事务，所以循环里
    * 连续 capture 拿到的始终是最新位置。
    */
-  const insertItems = useCallback((items: readonly { key: string; title: string }[]): void => {
+  const insertItems = useCallback((items: readonly { key: string; title: string; itemType?: string }[]): void => {
     if (!inputActions) {
       report('no-editor')
       return
@@ -107,8 +122,7 @@ export function useInsertion(
     }
     let inserted = 0
     for (const item of items) {
-      const ref = itemReference(item.key, item.title)
-      if (!insertChip(sessions, sessionId, ref, inputActions.captureInsertion())) break
+      if (!insertChip(sessions, sessionId, itemRefFor(item), inputActions.captureInsertion())) break
       inserted += 1
     }
     if (inserted === 0) {

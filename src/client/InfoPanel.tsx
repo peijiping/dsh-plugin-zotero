@@ -3,7 +3,8 @@
  *
  * 文档占满整版面，元数据类内容收进这个按钮背后的浮层，每块都可折叠。
  * 「加入对话」是这一行里的独立按钮（`i` 右侧），不放浮层里：它是每次读文献都要点的
- * 主操作，藏进菜单等于每次多两次点击。
+ * 主操作，藏进菜单等于每次多两次点击。独立笔记也有这枚按钮，插的是 `note:` 引用
+ * （展开笔记正文），不是空壳的条目元数据；接线在 `ZoteroItemPane`。
  * 浮层用系统色 `Canvas` / `CanvasText`，盖在白色 PDF 上深浅主题都能读。
  * 点浮层外或按 Esc 关闭（统一走 {@link useDismiss}，网页快照在 iframe 里的按下也算
  * 「外」）；点标注定位后也关闭，让文档重新成为焦点。
@@ -130,8 +131,8 @@ export function InfoPanel({
   // 交给 `onToggle` 自己开合。
   useDismiss(open, rootRef, onClose)
 
-  // 「加入对话」在 zh / en 下宽度不同，笔记类条目还会整枚隐藏；写死 left 或
-  // paddingLeft 必错。量整行宽度上报，由 ItemDetail 写成 CSS 变量给工具条。
+  // 「加入对话」在 zh / en 下宽度不同；写死 left 或 paddingLeft 必错。
+  // 量整行宽度上报，由 ItemDetail 写成 CSS 变量给工具条。
   useLayoutEffect(() => {
     const node = rowRef.current
     if (node === null || onRowWidth === undefined) return
@@ -178,18 +179,16 @@ export function InfoPanel({
           i
         </button>
 
-        {/* 笔记类条目自己就是正文，没有「把条目加入对话」这回事（同浮层头部的旧规则）。 */}
-        {!selfNote && (
-          <button
-            type="button"
-            className={SOFT_BUTTON_CLASS}
-            onClick={onCite}
-            title={t('action.insertItem')}
-            style={citeTriggerStyle}
-          >
-            {t('action.insertItemShort')}
-          </button>
-        )}
+        {/* 独立笔记也走这枚主按钮：插 `note:` 引用展开正文，别再把入口藏进「笔记」区块。 */}
+        <button
+          type="button"
+          className={SOFT_BUTTON_CLASS}
+          onClick={onCite}
+          title={selfNote ? t('action.insertNote') : t('action.insertItem')}
+          style={citeTriggerStyle}
+        >
+          {t('action.insertItemShort')}
+        </button>
 
         <button
           type="button"

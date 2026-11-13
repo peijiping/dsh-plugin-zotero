@@ -25,6 +25,7 @@ const zh: Record<string, string> = {
 
   'action.refresh': '刷新',
   'action.insertItem': '把条目加入对话',
+  'action.insertNote': '把笔记正文加入对话',
   'action.insertItemShort': '加入对话',
   'action.insertSelected': '把选中的每条各加入对话',
   'action.citeCount': '加入对话 {n}',
@@ -447,6 +448,7 @@ const en: Record<string, string> = {
 
   'action.refresh': 'Refresh',
   'action.insertItem': 'Add item to chat',
+  'action.insertNote': 'Add note text to chat',
   'action.insertItemShort': 'Add to chat',
   'action.insertSelected': 'Add each selected item to the chat',
   'action.citeCount': 'Add {n}',

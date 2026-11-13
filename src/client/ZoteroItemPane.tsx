@@ -168,7 +168,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
         <ItemDetail
           t={t}
           detail={detail}
-          onInsertItem={() => insertItem(detail.key, detail.title)}
+          onInsertItem={() => insertItem(detail.key, detail.title, detail.itemType)}
           onInsertExcerpt={(quote) => insertExcerpt(detail, quote)}
           onInsertTranslation={(quote, translated) => insertTranslation(detail, quote, translated)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}

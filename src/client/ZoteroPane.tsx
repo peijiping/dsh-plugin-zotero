@@ -282,7 +282,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             onOpenItem={onOpenItem}
             onSelectItem={selectItem}
             onClearSelection={clearItemSelection}
-            onInsertItem={(item) => insertion.insertItem(item.key, item.title)}
+            onInsertItem={(item) => insertion.insertItem(item.key, item.title, item.itemType)}
             onInsertItems={insertion.insertItems}
             onInsertCollection={insertion.insertCollection}
           />

@@ -38,7 +38,7 @@ import {
 interface Props {
   t: Translate
   detail: ZoteroItemDetail
-  /** 信息面板里的「引用」：整条目元数据。 */
+  /** 左上角「加入对话」：普通条目插元数据，独立笔记插笔记正文（见 `useInsertion`）。 */
   onInsertItem(): void
   /** 插入全文选区摘录。 */
   onInsertExcerpt(quote: string): void
