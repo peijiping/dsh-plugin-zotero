@@ -37,6 +37,8 @@ const zh: Record<string, string> = {
   'action.translate': '翻译',
   'action.screenshot': '截图加入对话',
 
+  'history.title': 'Zotero 引用',
+
   'status.zoteroOn': 'Zotero 已连接',
   'status.zoteroOff': 'Zotero 未连接',
   'status.mcpOn': '模型工具可用',
@@ -456,6 +458,8 @@ const en: Record<string, string> = {
   'action.close': 'Close',
   'action.translate': 'Translate',
   'action.screenshot': 'Screenshot to chat',
+
+  'history.title': 'Zotero reference',
 
   'status.zoteroOn': 'Zotero connected',
   'status.zoteroOff': 'Zotero not connected',

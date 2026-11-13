@@ -12,6 +12,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     InputHTMLAttributes,
     ReactElement,
     ReactNode,
+    RefObject,
   } from 'react'
 
   export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
@@ -29,6 +30,32 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     className?: string | undefined
     children?: ReactNode
   } & ButtonHTMLAttributes<HTMLButtonElement>): ReactElement
+
+  /** 草稿 / 会话历史里的引用胶囊（宿主 ReferenceChip）。 */
+  export function ReferenceChip(props: {
+    appearance: 'session' | 'file' | 'folder' | 'skill' | 'command'
+    label: string
+    title: string
+    className?: string | undefined
+    onActivate?: () => void
+  }): ReactElement
+
+  /**
+   * 悬停 / 键盘聚焦弹出的预览卡片。
+   *
+   * `inline` 让锚点保持在正文行内，卡片由宿主 portal 承载；卡片内容可以停留、
+   * 选中和滚动。
+   */
+  export function HoverCard(props: {
+    anchor: ReactNode
+    content: ReactNode
+    openDelayMs?: number
+    disabled?: boolean
+    grouped?: boolean
+    inline?: boolean
+    variant?: 'compact' | 'preview'
+    widthAnchorRef?: RefObject<HTMLElement | null>
+  }): ReactElement
 
   export function Input(props: {
     icon?: ReactNode

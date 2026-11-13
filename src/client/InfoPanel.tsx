@@ -31,7 +31,6 @@ import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { NoteList } from './NoteList'
 import { ACCENT, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
-import { ScreenshotIcon } from './viewer/shot/ScreenshotIcon'
 
 interface Props {
   t: Translate
@@ -50,7 +49,7 @@ interface Props {
   onChanged(): void
   annotationFilter: AnnotationFilter
   onAnnotationFilterChange(filter: AnnotationFilter): void
-  /** 启动截图（「加入对话」右边那枚图标按钮）。 */
+  /** 启动截图（「加入对话」右边的「截图加入对话」文字按钮）。 */
   onScreenshot(): void
   /** 当前渲染器是否支持截图；不支持时按钮置灰并给出原因。 */
   screenshotAvailable: boolean
@@ -201,7 +200,7 @@ export function InfoPanel({
           title={screenshotAvailable ? t('action.screenshot') : screenshotReason}
           style={shotTriggerStyle}
         >
-          <ScreenshotIcon />
+          {t('action.screenshot')}
         </button>
       </div>
 
@@ -432,23 +431,13 @@ const citeTriggerStyle = {
   zIndex: 21,
 } as const
 
-/** 「加入对话」右边的截图按钮：纯图标 22px，与同行两枚按钮同一套浅蓝描边。 */
+/**
+ * 「加入对话」右边的「截图加入对话」：文字胶囊，与「加入对话」同高同描边。
+ * 文案在 zh / en 下长度不同，宽度只按内容撑（`whiteSpace: nowrap`），
+ * 行宽由 `rowRef` 的 ResizeObserver 量出来给工具条让位，不用写死宽度。
+ */
 const shotTriggerStyle = {
-  ...SOFT_BUTTON_STYLE,
-  position: 'relative',
-  flexShrink: 0,
-  pointerEvents: 'auto',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 22,
-  height: 22,
-  padding: 0,
-  lineHeight: 1,
-  borderRadius: 6,
-  cursor: 'pointer',
-  boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-  zIndex: 21,
+  ...citeTriggerStyle,
 } as const
 
 const blockStyle = {

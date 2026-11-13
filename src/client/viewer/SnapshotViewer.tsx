@@ -438,11 +438,12 @@ export function SnapshotViewer({
 
   return (
     <div ref={rootRef} style={rootStyle}>
+      {/* 与工具条一致：iframe 的无障碍名称也恒为文献标题，不跟着附件的「Snapshot」变。 */}
       <iframe
         key={reloadKey}
         ref={frameRef}
         src={source?.url ?? ''}
-        title={source?.title ?? detail.title}
+        title={detail.title}
         // 不给 allow-same-origin：origin 变 opaque，脚本碰不到父页面与本机 API。
         sandbox="allow-scripts"
         referrerPolicy="no-referrer"

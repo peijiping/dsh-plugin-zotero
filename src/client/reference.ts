@@ -37,6 +37,21 @@ import type { ShotMeta } from './viewer/shot/types'
  */
 export const REF_SOURCE = 'zotero'
 
+/**
+ * 模型文本里引用块的起止标记。
+ *
+ * codec 展开出来的是一大段引用，会话历史读到的是这份文本；要让历史也收成胶囊，
+ * 就必须有稳定的块边界——摘录 / 笔记的正文可以是任意文本，只靠行首格式猜边界
+ * 会把用户自己写的话也吞进胶囊。标签对模型无歧义，只多占一行。
+ */
+export const CITATION_OPEN = '<zotero-ref>'
+export const CITATION_CLOSE = '</zotero-ref>'
+
+/** 把引用文本包成模型文本里的一个带边界的块（见 {@link CITATION_OPEN}）。 */
+export function wrapCitation(text: string): string {
+  return `${CITATION_OPEN}\n${text}\n${CITATION_CLOSE}\n`
+}
+
 const ITEM_PREFIX = 'item:'
 const COLLECTION_PREFIX = 'col:'
 const NOTE_PREFIX = 'note:'
@@ -148,7 +163,7 @@ export function createZoteroSource(t: Translate): ZoteroTriggerSource {
     onPick: () => undefined,
     codec: {
       clipboardText: (ref) => `@${ref}`,
-      serialize: (ref, signal) => citationForRef(t, ref, signal),
+      serialize: async (ref, signal) => wrapCitation(await citationForRef(t, ref, signal)),
     },
   }
 }

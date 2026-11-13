@@ -122,8 +122,12 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   const handleCaptureChange = useCallback((): void => {
     bumpCapture((value) => value + 1)
   }, [])
-  /** 悬浮按钮行的宽度驱动工具条 paddingLeft；42 = 行 left(34) + 右侧留白(8)。 */
-  const [topbarPad, setTopbarPad] = useState(158)
+  /**
+   * 悬浮按钮行的宽度驱动工具条 paddingLeft；42 = 行 left(34) + 右侧留白(8)。
+   * 初值与 `barStyle` 的 CSS 兜底一致（截图按钮改成文字后的行宽），ResizeObserver
+   * 量完真实宽度会立刻覆盖，避免首帧标题被按钮压住。
+   */
+  const [topbarPad, setTopbarPad] = useState(224)
   const handleRowWidth = useCallback((width: number): void => {
     setTopbarPad(Math.ceil(width) + 42)
   }, [])

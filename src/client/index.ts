@@ -16,6 +16,12 @@
 import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
 import { GuideIcon } from './GuideIcon'
+import {
+  createHistoryRefNode,
+  HISTORY_REF_NODE,
+  zoteroHistoryRule,
+  type UiConversationFace,
+} from './historyRef'
 import type { InputActions } from './inline'
 import { ensureItemTitle, rememberItemTitle, useItemTitle } from './itemTitles'
 import { dicts, NS, type Translate } from './locales'
@@ -108,6 +114,14 @@ interface ClientContext {
    * PENDING、apply 静默不执行（第 0 步 Spike 实测 apply=false / click=true）。
    */
   get?(name: string): unknown
+  /**
+   * 回调式 inject：等服务就绪后再执行，不会让插件 fiber 卡在 PENDING
+   * （与数组式 inject 的区别见上面的注释）。
+   */
+  inject(
+    deps: string[],
+    callback: (scope: ClientContext & { uiConversation: UiConversationFace }) => void,
+  ): unknown
 }
 
 /** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
@@ -180,6 +194,25 @@ export function apply(ctx: ClientContext): void {
     () => ctx.inputTriggers.registerSource(createZoteroSource(t)),
     'dsh-plugin-zotero: reference codec',
   )
+
+  // 会话历史里的引用胶囊：codec 在展开文本外留了 `<zotero-ref>` 边界（见
+  // reference.ts），这里认领成胶囊节点，点开才显示完整引用。uiConversation 由
+  // ui-conversation 包提供，用回调式 inject 等它就绪。
+  ctx.inject(['uiConversation'], (scope) => {
+    scope.effect(
+      () => scope.uiConversation.userText.register(zoteroHistoryRule),
+      'dsh-plugin-zotero: history rule',
+    )
+    const RefBody = createHistoryRefNode(t)
+    scope.effect(
+      () => scope.slots.inject('conversation.user.text.node', () =>
+        scope.slots.register(
+          { name: 'conversation.user.text.node', key: HISTORY_REF_NODE, priority: 100 },
+          RefBody as ComponentType<never>,
+        )),
+      'dsh-plugin-zotero: history ref node',
+    )
+  })
 
   // 正文：把 t 闭包进来，并把槽位透传的会话级标准 prop（`inputActions` /
   // `sessionId`）交给面板；两者缺失都表示面板不在会话上下文。

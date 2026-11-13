@@ -186,7 +186,8 @@ export function DocumentView({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={barStyle}>
-        <span style={titleStyle} title={source?.title ?? detail.title}>{source?.title ?? detail.title}</span>
+        {/* 标题恒为当前文献：网页快照这类附件的 title 是「Snapshot」，不该盖掉文献名。 */}
+        <span style={titleStyle} title={detail.title}>{detail.title}</span>
         {renderer.capabilities.pageNavigation && page.total > 0 && (
           <PageField
             current={page.current}
@@ -288,9 +289,10 @@ export function DocumentView({
  * 左侧留出左上角悬浮按钮行的位置，标题居中显示在剩下这段里。
  *
  * 悬浮按钮盖在工具条上（见 `OutlinePanel` / `InfoPanel`）：目录固定 `left:8`，
- * 后面的「文献信息 / 加入对话 / 截图」是一行 flex，宽度随语言与文案变化，所以
- * `paddingLeft` 改读 CSS 变量 `--dsh-zp-topbar-pad`，由 `ItemDetail` 量完行宽后写入；
- * 变量缺失时用 158px 兜底（原 132px + 一枚 22px 按钮 + 4px 间隔）。
+ * 后面的「文献信息 / 加入对话 / 截图加入对话」是一行 flex，宽度随语言与文案变化，
+ * 所以 `paddingLeft` 改读 CSS 变量 `--dsh-zp-topbar-pad`，由 `ItemDetail` 量完行宽后写入；
+ * 变量缺失时用 224px 兜底（i 22 + 「加入对话」约 64 + 「截图加入对话」约 87 +
+ * 两处间隔 8 + 行的 left 34 + 右侧留白 8）。
  */
 const barStyle = {
   display: 'flex',
@@ -298,7 +300,7 @@ const barStyle = {
   gap: 4,
   flexShrink: 0,
   height: 30,
-  padding: '0 8px 0 var(--dsh-zp-topbar-pad, 158px)',
+  padding: '0 8px 0 var(--dsh-zp-topbar-pad, 224px)',
   borderBottom: '1px solid rgba(127,127,127,0.2)',
   background: 'transparent',
 } as const
