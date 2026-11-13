@@ -30,6 +30,13 @@ const LOADER_CLOSE = 'return module.exports;\n} });'
 export default defineConfig({
   entry: { client: 'src/client/index.ts' },
   outDir: 'client',
+  // 别开默认的 clean:true：client/ 里除了 client.js 还有两个**运行期**资产
+  // （pdfjs/ 的 worker / cmap / 标准字体、snapshot/runtime.js 桥接脚本），它们由
+  // build:client 后续的 copy 脚本生成，不在 tsdown 的产物里。clean:true 会先清空
+  // 整个 outDir —— 只跑一次 `tsdown` 做热更新就会把资产删掉，于是 PDF 文字全白
+  // 只剩标注色块、网页快照高亮失效。关掉后 copy-pdf-assets 仍会先 rm 再 cp、
+  // copy-snapshot-runtime 覆盖写，完整构建不会残留旧文件。
+  clean: false,
   format: 'cjs',
   platform: 'browser',
   dts: false,

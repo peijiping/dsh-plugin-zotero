@@ -12,12 +12,13 @@ import type { Translate } from '../../locales'
 import { showToast } from '../../paneStore'
 import { composeShot } from './composer'
 import { createDomAdapter } from './adapters/dom'
-import { StaleBridgeError } from './adapters/iframe'
+import { BridgeUnavailableError } from './adapters/iframe'
 import { createPdfAdapter } from './adapters/pdf'
 import {
   MIN_SELECTION_SIZE,
   type CaptureAdapter,
   type CaptureFrame,
+  type CaptureUnavailable,
   type CaptureKind,
   type ClientRect,
   type ShotMeta,
@@ -60,6 +61,18 @@ function adapterFor(kind: CaptureKind): CaptureAdapter | null {
 /** 内置适配器优先，其次才是渲染器注册进来的那个（目前只有网页快照）。 */
 function resolveAdapter(deps: ShotControllerDeps): CaptureAdapter | null {
   return adapterFor(deps.kind) ?? deps.getAdapter?.() ?? null
+}
+
+/**
+ * 桥接脚本不可用时该说什么。三种原因的修法不同（见 `types.ts`），特别是
+ * 「脚本没注入」只需刷新页面，别再误导用户去重启 DSH。
+ */
+function bridgeReasonKey(reason: CaptureUnavailable): string {
+  switch (reason) {
+    case 'bridge-missing': return 'shot.snapshotBridgeMissing'
+    case 'stale': return 'shot.snapshotStale'
+    default: return 'shot.snapshotNotReady'
+  }
 }
 
 /** 各失败态对应的用户提示；成功沿用项目统一的 `toast.inserted`。 */
@@ -135,9 +148,9 @@ export function useShotController(deps: ShotControllerDeps): ShotController {
         setSelection(null)
         setPhase('frozen')
       } catch (error) {
-        // 桥接脚本过旧是「宿主没重启」而不是采集失败，得说清怎么修。
+        // 桥接不可用不是采集失败：按原因告诉用户该刷新、重建还是重启 DSH。
         showToast(depsRef.current.t(
-          error instanceof StaleBridgeError ? 'shot.snapshotStale' : 'shot.captureFailed',
+          error instanceof BridgeUnavailableError ? bridgeReasonKey(error.reason) : 'shot.captureFailed',
         ))
         cancel()
       } finally {
@@ -178,10 +191,11 @@ export function useShotController(deps: ShotControllerDeps): ShotController {
 
   /** 按钮可用性：内置适配器恒可用；快照要等桥接脚本就绪且版本够新。 */
   const resolved = resolveAdapter(deps)
-  const available = resolved !== null && (resolved.available?.() ?? true)
-  const unavailableReason = deps.kind === 'iframe'
-    ? deps.t('shot.snapshotNotReady')
-    : deps.t('shot.unsupported')
+  const unavailable = resolved?.unavailable?.() ?? null
+  const available = resolved !== null && unavailable === null
+  const unavailableReason = unavailable !== null
+    ? deps.t(bridgeReasonKey(unavailable))
+    : deps.t(deps.kind === 'iframe' ? 'shot.snapshotNotReady' : 'shot.unsupported')
 
   return {
     phase,

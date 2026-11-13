@@ -58,6 +58,17 @@ export interface CaptureFrame {
 export type CaptureKind = 'pdf' | 'dom' | 'iframe' | 'none'
 
 /**
+ * 截图此刻不可用的原因。三种情形的修法完全不同，别再一律提示「重启 DSH」：
+ *
+ * - `not-ready`：桥接脚本还没报到（刚打开快照 / 正在重新加载），等一下即可；
+ * - `bridge-missing`：脚本压根没注入（客户端构建产物缺失，或快照过大跳过了注入）。
+ *   Host 每次请求读盘、不缓存脚本，补完产物**刷新页面**就好，重启 DSH 没用；
+ * - `stale`：脚本确实跑起来了，但版本低于 `SNAPSHOT_BRIDGE_VERSION`，
+ *   这才是宿主拿着旧脚本、需要重启 DSH 的情形。
+ */
+export type CaptureUnavailable = 'not-ready' | 'bridge-missing' | 'stale'
+
+/**
  * 分类型采集适配器。
  *
  * PDF / 纯文本由 `shot/` 自己按正文容器现做；网页快照的那份由 `SnapshotViewer`
@@ -67,12 +78,12 @@ export type CaptureKind = 'pdf' | 'dom' | 'iframe' | 'none'
 export interface CaptureAdapter {
   capture(root: HTMLElement, box: DOMRectReadOnly): Promise<CaptureFrame | null>
   /**
-   * 此刻能否采集。缺省视为可以。
+   * 此刻不可用的**具体原因**；返回 `null` 或方法缺省表示可以采集。
    *
-   * 快照用它表达「iframe 里跑的是旧桥接脚本」：`ready` 还没到、或版本低于
-   * `SNAPSHOT_BRIDGE_VERSION` 时按钮置灰并说明原因，比点下去弹一个失败提示好。
+   * 快照用它把「还没加载完 / 脚本没注入 / 脚本版本过旧」分开：按钮置灰并按原因
+   * 显示 title，比点下去弹一个笼统的失败提示好。
    */
-  available?(): boolean
+  unavailable?(): CaptureUnavailable | null
 }
 
 /**

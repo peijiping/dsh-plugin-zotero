@@ -138,6 +138,9 @@ export function SnapshotViewer({
   const [reloadKey, setReloadKey] = useState(0)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [bridgeMissing, setBridgeMissing] = useState(false)
+  /** 采集适配器的 effect 只挂一次，用 ref 读最新值，不必为这个状态重建 adapter。 */
+  const bridgeMissingRef = useRef(false)
+  bridgeMissingRef.current = bridgeMissing
   const [missed, setMissed] = useState(0)
   const [selection, setSelection] = useState<SnapshotSelection | null>(null)
   const [marking, setMarking] = useState(false)
@@ -317,6 +320,12 @@ export function SnapshotViewer({
     return () => window.clearTimeout(timer)
   }, [reloadKey])
 
+  // 「脚本没起来」这个状态翻转要让上层重算截图按钮的 title：从「还没加载完」
+  // 切到「构建产物缺失」，否则用户看到的仍是旧提示，容易被误导去重启 DSH。
+  useEffect(() => {
+    onCaptureChangeRef.current?.()
+  }, [bridgeMissing])
+
   // 卡片开着时点别处 / 按 Esc 就收起，与 PDF 卡片同一套（见 `dismiss.ts`）。
   useDismiss(card !== null, cardRef, () => setCard(null))
 
@@ -330,6 +339,7 @@ export function SnapshotViewer({
     if (captureRef === undefined) return
     captureRef.current = createIframeAdapter({
       bridgeVersion: () => bridgeVersionRef.current,
+      bridgeMissing: () => bridgeMissingRef.current,
       request: requestCapture,
       frame: () => frameRef.current,
     })

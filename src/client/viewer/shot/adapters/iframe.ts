@@ -18,21 +18,26 @@
 
 import { toBlob } from 'html-to-image'
 
-import type { SnapshotCapturePayload } from '../../snapshotProtocol'
+import { SNAPSHOT_BRIDGE_VERSION, type SnapshotCapturePayload } from '../../snapshotProtocol'
 import { IMAGE_PLACEHOLDER } from './dom'
-import type { CaptureAdapter, CaptureFrame } from '../types'
+import type { CaptureAdapter, CaptureFrame, CaptureUnavailable } from '../types'
 
-/** 桥接脚本版本低于这个值时，说明宿主加载的还是旧脚本（构建产物没更新）。 */
-export class StaleBridgeError extends Error {
-  constructor() {
-    super('snapshot bridge is stale')
-    this.name = 'StaleBridgeError'
+/**
+ * 桥接脚本不可用。`reason` 决定用户看到哪条提示 —— 尤其要区分「脚本没注入」
+ * （补构建产物 + 刷新页面即可）与「脚本版本过旧」（才需要重启 DSH）。
+ */
+export class BridgeUnavailableError extends Error {
+  constructor(readonly reason: CaptureUnavailable) {
+    super(`snapshot bridge unavailable: ${reason}`)
+    this.name = 'BridgeUnavailableError'
   }
 }
 
 export interface IframeAdapterDeps {
   /** 当前 iframe 里桥接脚本的版本；`0` 表示还没收到 `ready`。 */
   bridgeVersion(): number
+  /** 文档已加载但始终没收到 `ready`：桥接脚本没注入（产物缺失或快照过大）。 */
+  bridgeMissing(): boolean
   /** 发 `capture` 并等结果；超时或失败返回 `null`。 */
   request(): Promise<SnapshotCapturePayload | null>
   frame(): HTMLIFrameElement | null
@@ -485,9 +490,19 @@ async function rasterize(
 }
 
 export function createIframeAdapter(deps: IframeAdapterDeps): CaptureAdapter {
+  /** 可用性与抛错共用这一份判定，避免按钮 title 和失败提示说两套话。 */
+  function state(): CaptureUnavailable | null {
+    if (deps.bridgeMissing()) return 'bridge-missing'
+    const version = deps.bridgeVersion()
+    if (version === 0) return 'not-ready'
+    return version < SNAPSHOT_BRIDGE_VERSION ? 'stale' : null
+  }
+
   return {
+    unavailable: state,
     async capture(root, box): Promise<CaptureFrame | null> {
-      if (deps.bridgeVersion() < 4) throw new StaleBridgeError()
+      const reason = state()
+      if (reason !== null) throw new BridgeUnavailableError(reason)
       const payload = await deps.request()
       if (payload === null) return null
 
