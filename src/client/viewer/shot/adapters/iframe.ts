@@ -5,8 +5,8 @@
  * 送进去。所以分两步：
  *   1. 桥接脚本把整页序列化成自包含 HTML + CSS，连同滚动位置、文字盒、标题盒
  *      一起回传（见 `src/snapshot/runtime.js` 的 `capturePage`）；
- *   2. 父页面在 (0,0) 的全屏层里重建这份 DOM，用与纯文本路径同一个
- *      html-to-image 出图。
+ *   2. 父页面把这份 DOM 重建在一个**屏幕外、透明**的层里（样式已限定在该层内），
+ *      用与纯文本路径同一个 html-to-image 出图。
  *
  * 为什么不让 iframe 自己 `toDataURL`：opaque origin 下 `blob:` 图像会 taint
  * canvas（实测抛 `SecurityError`），而 `data:` SVG 那条路要在桥接脚本里再装一份
@@ -109,11 +109,108 @@ function backgroundColorOf(payload: SnapshotCapturePayload): string {
 }
 
 /**
+ * 重建层的定位：**外壳**移出屏幕，被截元素自己始终待在 `(0,0)`。
+ *
+ * 有个两难：容器不能留在视口里（栅格化要几十毫秒，用户会看见整页内容闪一下），
+ * 也不能把偏移写在容器自己身上 —— html-to-image 会把容器的计算样式（含
+ * `left:-10000px`）一起抄进 foreignObject，内容整块跑出画布，导出的是一张纯白图；
+ * 用 `options.style` 事后覆盖也救不回来（实测仍是全白）。
+ *
+ * 所以拆两层：外壳负责挪走和透明，被截元素的计算样式里 `position:relative` +
+ * `left:auto`，没有任何偏移可抄。祖先的位移不会进 inline style。
+ *
+ * 不用 `visibility:hidden`：它是可继承属性，每个子节点算出来都是 `hidden`，会被
+ * 逐个写成 inline style，比 opacity 更难收拾。`opacity` 只污染外壳自己。
+ */
+const OFFSCREEN_LEFT = -10000
+
+/** 重建层根节点的标记属性，样式规则全部以它为前缀。 */
+const SCOPE = '[data-dsh-zp-shot-root]'
+
+/** 顶层逗号切分：`:is(a, b)` 里的逗号不算。 */
+function splitSelectors(text: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '(' || char === '[') depth += 1
+    else if (char === ')' || char === ']') depth = Math.max(0, depth - 1)
+    else if (char === ',' && depth === 0) {
+      parts.push(text.slice(start, index))
+      start = index + 1
+    }
+  }
+  parts.push(text.slice(start))
+  return parts
+}
+
+/** 单条选择器限定到重建层内；返回空串表示这条规则丢弃。 */
+function scopeSelector(selector: string): string {
+  const trimmed = selector.trim()
+  if (trimmed === '') return ''
+  // `html` / `body` / `:root` 就是重建层自己，body 的排版另由 bodyStyle 补。
+  if (/^(?:html|body|:root)$/u.test(trimmed)) return SCOPE
+  const head = /^(?:html|body|:root)(?![\w-])/u.exec(trimmed)
+  if (head !== null) {
+    const rest = trimmed.slice(head[0].length).trim()
+    if (rest === '') return SCOPE
+    return `${SCOPE} ${rest}`
+  }
+  return `${SCOPE} ${trimmed}`
+}
+
+/**
+ * 把快照样式表限定在重建层内。
+ *
+ * 注入的 `<style>` 是**文档级作用域**：快照页面里的 `body {}`、`p {}`、`* {}`
+ * 会在采集那几十毫秒里改掉宿主自己的排版（然后随节点移除恢复），用户看到的就是
+ * 「点一下截图，界面抖一下」。所以每条规则都要挂前缀。
+ *
+ * `@import` 直接丢弃：它会在宿主文档里外发请求。
+ */
+function scopeCss(css: string): string {
+  let sheet: CSSStyleSheet
+  try {
+    sheet = new CSSStyleSheet()
+    sheet.replaceSync(css)
+  } catch {
+    return ''
+  }
+
+  const walk = (rules: CSSRuleList): string => {
+    const chunks: string[] = []
+    for (const rule of Array.from(rules)) {
+      if (rule instanceof CSSStyleRule) {
+        const scoped = splitSelectors(rule.selectorText)
+          .map(scopeSelector)
+          .filter((item) => item !== '')
+        if (scoped.length === 0) continue
+        chunks.push(`${scoped.join(',')}{${rule.style.cssText}}`)
+      } else if (rule instanceof CSSMediaRule) {
+        chunks.push(`@media ${rule.conditionText}{${walk(rule.cssRules)}}`)
+      } else if (rule instanceof CSSSupportsRule) {
+        chunks.push(`@supports ${rule.conditionText}{${walk(rule.cssRules)}}`)
+      } else if (
+        rule instanceof CSSKeyframesRule
+        || rule instanceof CSSFontFaceRule
+        || rule instanceof CSSPageRule
+      ) {
+        // 名字型规则对选择器无关，原样保留（否则动画与自定义字体会失效）。
+        chunks.push(rule.cssText)
+      }
+    }
+    return chunks.join('')
+  }
+
+  return walk(sheet.cssRules)
+}
+
+/**
  * 把回传的 DOM 重建成一张位图。
  *
- * 容器放在 `position:fixed; left:0; top:0`：不能挪到屏幕外（`left:-20000px`），
- * html-to-image 会把这个偏移一起复制进 foreignObject，内容整块跑出画布，导出的
- * 是一张纯白图。层级压到 1，交给 `ItemDetail` 里 zIndex 23 的「正在采集」层盖住。
+ * 真身全程不可见，`ItemDetail` 里 zIndex 23 的「正在采集」层只负责告诉用户
+ * 在干活。
  */
 async function rasterize(
   payload: SnapshotCapturePayload,
@@ -121,22 +218,32 @@ async function rasterize(
   height: number,
   pixelRatio: number,
 ): Promise<Blob | null> {
-  const host = document.createElement('div')
-  host.setAttribute('data-dsh-zp-shot-stage', '')
-  host.style.cssText = [
+  const outer = document.createElement('div')
+  outer.setAttribute('data-dsh-zp-shot-stage', '')
+  outer.style.cssText = [
     'position:fixed',
-    'left:0',
+    `left:${OFFSCREEN_LEFT}px`,
     'top:0',
     'z-index:1',
     `width:${width}px`,
     `height:${height}px`,
     'overflow:hidden',
-    `background:${backgroundColorOf(payload)}`,
+    'opacity:0',
     'pointer-events:none',
   ].join(';')
 
+  const host = document.createElement('div')
+  host.setAttribute('data-dsh-zp-shot-root', '')
+  host.style.cssText = [
+    'position:relative',
+    'width:100%',
+    'height:100%',
+    'overflow:hidden',
+    `background:${backgroundColorOf(payload)}`,
+  ].join(';')
+
   const style = document.createElement('style')
-  style.textContent = payload.css
+  style.textContent = scopeCss(payload.css)
   host.appendChild(style)
 
   /** body 的替身：字体与内边距套在这一层，和 iframe 里的 body 一致。 */
@@ -162,8 +269,9 @@ async function rasterize(
   sanitize(template.content)
   stage.appendChild(template.content)
   host.appendChild(stage)
+  outer.appendChild(host)
 
-  document.body.appendChild(host)
+  document.body.appendChild(outer)
   try {
     return await toBlob(host, {
       width,
@@ -178,7 +286,7 @@ async function rasterize(
       filter: (node) => !(node instanceof HTMLScriptElement),
     })
   } finally {
-    host.remove()
+    outer.remove()
   }
 }
 
