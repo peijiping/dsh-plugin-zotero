@@ -307,16 +307,14 @@ client/client.js          # tsdown 产物（勿手改）
 lib/                      # tsc 产物（勿手改）
 cordis.patch.yml          # bundle patch 层：把本插件插入 profile 层栈
 docs/                     # 使用说明、Zotero API / MCP 参考、发布与 node 学习笔记
-tstest/                   # 独立测试沙盒（commonjs + tsx，与主包隔离）
-plugin_helloword/         # 官方插件示例（学习用，勿放正式代码）
 .trae/documents/          # 设计与实施方案（本地，未纳入版本控制）
 ```
 
-主包与子项目分别有各自的 `package.json`；测试沙盒 `tstest/` 环境独立，其依赖不得引入主包。
+依赖统一由根目录的 `package.json` 管理。
 
 ## 环境要求
 
-- Node + **pnpm**（主包与 `tstest/` 统一用 pnpm，勿与 npm / yarn 混用）。
+- Node + **pnpm**（统一用 pnpm，勿与 npm / yarn 混用）。
 - **TypeScript ^5.9**：`tsdown@0.22.0` 的 peer 依赖不支持 TypeScript 7.x。
 - Zotero 桌面版已运行，且已开启本地 API（见[第 3 步](#第-3-步打开-zotero-的本机通信开关)）。
 - **模型侧必需**：Zotero 已安装集成 MCP 插件（插件市场中的 **Zotero MCP Plugin** / `zotero-integrated-mcp`），监听 23120——若用其他 MCP 插件或端口不同，需在设置页改「集成 MCP 地址」（`mcpUrl`）；并在 MCP 插件设置中**开启「允许写操作」**。只装插件不开写操作时，模型侧读类工具照常，但让模型新建 / 修改分类会直接报错（插件返回「写操作已禁用」）。详见[模型侧 MCP 与权限边界](#模型侧-mcp-与权限边界)。
