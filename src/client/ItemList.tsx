@@ -162,6 +162,8 @@ const itemMetaAttachStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 2,
   flex: '0 0 auto',
+  // 作者缺失时没有可伸展元素把附件数顶到右边，这里显式靠右对齐。
+  marginLeft: 'auto',
   opacity: 0.85,
 }
 
