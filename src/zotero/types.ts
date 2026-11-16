@@ -7,10 +7,11 @@
 /**
  * 条目列表范围。
  *
- * `library` 为真实分类/全库（默认），其余三项是 Zotero 左侧栏的「虚拟分类」
- * （我的出版物 / 未分类条目 / 回收站），由对应端点直接支撑或推导得出。
+ * `library` 为真实分类/全库（默认），其余是左侧栏的「虚拟分类」：
+ * 我的出版物 / 未分类条目 / 回收站由 Zotero 端点直接支撑或推导；
+ * `recent` 是**本插件自己的**最近阅读（数据来自阅读进度记录，Zotero 本地 API 不提供）。
  */
-export type ZoteroItemScope = 'library' | 'publications' | 'unfiled' | 'trash'
+export type ZoteroItemScope = 'library' | 'publications' | 'unfiled' | 'trash' | 'recent'
 
 /** 分类节点（扁平，Client 依 parentKey 建树）。 */
 export interface ZoteroCollection {
@@ -312,6 +313,8 @@ export interface ZoteroHealth {
 export interface ZoteroTree {
   collections: ZoteroCollection[]
   libraryName: string
+  /** 「最近阅读」当前可列出的条数（上限见 `read-position.RECENT_LIMIT`）。 */
+  recentCount: number
 }
 
 /** 条目列表数据。 */

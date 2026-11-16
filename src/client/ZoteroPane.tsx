@@ -105,6 +105,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     tagsLoading,
     tagsError,
     treeQuery,
+    recentCount,
     tagQuery,
     selectedTags,
     tagMode,
@@ -206,6 +207,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
                 collections={collections}
                 treeQuery={treeQuery}
                 selectedCollectionKey={selectedCollection?.key ?? null}
+                recentCount={recentCount}
                 onSelectCollection={selectCollection}
                 onInsertCollection={insertion.insertCollection}
               />
@@ -219,7 +221,9 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             tagQuery={tagQuery}
             selectedTags={selectedTags}
             tagMode={tagMode}
-            scoped={selectedCollection !== null && selectedCollection.key !== TREE_ROOT_ID}
+            scoped={selectedCollection !== null
+              && selectedCollection.key !== TREE_ROOT_ID
+              && selectedCollection.scope !== 'recent'}
             tagUsage={tagUsage}
             tagUsageLoading={tagUsageLoading}
             onTagQuery={setTagQuery}

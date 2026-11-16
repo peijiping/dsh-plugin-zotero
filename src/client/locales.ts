@@ -91,6 +91,7 @@ const zh: Record<string, string> = {
   'type.annotation': '标注',
 
   'tree.library': '我的文库',
+  'tree.recent': '最近阅读',
   'tree.publications': '我的出版物',
   'tree.unfiled': '未分类条目',
   'tree.trash': '回收站',
@@ -514,6 +515,7 @@ const en: Record<string, string> = {
   'type.annotation': 'Annotation',
 
   'tree.library': 'My Library',
+  'tree.recent': 'Recently Read',
   'tree.publications': 'My Publications',
   'tree.unfiled': 'Unfiled Items',
   'tree.trash': 'Trash',

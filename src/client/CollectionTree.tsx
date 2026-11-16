@@ -20,7 +20,7 @@ import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ZoteroCollection, ZoteroItemScope } from '../zotero/types'
 import type { Translate } from './locales'
 import { toggleTreeNode, TREE_ROOT_ID, usePaneState } from './paneStore'
-import { TREE_BLUE, TREE_GREEN, TREE_ORANGE, TREE_RED } from './styles'
+import { TREE_BLUE, TREE_GRAY, TREE_GREEN, TREE_ORANGE, TREE_RED } from './styles'
 
 /** 每层缩进量（px）。 */
 const INDENT = 14
@@ -37,6 +37,19 @@ interface VirtualNode {
   scope: ZoteroItemScope
   labelKey: string
   icon: string
+}
+
+/**
+ * 「最近阅读」：本插件自己维护的虚拟分类。
+ *
+ * Zotero 的最近阅读数据不在本地 API 里，这里改为按插件的阅读进度记录生成；
+ * 位置与 Zotero 一致 —— 紧跟在「我的文库」下面、真实分类之前。
+ */
+const RECENT_NODE: VirtualNode = {
+  key: '@recent',
+  scope: 'recent',
+  labelKey: 'tree.recent',
+  icon: 'RECENT',
 }
 
 const VIRTUAL_NODES: readonly VirtualNode[] = [
@@ -56,6 +69,8 @@ interface TreeCtx {
   /** 当前筛选词（已小写）；空串表示不筛选。 */
   filter: string
   selectedCollectionKey: string | null
+  /** 「最近阅读」可列出的条数（只给这一个虚拟分类显示计数）。 */
+  recentCount: number
   toggle(nodeId: string): void
   select(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
@@ -68,6 +83,8 @@ interface Props {
   /** 分类树筛选词（只筛目录名）。 */
   treeQuery: string
   selectedCollectionKey: string | null
+  /** 「最近阅读」可列出的条数。 */
+  recentCount: number
   onSelectCollection(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
 }
@@ -131,8 +148,15 @@ const TRASH_ICON: TreeIcon = {
   color: TREE_RED,
 }
 
+/** 灰色时钟：最近阅读。 */
+const RECENT_ICON: TreeIcon = {
+  path: 'M8 2.4a5.6 5.6 0 1 1 0 11.2A5.6 5.6 0 0 1 8 2.4M8 5.1V8l2.2 1.4',
+  color: TREE_GRAY,
+}
+
 /** 虚拟分类的图标（键与 {@link VIRTUAL_NODES.icon} 对应）。 */
 const VIRTUAL_ICON: Record<string, TreeIcon> = {
+  RECENT: RECENT_ICON,
   BOOK: PUBLICATIONS_ICON,
   UNFILED: UNFILED_ICON,
   TRASH: TRASH_ICON,
@@ -311,6 +335,8 @@ function virtualCollection(node: VirtualNode, t: Translate): ZoteroCollection {
 function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; depth: number }): ReactElement {
   const collection = virtualCollection(node, ctx.t)
   const selected = ctx.selectedCollectionKey === collection.key
+  /** 只有「最近阅读」显示计数：其余虚拟分类的条目数要扫全库，代价不值得。 */
+  const count = node.scope === 'recent' ? ctx.recentCount : undefined
   return (
     <div
       onClick={() => ctx.select(collection)}
@@ -319,6 +345,7 @@ function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; de
       <span style={iconBox} />
       <span style={iconBox}>{glyph(VIRTUAL_ICON[node.icon] ?? FOLDER_ICON)}</span>
       <span style={titleStyle} title={collection.name}>{collection.name}</span>
+      {count !== undefined && <span style={countStyle}>{count}</span>}
     </div>
   )
 }
@@ -332,6 +359,7 @@ export function CollectionTree(props: Props): ReactElement {
     collections,
     treeQuery,
     selectedCollectionKey,
+    recentCount,
     onSelectCollection,
     onInsertCollection,
   } = props
@@ -345,13 +373,15 @@ export function CollectionTree(props: Props): ReactElement {
   const virtuals = filtering
     ? VIRTUAL_NODES.filter((node) => nameMatches(t(node.labelKey), filter))
     : VIRTUAL_NODES
-  const matched = forest.length > 0 || virtuals.length > 0
+  const recentVisible = !filtering || nameMatches(t(RECENT_NODE.labelKey), filter)
+  const matched = forest.length > 0 || virtuals.length > 0 || recentVisible
 
   const ctx: TreeCtx = {
     t,
     expanded,
     filter,
     selectedCollectionKey,
+    recentCount,
     toggle: toggleTreeNode,
     select: onSelectCollection,
     onInsertCollection,
@@ -375,6 +405,9 @@ export function CollectionTree(props: Props): ReactElement {
       </div>
       {rootOpen && (
         <>
+          {recentVisible && (
+            <VirtualRows key={RECENT_NODE.key} ctx={ctx} node={RECENT_NODE} depth={1} />
+          )}
           {forest.map((node) => (
             <CollectionRows key={node.collection.key} ctx={ctx} node={node} depth={1} />
           ))}

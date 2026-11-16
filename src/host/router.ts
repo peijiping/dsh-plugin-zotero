@@ -20,7 +20,7 @@ import { ZoteroError } from '../zotero/client.js'
 import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
 import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
-import { loadPosition, savePosition } from '../zotero/read-position.js'
+import { listRecent, loadPosition, RECENT_LIMIT, savePosition } from '../zotero/read-position.js'
 import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type { TranslateInput, TranslateResult } from './translate.js'
 import type {
@@ -220,16 +220,17 @@ async function handleAuthorize(res: ServerResponse): Promise<void> {
 }
 
 async function handleTree(res: ServerResponse): Promise<void> {
-  const [collections, libraryName] = await Promise.all([
+  const [collections, libraryName, recent] = await Promise.all([
     zotero.listCollections(),
     zotero.getLibraryName().catch(() => '我的文库'),
+    listRecent().catch(() => []),
   ])
-  const data: ZoteroTree = { collections, libraryName }
+  const data: ZoteroTree = { collections, libraryName, recentCount: recent.length }
   ok(res, data)
 }
 
 /** 合法的条目列表范围（虚拟分类）。 */
-const SCOPES = ['library', 'publications', 'unfiled', 'trash'] as const
+const SCOPES = ['library', 'publications', 'unfiled', 'trash', 'recent'] as const
 
 function isScope(value: string): value is ZoteroItemScope {
   return (SCOPES as readonly string[]).includes(value)
@@ -250,6 +251,20 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
   const sort = params.get('sort') === 'title' ? 'title' as const : undefined
   const limit = clampLimit(params.get('limit'))
   const offset = parseOffset(params.get('offset'))
+  if (scopeParam === 'recent') {
+    // Zotero 本地 API 不含「最近阅读」；这份名单完全来自本插件的阅读进度记录。
+    const result = await zotero.listRecentItems(await listRecent(RECENT_LIMIT), {
+      q,
+      tags,
+      tagMode,
+      sort,
+      direction: sortDirection,
+      limit,
+      offset,
+    })
+    ok(res, { total: result.total, items: result.items })
+    return
+  }
   const result = await zotero.listItems({
     scope: scopeParam === null ? undefined : scopeParam,
     collectionKey,

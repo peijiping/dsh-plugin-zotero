@@ -13,6 +13,9 @@
  * 所以这里只有一份数据：`<dsh 数据目录>/storages/dsh-plugin-zotero/read-positions.json`，
  * 按附件 key 记 0 基页号。面板自己读、自己写、自己续读。
  *
+ * 同一份记录也支撑左侧栏的「最近阅读」：按 `updatedAt` 倒序取前
+ * {@link RECENT_LIMIT} 篇即可，无需再单独维护一份「打开历史」。
+ *
  * 页号一律 **0 基**（与 Zotero 的 `pageIndex` 同约定，便于将来导出），
  * 进位到界面的 1 基换算只在 Client 的 `useReadPosition` 里做。
  */
@@ -46,6 +49,9 @@ interface StoredPosition {
  * 500 篇足够覆盖真实阅读史，文件也就几十 KB。
  */
 const MAX_ENTRIES = 500
+
+/** 「最近阅读」最多列出多少篇（按 `updatedAt` 倒序取头部）。 */
+export const RECENT_LIMIT = 50
 
 /** 进程内缓存：写请求很密（每次翻页都来），没必要反复读盘。 */
 let cache: Record<string, StoredPosition> | null = null
@@ -109,6 +115,20 @@ export async function loadPosition(key: string): Promise<ZoteroReadPosition | nu
   const all = await loadAll()
   const entry = all[key]
   return entry === undefined ? null : { key, pageIndex: entry.pageIndex, updatedAt: entry.updatedAt }
+}
+
+/**
+ * 「最近阅读」：按最后记录时间倒序取前 `limit` 篇。
+ *
+ * 只回附件 key 与时间；条目摘要（标题 / 作者 / 年份）由调用方再去 Zotero 换，
+ * 这样删掉的条目不会在列表里留下空壳，元数据也始终是库里的最新值。
+ */
+export async function listRecent(limit = RECENT_LIMIT): Promise<ZoteroReadPosition[]> {
+  const all = await loadAll()
+  return Object.entries(all)
+    .sort(([, a], [, b]) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, limit)
+    .map(([key, entry]) => ({ key, pageIndex: entry.pageIndex, updatedAt: entry.updatedAt }))
 }
 
 /** 记下「这个附件读到第几页」（0 基）。 */

@@ -20,6 +20,8 @@ export const TREE_GREEN = '#2f9e63'
 export const TREE_ORANGE = '#e0872f'
 export const TREE_RED = '#dc5a55'
 export const TREE_PURPLE = '#8a63e8'
+/** 中性灰：最近阅读的时钟图标（Zotero 左栏的时钟也是灰色）。 */
+export const TREE_GRAY = '#6f7a86'
 
 /** 标题的蓝→紫点缀。 */
 export const TITLE_BAR_GRADIENT = `linear-gradient(180deg, #4a86e8 0%, ${TREE_PURPLE} 100%)`

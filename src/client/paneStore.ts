@@ -40,7 +40,7 @@ const SORT_KEY = 'dsh-plugin-zotero.itemSort'
 const TREE_STATE_KEY = 'dsh-plugin-zotero.treeState'
 
 /** 合法的虚拟分类范围（存档里的 scope 不在其中就丢弃）。 */
-const KNOWN_SCOPES: readonly ZoteroItemScope[] = ['library', 'publications', 'unfiled', 'trash']
+const KNOWN_SCOPES: readonly ZoteroItemScope[] = ['library', 'publications', 'unfiled', 'trash', 'recent']
 
 /** 文库根节点的 id（只存在于客户端，不对应任何 Zotero 分类）。 */
 export const TREE_ROOT_ID = '__library__'
@@ -154,6 +154,8 @@ export interface PaneState {
   expanded: ReadonlySet<string>
   /** 左栏分类树的名称筛选词（纯客户端，只筛目录，不搜条目）。 */
   treeQuery: string
+  /** 「最近阅读」可列出的条数（由分类树接口下发，上限 50）。 */
+  recentCount: number
 
   /** 当前选择：文库根（key = TREE_ROOT_ID）/ 真实分类 / 虚拟分类。 */
   selectedCollection: ZoteroCollection | null
@@ -200,6 +202,7 @@ function initialState(): PaneState {
     loaded: false,
     expanded: new Set([TREE_ROOT_ID, ...saved.expanded]),
     treeQuery: '',
+    recentCount: 0,
     selectedCollection: saved.selected === null
       ? null
       : {
@@ -338,6 +341,7 @@ export function loadTree(force = false): Promise<void> {
         health: healthData,
         collections: tree.collections,
         libraryName: tree.libraryName,
+        recentCount: tree.recentCount,
         treeError: null,
         loaded: true,
         expanded,
@@ -588,7 +592,8 @@ function loadTagUsage(): void {
   if (usageAbort !== null) usageAbort.abort()
   usageAbort = null
   const collection = state.selectedCollection
-  if (collection === null || collection.key === TREE_ROOT_ID) {
+  // 「最近阅读」没有分类范围，标签面板退回全库标签。
+  if (collection === null || collection.key === TREE_ROOT_ID || collection.scope === 'recent') {
     patch({ tagUsage: null, tagUsageLoading: false })
     return
   }

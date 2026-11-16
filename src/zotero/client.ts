@@ -42,6 +42,7 @@ import type {
   ZoteroItemSummary,
   ZoteroNote,
   ZoteroNoteRaw,
+  ZoteroReadPosition,
   ZoteroTag,
   ZoteroTagRef,
   ZoteroTags,
@@ -730,6 +731,9 @@ export interface ListTagUsageOptions {
  * 按前若干页截断，超大目录可能漏掉靠后的标签（本地 API 没有按分类列标签的端点）。
  */
 export async function listTagUsage(options: ListTagUsageOptions): Promise<ZoteroTags> {
+  // 「最近阅读」没有可按分类扫描的端点，也没有必要：面板在选它时不请求标签用量。
+  if (options.scope === 'recent') return { total: 0, tags: [] }
+
   const search = options.q?.trim() ?? ''
   const counts = new Map<string, ZoteroTag>()
   const seenItems = new Set<string>()
@@ -923,6 +927,138 @@ export async function listItems(
 export async function getItemChildren(key: string): Promise<RawItem[]> {
   const { body } = await requestJson<RawItem[]>(`${libraryBase()}/items/${encode(key)}/children`)
   return Array.isArray(body) ? body : []
+}
+
+// ---- 最近阅读 ---------------------------------------------------------------
+
+/** 「最近阅读」列表的筛选 / 排序参数（口径与普通条目列表一致）。 */
+export interface RecentItemsOptions {
+  q?: string
+  tags?: readonly string[]
+  tagMode?: 'all' | 'any'
+  sort?: 'title'
+  direction?: 'asc' | 'desc'
+  limit: number
+  offset: number
+}
+
+/** `/items?itemKey=` 单批 key 数。 */
+const RECENT_BATCH = 20
+
+/**
+ * 单次请求的条数上限（本地 API 上限 100）。
+ *
+ * 留足余量：`itemKey` 过滤会把命中条目的**子条目**（附件 / 笔记）一起带出来，
+ * 批次太大时真正的 key 会被挤出这一页。
+ */
+const RECENT_PAGE = 100
+
+/**
+ * 按 key 批量取条目（附件与父条目共用）。
+ *
+ * 本地 API 的 `itemKey` 查询不只要的那些条目：命中条目的子条目也会一起返回。
+ * `itemType=-annotation` 先滤掉数量最多的标注；仍缺的 key 再逐条补取——通常是 0 条，
+ * 只有批次被页大小截断时才会走到。
+ */
+async function fetchItemsByKeys(keys: readonly string[]): Promise<RawItem[]> {
+  if (keys.length === 0) return []
+  const wanted = new Set(keys)
+  const found = new Map<string, RawItem>()
+  const collect = (raws: unknown): void => {
+    if (!Array.isArray(raws)) return
+    for (const raw of raws as RawItem[]) {
+      if (wanted.has(raw.key) && !found.has(raw.key)) found.set(raw.key, raw)
+    }
+  }
+  for (let index = 0; index < keys.length; index += RECENT_BATCH) {
+    const batch = keys.slice(index, index + RECENT_BATCH)
+    const { body } = await requestJson<RawItem[]>(
+      `${libraryBase()}/items?itemKey=${batch.map(encode).join(',')}`
+      + `&limit=${RECENT_PAGE}&itemType=-annotation`,
+    )
+    collect(body)
+  }
+  for (const key of keys) {
+    if (found.has(key)) continue
+    try {
+      const { body } = await requestJson<RawItem>(`${libraryBase()}/items/${encode(key)}`)
+      if (body !== null && typeof body === 'object' && body.key === key) found.set(key, body)
+    } catch {
+      // 条目已被删除：留给调用方跳过。
+    }
+  }
+  return keys
+    .map((key) => found.get(key))
+    .filter((raw): raw is RawItem => raw !== undefined)
+}
+
+/**
+ * 「最近阅读」：把本插件的阅读进度记录解析成条目摘要。
+ *
+ * 记录按**附件** key 存，所以先按附件找到父条目（同一篇文献被多份附件读到过时
+ * 只保留最近一次），再批量取父条目元数据。列表里的「最后阅读」用**本插件记录的
+ * 时间**，而不是 Zotero 的 `lastRead`——两边各读各的，排序口径不该混。
+ *
+ * 找不到的 key（条目已在 Zotero 里删除）直接跳过，不留空壳行。
+ */
+export async function listRecentItems(
+  positions: readonly ZoteroReadPosition[],
+  options: RecentItemsOptions,
+): Promise<{ total: number; items: ZoteroItemSummary[] }> {
+  if (positions.length === 0) return { total: 0, items: [] }
+
+  const attachments = await fetchItemsByKeys(positions.map((position) => position.key))
+  const attachmentByKey = new Map(attachments.map((raw) => [raw.key, raw] as const))
+
+  /** 按记录倒序去重后的条目 key 与阅读时间（Unix 秒）。 */
+  const itemKeys: string[] = []
+  const readAtByKey = new Map<string, number | null>()
+  for (const position of positions) {
+    const attachment = attachmentByKey.get(position.key)
+    if (attachment === undefined) continue
+    const parent = attachment.data?.parentItem
+    const itemKey = typeof parent === 'string' && parent !== '' ? parent : attachment.key
+    if (readAtByKey.has(itemKey)) continue
+    const time = Date.parse(position.updatedAt)
+    readAtByKey.set(itemKey, Number.isNaN(time) ? null : Math.floor(time / 1000))
+    itemKeys.push(itemKey)
+  }
+
+  // 顶层条目本身就是附件的，直接用自己的 JSON；其余去取父条目。
+  const itemByKey = new Map<string, RawItem>()
+  for (const key of itemKeys) {
+    const own = attachmentByKey.get(key)
+    if (own !== undefined) itemByKey.set(key, own)
+  }
+  const parentKeys = itemKeys.filter((key) => !itemByKey.has(key))
+  for (const raw of await fetchItemsByKeys(parentKeys)) itemByKey.set(raw.key, raw)
+
+  const search = (options.q ?? '').trim().toLowerCase()
+  const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
+  const rows: ZoteroItemSummary[] = []
+  for (const key of itemKeys) {
+    const raw = itemByKey.get(key)
+    if (raw === undefined) continue
+    const row = toSummary(raw, readAtByKey.get(key) ?? null)
+    if (
+      search !== ''
+      && !row.title.toLowerCase().includes(search)
+      && !row.creators.toLowerCase().includes(search)
+    ) continue
+    if (tags.length > 0) {
+      const names = new Set((raw.data?.tags ?? []).map((tag) => tag.tag?.trim() ?? ''))
+      const hit = options.tagMode === 'any'
+        ? tags.some((tag) => names.has(tag))
+        : tags.every((tag) => names.has(tag))
+      if (!hit) continue
+    }
+    rows.push(row)
+  }
+  if (options.sort === 'title') {
+    const sign = options.direction === 'desc' ? -1 : 1
+    rows.sort((a, b) => sign * a.title.localeCompare(b.title, 'zh'))
+  }
+  return { total: rows.length, items: rows.slice(options.offset, options.offset + options.limit) }
 }
 
 /**
