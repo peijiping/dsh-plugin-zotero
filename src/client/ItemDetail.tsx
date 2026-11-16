@@ -21,6 +21,7 @@ import { tpl, type Translate } from './locales'
 import { OutlinePanel } from './OutlinePanel'
 import { showToast } from './paneStore'
 import { shotWatermark } from './compose'
+import { bootstrapViewState } from './viewStateStore'
 import { DocumentView } from './viewer/DocumentView'
 import { useShotController } from './viewer/shot/controller'
 import { buildShotMeta } from './viewer/shot/metadata'
@@ -147,6 +148,12 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
 
   useEffect(() => () => {
     if (locateTimer.current !== null) window.clearTimeout(locateTimer.current)
+  }, [])
+
+  // 浮层几何 / 区块开合存在 Host 的 `view-state.json` 里：进阅读页时补一次拉取，
+  // 这样浮层打开的那一帧就是记住的摆法（首屏失败的话，下次切条目再试）。
+  useEffect(() => {
+    bootstrapViewState()
   }, [])
 
   const isNote = detail.itemType === 'note'
@@ -324,6 +331,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
       {outlineAvailable && (
         <OutlinePanel
           t={t}
+          itemKey={detail.key}
           items={outlineItems}
           sourceLabel={outlineSourceLabel}
           open={outlineOpen}

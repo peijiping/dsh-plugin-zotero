@@ -20,7 +20,7 @@ import { ZoteroError } from '../zotero/client.js'
 import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
 import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
-import { listRecent, loadPosition, RECENT_LIMIT, savePosition } from '../zotero/read-position.js'
+import { listRecent, loadPosition, loadViewState, RECENT_LIMIT, savePosition, saveViewState, type ViewStatePatch } from '../zotero/view-state.js'
 import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type { TranslateInput, TranslateResult } from './translate.js'
 import type {
@@ -36,6 +36,8 @@ import type {
   ZoteroItemScope,
   ZoteroItems,
   ZoteroNoteRaw,
+  ZoteroPanelPos,
+  ZoteroPanelSize,
   ZoteroTags,
   ZoteroTree,
   ZoteroWriteRef,
@@ -94,6 +96,7 @@ const WRITE_ACTIONS = new Set([
   'annotation-delete',
   'annotation-create',
   'read-position-save',
+  'view-state-save',
   // 不改 Zotero 数据，但会代表用户外发选中文本，同样要求「本插件的界面在操作」。
   'translate',
 ])
@@ -554,6 +557,108 @@ async function handleReadPositionSave(req: IncomingMessage, res: ServerResponse)
   ok(res, await savePosition(key, pageIndex))
 }
 
+// ---- 视图状态（信息浮层开合 + 浮层几何）-------------------------------------
+
+/** 视图状态写请求的 body 上限：几十条「位置 + 尺寸」，几 KB 就打住了。 */
+const VIEW_STATE_BODY_LIMIT = 32 * 1024
+
+/** 一次最多写这么多条浮层几何（正常一次只拖一个窗口）。 */
+const MAX_BOX_PATCHES = 20
+
+/** 开合表：只收布尔值，键名限短字母，免得被塞进任意垃圾。 */
+function optionalSections(raw: unknown): Record<string, boolean> | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new ZoteroError('bad_request', 'sections 必须是对象')
+  }
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length > 32) throw new ZoteroError('bad_request', 'sections 项目过多')
+  const result: Record<string, boolean> = {}
+  for (const [key, value] of entries) {
+    if (!/^[A-Za-z]{1,24}$/u.test(key)) throw new ZoteroError('bad_request', `sections 的键名不合法：${key}`)
+    if (typeof value !== 'boolean') throw new ZoteroError('bad_request', `sections.${key} 必须是布尔值`)
+    result[key] = value
+  }
+  return result
+}
+
+/** 浮层坐标：两维都必须是有限数字（允许负数，多屏时窗口左边可能为负）。 */
+function optionalPos(raw: unknown): ZoteroPanelPos | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'object' || raw === null) throw new ZoteroError('bad_request', 'pos 必须是对象')
+  const record = raw as Record<string, unknown>
+  const read = (field: 'left' | 'top'): number => {
+    const value = record[field]
+    if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 20_000) {
+      throw new ZoteroError('bad_request', `pos.${field} 必须是有效坐标`)
+    }
+    return Math.round(value)
+  }
+  return { left: read('left'), top: read('top') }
+}
+
+/** 浮层尺寸：给个宽松但有界的范围，避免存档里出现 0 或天文数字。 */
+function optionalSize(raw: unknown): ZoteroPanelSize | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'object' || raw === null) throw new ZoteroError('bad_request', 'size 必须是对象')
+  const record = raw as Record<string, unknown>
+  const read = (field: 'width' | 'height', min: number): number => {
+    const value = record[field]
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > 20_000) {
+      throw new ZoteroError('bad_request', `size.${field} 超出范围`)
+    }
+    return Math.round(value)
+  }
+  return { width: read('width', 100), height: read('height', 80) }
+}
+
+/**
+ * 信息浮层各区块开合 + 每个条目的浮层几何。
+ *
+ * 与阅读进度同一个文件（`view-state.json`），但不与它共用请求：翻页写得勤，
+ * 没必要把几何一起搬来搬去。
+ */
+async function handleViewState(res: ServerResponse): Promise<void> {
+  ok(res, await loadViewState())
+}
+
+async function handleViewStateSave(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, VIEW_STATE_BODY_LIMIT)
+  const patch: ViewStatePatch = {}
+  const sections = optionalSections(record.sections)
+  if (sections !== undefined) patch.sections = sections
+  if (record.boxes !== undefined) {
+    if (!Array.isArray(record.boxes)) throw new ZoteroError('bad_request', 'boxes 必须是数组')
+    if (record.boxes.length > MAX_BOX_PATCHES) throw new ZoteroError('bad_request', 'boxes 一次写太多条')
+    patch.boxes = record.boxes.map((entry) => {
+      if (typeof entry !== 'object' || entry === null) {
+        throw new ZoteroError('bad_request', 'boxes 的元素必须是对象')
+      }
+      const item = entry as Record<string, unknown>
+      const itemKey = requireKey(item, 'itemKey')
+      const kind = item.kind
+      if (kind !== 'outline' && kind !== 'info') {
+        throw new ZoteroError('bad_request', 'kind 只能是 outline 或 info')
+      }
+      const pos = optionalPos(item.pos)
+      const size = optionalSize(item.size)
+      if (pos === undefined && size === undefined) {
+        throw new ZoteroError('bad_request', '浮层几何至少要带 pos 或 size')
+      }
+      return {
+        itemKey,
+        kind,
+        ...(pos === undefined ? {} : { pos }),
+        ...(size === undefined ? {} : { size }),
+      }
+    })
+  }
+  if (patch.sections === undefined && patch.boxes === undefined) {
+    throw new ZoteroError('bad_request', '没有要保存的内容')
+  }
+  ok(res, await saveViewState(patch))
+}
+
 // ---- 笔记读写 ---------------------------------------------------------------
 
 /**
@@ -736,6 +841,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['mcp-tools', 'GET'],
   ['auth-status', 'GET'],
   ['read-position', 'GET'],
+  ['view-state', 'GET'],
   ['note-raw', 'GET'],
   ['open-in-zotero', 'POST'],
   ['open-settings', 'POST'],
@@ -747,6 +853,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['annotation-delete', 'POST'],
   ['annotation-create', 'POST'],
   ['read-position-save', 'POST'],
+  ['view-state-save', 'POST'],
   ['translate', 'POST'],
 ])
 
@@ -825,6 +932,9 @@ export function createHandler(
         case 'read-position':
           await handleReadPosition(res, url.searchParams)
           return
+        case 'view-state':
+          await handleViewState(res)
+          return
         case 'authorize':
           await handleAuthorize(res)
           return
@@ -851,6 +961,9 @@ export function createHandler(
           return
         case 'read-position-save':
           await handleReadPositionSave(req, res)
+          return
+        case 'view-state-save':
+          await handleViewStateSave(req, res)
           return
         case 'translate':
           await handleTranslate(req, res, deps)

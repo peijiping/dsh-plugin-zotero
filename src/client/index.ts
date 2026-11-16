@@ -29,6 +29,7 @@ import { resetPaneStore } from './paneStore'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { SettingsNavIcon } from './SettingsNavIcon'
 import { installTheme } from './styles'
+import { bootstrapViewState } from './viewStateStore'
 import { ZoteroCardController, ROW_ID, ZoteroSettingsSection } from './ZoteroCard'
 import { ITEM_ADDRESS_PREFIX, itemKeyFromAddress, ZoteroItemPane } from './ZoteroItemPane'
 import { ZoteroPane } from './ZoteroPane'
@@ -147,6 +148,8 @@ export const inject = [
 export function apply(ctx: ClientContext): void {
   // 按钮 / 标题的伪类样式挂在 document.head，portal 出的浮层也能吃到。
   installTheme()
+  // 视图状态（浮层几何 + 区块开合）一次拿全量，之后同步读缓存；失败静默退回默认。
+  bootstrapViewState()
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-zotero: dictionaries')
   const t = ctx.locale.bind(NS)
 

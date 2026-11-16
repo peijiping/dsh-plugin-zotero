@@ -2,8 +2,8 @@
  * 「这篇在本插件里读到哪」的客户端半条命：进文档时取续读页，翻页时防抖回写。
  *
  * 进度**只存在插件自己的存储里**（`<dsh 数据目录>/storages/dsh-plugin-zotero/
- * read-positions.json`），不与 Zotero 同步：Zotero 的 `dataDir` 可能是任意路径，
- * 插件拿不到可靠值；而且用户在两边各读一段时，本来就该各记各的。
+ * view-state.json` 的 `positions` 一段），不与 Zotero 同步：Zotero 的 `dataDir`
+ * 可能是任意路径，插件拿不到可靠值；而且用户在两边各读一段时，本来就该各记各的。
  *
  * 页号在这里统一用 **1 基**（渲染器的 `currentPage` 就是 1 基），跟 Host 里 0 基
  * `pageIndex` 的换算只放在本文件里，别的地方不要再各自 ±1。

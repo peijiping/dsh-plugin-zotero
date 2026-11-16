@@ -15,9 +15,13 @@ import type {
   ZoteroItemScope,
   ZoteroItems,
   ZoteroNoteRaw,
+  ZoteroPanelKind,
+  ZoteroPanelPos,
+  ZoteroPanelSize,
   ZoteroReadPosition,
   ZoteroTags,
   ZoteroTree,
+  ZoteroViewState,
   ZoteroWriteRef,
   ZoteroWriteStatus,
 } from '../zotero/types'
@@ -227,6 +231,33 @@ export function fetchReadPosition(key: string, signal?: AbortSignal): Promise<Zo
 /** 记下本插件读到第几页（0 基）。写不回 Zotero，只在插件自己的存储里留一份。 */
 export function saveReadPosition(input: { key: string; pageIndex: number }): Promise<ZoteroReadPosition> {
   return post<ZoteroReadPosition>('read-position-save', input)
+}
+
+// ---- 视图状态（信息浮层开合 + 浮层几何）-------------------------------------
+
+/** 一条浮层几何改动：只带这次真的动过的那一项。 */
+export interface PanelBoxPatch {
+  itemKey: string
+  kind: ZoteroPanelKind
+  pos?: ZoteroPanelPos
+  size?: ZoteroPanelSize
+}
+
+export interface ViewStatePatch {
+  /** 信息浮层六块的开合，整表替换。 */
+  sections?: Record<string, boolean>
+  /** 目录 / 信息浮层的几何，逐条合并。 */
+  boxes?: PanelBoxPatch[]
+}
+
+/** 本机存下来的视图状态；Host 不可达时调用方退回默认值。 */
+export function fetchViewState(signal?: AbortSignal): Promise<ZoteroViewState> {
+  return get<ZoteroViewState>('view-state', {}, signal)
+}
+
+/** 落盘一次视图状态改动（`view-state.json`，与阅读进度同一个文件）。 */
+export function saveViewState(patch: ViewStatePatch): Promise<{ saved: boolean }> {
+  return post<{ saved: boolean }>('view-state-save', patch)
 }
 
 // ---- 笔记 -------------------------------------------------------------------

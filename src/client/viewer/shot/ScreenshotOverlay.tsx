@@ -2,7 +2,7 @@
  * 微信式定格遮罩：位图铺底、拖拽框选、选区挖空、只有「取消 / 加入对话」两枚按钮。
  *
  * 挂在 `DocumentView` 的正文容器上（30px 工具条之下），所以截图范围天然只含文献
- * 正文，不含工具条与左上角悬浮按钮。zIndex 22 高于现有最大值 21。
+ * 正文，不含工具条与左上角悬浮按钮。`zIndex: 400` 要压过那组按钮所在的透明层。
  *
  * Esc / 取消由本组件自管，**不注册 `useDismiss`**：那会与其它浮层互相干扰。
  */
@@ -169,10 +169,16 @@ export function ScreenshotOverlay({
   )
 }
 
+/**
+ * 铺满正文区的定格层：位图垫底，拖拽框选。
+ *
+ * `zIndex` 要压过左上角那组悬浮按钮（它们在 `zIndex: 300` 的透明层里，为了能画到
+ * 右栏外面去），否则定格之后按钮仍浮在图上方、还会挡住正文左上角那一片的框选。
+ */
 const rootStyle = {
   position: 'absolute',
   inset: 0,
-  zIndex: 22,
+  zIndex: 400,
   overflow: 'hidden',
   cursor: 'crosshair',
   userSelect: 'none',

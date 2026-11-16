@@ -319,7 +319,7 @@ export interface ZoteroHealth {
 export interface ZoteroTree {
   collections: ZoteroCollection[]
   libraryName: string
-  /** 「最近阅读」当前可列出的条数（上限见 `read-position.RECENT_LIMIT`）。 */
+  /** 「最近阅读」当前可列出的条数（上限见 `view-state.RECENT_LIMIT`）。 */
   recentCount: number
 }
 
@@ -387,6 +387,50 @@ export interface ZoteroReadPosition {
   pageIndex: number
   /** 记录时间（ISO 8601）。 */
   updatedAt: string
+}
+
+/** 浮层左上角坐标（视口坐标，单位 px）。 */
+export interface ZoteroPanelPos {
+  left: number
+  top: number
+}
+
+/** 浮层尺寸（px）。 */
+export interface ZoteroPanelSize {
+  width: number
+  height: number
+}
+
+/**
+ * 一类浮层在某条目上记住的几何。
+ *
+ * `pos` / `size` **各自独立**：只拖过位置就只存 `pos`，下次打开高度仍随内容走。
+ */
+export interface ZoteroPanelBox {
+  pos?: ZoteroPanelPos
+  size?: ZoteroPanelSize
+  /** 最近改动时间（毫秒时间戳），条目超上限时按它淘汰。 */
+  at: number
+}
+
+/** 会记几何的浮层：目录、信息。 */
+export type ZoteroPanelKind = 'outline' | 'info'
+
+/** 一个条目下的各浮层几何。 */
+export interface ZoteroItemBoxes {
+  outline?: ZoteroPanelBox
+  info?: ZoteroPanelBox
+}
+
+/**
+ * 本插件的「视图状态」。
+ *
+ * 和 `read-positions.json` 时代一样，全部本地留存、与 Zotero 无关：`sections` 是
+ * 信息浮层六块的开合（全局一份），`boxes` 是每个条目上浮层被拖到哪、拉多大。
+ */
+export interface ZoteroViewState {
+  sections: Record<string, boolean>
+  boxes: Record<string, ZoteroItemBoxes>
 }
 
 /** 错误码。 */

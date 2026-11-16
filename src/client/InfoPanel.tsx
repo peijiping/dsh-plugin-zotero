@@ -9,8 +9,12 @@
  * 点浮层外或按 Esc 关闭（统一走 {@link useDismiss}，网页快照在 iframe 里的按下也算
  * 「外」）；点标注定位后也关闭，让文档重新成为焦点。
  *
- * 各区块的开合全局记一份（见 {@link useInfoSections}）：用户按自己的习惯折过
- * 一次之后，换文献、关浮层、重启都保持原样，不用每篇重新折。
+ * 与目录浮层完全一致：画在右栏外侧、可拖位置、可拖右下角改大小、标题栏有图钉，
+ * **位置与尺寸按条目记一份**（见 `floatingBox` 与 `viewStateStore`），换一篇就是
+ * 另一套摆法。
+ *
+ * 各区块的开合记在本机（同 `view-state.json`），**全局一份**：用户按自己的习惯
+ * 折过一次之后，换文献、关浮层、重启都保持原样，不用每篇重新折。
  *
  * 刷新整份详情的按钮在**阅读器工具条**（页面级，见 `DocumentView`），不放在这里：
  * 它同时影响页面上的标注，浮层收着的时候也应该能点。
@@ -22,16 +26,17 @@ import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/t
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
 import { useDismiss } from './dismiss'
+import { useFloatingBox } from './floatingBox'
+import { itemTypeLabel } from './itemType'
+import type { Translate } from './locales'
+import { NoteList } from './NoteList'
+import { ACCENT, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
 import {
   setInfoSection,
   toggleInfoSection,
   useInfoSections,
   type InfoSectionId,
-} from './infoSectionStore'
-import { itemTypeLabel } from './itemType'
-import type { Translate } from './locales'
-import { NoteList } from './NoteList'
-import { ACCENT, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
+} from './viewStateStore'
 
 interface Props {
   t: Translate
@@ -117,19 +122,33 @@ export function InfoPanel({
   const rootRef = useRef<HTMLDivElement | null>(null)
   /** 悬浮按钮行：宽度随语言与「加入对话」文案变化，量出来给工具条让位。 */
   const rowRef = useRef<HTMLDivElement | null>(null)
-  /** 各区块开合来自全局持久状态，不放在组件里：换条目/重开都是同一份。 */
+  /** 各区块开合来自持久状态，不放在组件里：换条目/重开/重启都是同一份。 */
   const sections = useInfoSections()
   /** 「笔记」新建框是否打开：加号在区块标题行，编辑器在区块内，状态只能放在这里。 */
   const [composingNote, setComposingNote] = useState(false)
+  /** 钉住：点浮层外 / 点正文都不收，`Esc` 与再点 `i` 仍关。 */
+  const [pinned, setPinned] = useState(false)
+  const [pinHovered, setPinHovered] = useState(false)
+
+  /** 与目录浮层同一套几何：贴右栏外侧、可拖可缩、按条目记住位置。 */
+  const box = useFloatingBox({
+    open,
+    anchorRef: rootRef,
+    itemKey: detail.key,
+    kind: 'info',
+    width: PANEL_WIDTH,
+    minWidth: PANEL_MIN_WIDTH,
+    minHeight: PANEL_MIN_HEIGHT,
+  })
 
   // 换条目 / 收起浮层时丢掉半截的新建草稿，免得带到下一条文献上。
   useEffect(() => {
     setComposingNote(false)
   }, [detail.key, open])
 
-  // 点浮层外 / 按 Esc 收起。根节点同时包着触发按钮，点它不会被判成「外面」，
-  // 交给 `onToggle` 自己开合。
-  useDismiss(open, rootRef, onClose)
+  // 点浮层外 / 按 Esc 收起。根节点同时包着触发按钮与浮层，点它不会被判成
+  // 「外面」，交给 `onToggle` 自己开合。
+  useDismiss(open, rootRef, onClose, { pinned })
 
   // 「加入对话」在 zh / en 下宽度不同；写死 left 或 paddingLeft 必错。
   // 量整行宽度上报，由 ItemDetail 写成 CSS 变量给工具条。
@@ -203,141 +222,207 @@ export function InfoPanel({
         </button>
       </div>
 
-      {open && (
-        <div role="dialog" aria-label={t('detail.info')} style={panelStyle}>
-          <div style={panelHeaderStyle}>
+      {open && box.style !== null && (
+        <div
+          ref={box.panelRef}
+          role="dialog"
+          aria-label={t('detail.info')}
+          style={{ ...panelStyle, ...box.style }}
+        >
+          <div style={panelHeaderStyle} {...box.moveProps}>
             <span style={panelTitleStyle} title={detail.title}>{detail.title}</span>
+            <button
+              type="button"
+              aria-pressed={pinned}
+              aria-label={pinned ? t('detail.unpin') : t('detail.pin')}
+              title={pinned ? t('detail.unpin') : t('detail.pin')}
+              onClick={() => setPinned((current) => !current)}
+              onMouseEnter={() => setPinHovered(true)}
+              onMouseLeave={() => setPinHovered(false)}
+              style={{
+                ...pinStyle,
+                color: pinned ? ACCENT : 'CanvasText',
+                opacity: pinned ? 1 : 0.5,
+                background: pinHovered ? 'rgba(127,127,127,0.16)' : 'transparent',
+              }}
+            >
+              <PinIcon filled={pinned} />
+            </button>
           </div>
 
-          <Block label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
-            {metaRows.map((row) => (
-              <div key={row.label} style={metaRowStyle}>
-                <span style={metaLabelStyle}>{row.label}</span>
-                <span style={{ wordBreak: 'break-word' }}>{row.value}</span>
-              </div>
-            ))}
-          </Block>
-
-          {detail.abstract !== '' && (
-            <Block
-              label={t('detail.abstract')}
-              open={sections.abstract}
-              onToggle={() => toggle('abstract')}
-            >
-              <p style={paragraphStyle}>{detail.abstract}</p>
+          <div style={bodyStyle}>
+            <Block label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
+              {metaRows.map((row) => (
+                <div key={row.label} style={metaRowStyle}>
+                  <span style={metaLabelStyle}>{row.label}</span>
+                  <span style={{ wordBreak: 'break-word' }}>{row.value}</span>
+                </div>
+              ))}
             </Block>
-          )}
 
-          {detail.annotations.length > 0 && (
-            <Block
-              label={t('detail.annotations')}
-              hint={String(detail.annotations.length)}
-              open={sections.annotations}
-              onToggle={() => toggle('annotations')}
-            >
-              <AnnotationList
-                t={t}
-                annotations={detail.annotations}
-                hasFulltext={detail.fulltext !== null}
-                truncated={detail.fulltext?.truncated === true}
-                filter={annotationFilter}
-                canWrite={detail.writeEnabled}
-                onFilterChange={onAnnotationFilterChange}
-                onLocate={onLocateAnnotation}
-                onInsert={onInsertAnnotation}
-                onChanged={onChanged}
-              />
-            </Block>
-          )}
+            {detail.abstract !== '' && (
+              <Block
+                label={t('detail.abstract')}
+                open={sections.abstract}
+                onToggle={() => toggle('abstract')}
+              >
+                <p style={paragraphStyle}>{detail.abstract}</p>
+              </Block>
+            )}
 
-          {(notes.length > 0 || (detail.writeEnabled && !selfNote)) && (
-            <Block
-              label={t('detail.notes')}
-              hint={String(notes.length)}
-              open={sections.notes}
-              onToggle={() => toggle('notes')}
-              action={
-                detail.writeEnabled && !selfNote ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // 区块收着就先摊开再出新笔记框，别让用户点了没反应。
-                      if (!sections.notes) {
-                        setInfoSection('notes', true)
-                        setComposingNote(true)
-                        return
-                      }
-                      setComposingNote((previous) => !previous)
-                    }}
-                    title={composingNote ? t('note.cancel') : t('note.new')}
-                    aria-label={t('note.new')}
-                    style={blockActionStyle}
-                  >
-                    {composingNote ? '×' : '+'}
-                  </button>
-                ) : undefined
-              }
-            >
-              <NoteList
-                t={t}
-                notes={notes}
-                itemKey={detail.key}
-                canWrite={detail.writeEnabled}
-                selfNote={selfNote}
-                composing={composingNote}
-                onComposingChange={setComposingNote}
-                onInsert={onInsertNote}
-                onChanged={onChanged}
-              />
-            </Block>
-          )}
+            {detail.annotations.length > 0 && (
+              <Block
+                label={t('detail.annotations')}
+                hint={String(detail.annotations.length)}
+                open={sections.annotations}
+                onToggle={() => toggle('annotations')}
+              >
+                <AnnotationList
+                  t={t}
+                  annotations={detail.annotations}
+                  hasFulltext={detail.fulltext !== null}
+                  truncated={detail.fulltext?.truncated === true}
+                  filter={annotationFilter}
+                  canWrite={detail.writeEnabled}
+                  onFilterChange={onAnnotationFilterChange}
+                  onLocate={onLocateAnnotation}
+                  onInsert={onInsertAnnotation}
+                  onChanged={onChanged}
+                />
+              </Block>
+            )}
 
-          {detail.attachments.length > 0 && (
-            <Block
-              label={t('detail.attachments')}
-              hint={String(detail.attachments.length)}
-              open={sections.attachments}
-              onToggle={() => toggle('attachments')}
-            >
-              {detail.attachments.map((attachment) => {
-                const current = attachment.key === currentAttachmentKey
-                return (
-                  <button
-                    key={attachment.key}
-                    type="button"
-                    onClick={() => onSelectAttachment(attachment.key)}
-                    style={{ ...attachmentRowStyle, opacity: current ? 1 : 0.8 }}
-                    title={t('detail.attachmentOpen')}
-                  >
-                    <span style={{ width: 12, flexShrink: 0, color: ACCENT }}>{current ? '●' : ''}</span>
-                    <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>
-                      {attachment.filename || attachment.title}
-                    </span>
-                    <span style={attachmentMetaStyle}>
-                      {attachment.contentType}
-                      {attachment.size > 0 ? ` · ${Math.round(attachment.size / 1024)} KB` : ''}
-                    </span>
-                  </button>
-                )
-              })}
-            </Block>
-          )}
+            {(notes.length > 0 || (detail.writeEnabled && !selfNote)) && (
+              <Block
+                label={t('detail.notes')}
+                hint={String(notes.length)}
+                open={sections.notes}
+                onToggle={() => toggle('notes')}
+                action={
+                  detail.writeEnabled && !selfNote ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // 区块收着就先摊开再出新笔记框，别让用户点了没反应。
+                        if (!sections.notes) {
+                          setInfoSection('notes', true)
+                          setComposingNote(true)
+                          return
+                        }
+                        setComposingNote((previous) => !previous)
+                      }}
+                      title={composingNote ? t('note.cancel') : t('note.new')}
+                      aria-label={t('note.new')}
+                      style={blockActionStyle}
+                    >
+                      {composingNote ? '×' : '+'}
+                    </button>
+                  ) : undefined
+                }
+              >
+                <NoteList
+                  t={t}
+                  notes={notes}
+                  itemKey={detail.key}
+                  canWrite={detail.writeEnabled}
+                  selfNote={selfNote}
+                  composing={composingNote}
+                  onComposingChange={setComposingNote}
+                  onInsert={onInsertNote}
+                  onChanged={onChanged}
+                />
+              </Block>
+            )}
 
-          {detail.bib !== null && (
-            <Block label={t('detail.bibTitle')} open={sections.bib} onToggle={() => toggle('bib')}>
-              <p style={paragraphStyle}>{stripTags(detail.bib)}</p>
-            </Block>
-          )}
+            {detail.attachments.length > 0 && (
+              <Block
+                label={t('detail.attachments')}
+                hint={String(detail.attachments.length)}
+                open={sections.attachments}
+                onToggle={() => toggle('attachments')}
+              >
+                {detail.attachments.map((attachment) => {
+                  const current = attachment.key === currentAttachmentKey
+                  return (
+                    <button
+                      key={attachment.key}
+                      type="button"
+                      onClick={() => onSelectAttachment(attachment.key)}
+                      style={{ ...attachmentRowStyle, opacity: current ? 1 : 0.8 }}
+                      title={t('detail.attachmentOpen')}
+                    >
+                      <span style={{ width: 12, flexShrink: 0, color: ACCENT }}>{current ? '●' : ''}</span>
+                      <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>
+                        {attachment.filename || attachment.title}
+                      </span>
+                      <span style={attachmentMetaStyle}>
+                        {attachment.contentType}
+                        {attachment.size > 0 ? ` · ${Math.round(attachment.size / 1024)} KB` : ''}
+                      </span>
+                    </button>
+                  )
+                })}
+              </Block>
+            )}
+
+            {detail.bib !== null && (
+              <Block label={t('detail.bibTitle')} open={sections.bib} onToggle={() => toggle('bib')}>
+                <p style={paragraphStyle}>{stripTags(detail.bib)}</p>
+              </Block>
+            )}
+          </div>
+
+          <span
+            aria-hidden="true"
+            title={t('detail.resize')}
+            {...box.resizeProps}
+            style={resizeHandleStyle}
+          >
+            <ResizeIcon />
+          </span>
         </div>
       )}
     </div>
   )
 }
 
+/** 图钉：帽 + 针。钉住时实心（`ACCENT`），未钉住只描边。 */
+function PinIcon({ filled }: { filled: boolean }): ReactElement {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <path
+        d="M4.5 1.6h3l-.55 3.05L8.5 6.2v1.15h-5V6.2L5.05 4.65z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.05"
+        strokeLinejoin="round"
+      />
+      <path d="M6 7.55v2.9" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** 右下角的缩放把手：两条 45° 短线。 */
+function ResizeIcon(): ReactElement {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+      <path d="M4.2 9 9 4.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M7.4 9 9 7.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/**
+ * 覆盖整个阅读区的透明层：只提供测量基准和浮层的层叠上下文。
+ *
+ * `zIndex` 与目录浮层一致抬到 300 —— 浮层画到右栏外面（聊天区）时，得压过聊天
+ * 消息与粘性输入区；又不该高过宿主的对话框（那类通常 ≥ 1000）。这一层不画东西、
+ * `pointerEvents:none`，抬高层级不会挡任何点击。
+ */
 const rootStyle = {
   position: 'absolute',
   inset: 0,
-  zIndex: 20,
+  zIndex: 300,
   pointerEvents: 'none',
 } as const
 
@@ -373,15 +458,21 @@ const triggerStyle = {
   zIndex: 21,
 } as const
 
+/** 初始宽度；比原来浮在正文里的 320 宽一点，长标题与元数据少折行。 */
+const PANEL_WIDTH = 360
+const PANEL_MIN_WIDTH = 280
+const PANEL_MIN_HEIGHT = 240
+
+/**
+ * 面板本体：`fixed`，几何由 `floatingBox` 注入（`...box.style` 覆盖在最后）。
+ *
+ * 纵向 flex：标题栏固定、区块区滚动，右下角把手才不会被内容带着跑。
+ */
 const panelStyle = {
-  position: 'absolute',
+  position: 'fixed',
   pointerEvents: 'auto',
-  top: 32,
-  left: 8,
-  width: 320,
-  maxWidth: 'calc(100% - 16px)',
-  maxHeight: 'calc(100% - 40px)',
-  overflow: 'auto',
+  display: 'flex',
+  flexDirection: 'column',
   padding: '8px 10px 10px',
   borderRadius: 8,
   border: '1px solid rgba(127,127,127,0.32)',
@@ -391,14 +482,62 @@ const panelStyle = {
   fontSize: 12,
   lineHeight: 1.6,
   overscrollBehavior: 'contain',
+  zIndex: 300,
 } as const
 
+/** 区块区：自己滚，别把标题栏与把手一起卷走。 */
+const bodyStyle = {
+  flex: 1,
+  minHeight: 0,
+  overflow: 'auto',
+  overscrollBehavior: 'contain',
+  /** 给右下角的缩放把手让位。 */
+  paddingBottom: 6,
+} as const
+
+/** 标题栏兼拖动把手。 */
 const panelHeaderStyle = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 6,
+  flexShrink: 0,
   paddingBottom: 6,
   borderBottom: '1px solid rgba(127,127,127,0.2)',
+  cursor: 'move',
+  userSelect: 'none',
+  touchAction: 'none',
+} as const
+
+const pinStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  width: 20,
+  height: 20,
+  marginTop: -2,
+  padding: 0,
+  borderRadius: 4,
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  transition: 'background-color 120ms ease',
+} as const
+
+/** 缩放把手：贴在右下角，盖在滚动区之上。 */
+const resizeHandleStyle = {
+  position: 'absolute',
+  right: 2,
+  bottom: 2,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 16,
+  height: 16,
+  color: 'rgba(127,127,127,0.7)',
+  cursor: 'nwse-resize',
+  touchAction: 'none',
+  userSelect: 'none',
 } as const
 
 const panelTitleStyle = {
