@@ -91,6 +91,8 @@ const ITEM_CSS = [
   // Menu 的 anchor 包装自带 `width:fit-content` 之类的收缩规则，光靠 grid 轨道
   // 拉不动它，这里显式覆盖宽度，内层行 / 标题才能拿到整行宽去截断。
   '.dsh-zotero-item-shell > *{width:100%;min-width:0}',
+  '.dsh-zotero-disclosure:hover{opacity:0.8}',
+  '.dsh-zotero-child-row:hover{background:rgba(127,127,127,0.1)}',
 ].join('')
 
 /** 选中行底色：整行（外壳）通栏染色，色值与列表 chip 同一支蓝。 */
@@ -151,6 +153,15 @@ const itemMetaTypeStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85
 
 const itemMetaYearStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85 }
 
+/** 第二行末尾的附件数：纸夹 + 数字，固定宽度不参与作者截断。 */
+const itemMetaAttachStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+  flex: '0 0 auto',
+  opacity: 0.85,
+}
+
 const itemMetaTextStyle: React.CSSProperties = {
   flex: '1 1 auto',
   minWidth: 0,
@@ -160,6 +171,67 @@ const itemMetaTextStyle: React.CSSProperties = {
 }
 
 const itemBodyStyle: React.CSSProperties = { flex: 1, minWidth: 0 }
+
+/**
+ * 展开三角的占位槽：始终占 12px，没有附件的行也留着，
+ * 这样整列类型图标和标题起点才对齐（与 Zotero 的树列一致）。
+ */
+const disclosureSlotStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  width: 12,
+  height: 24,
+  marginTop: 1,
+}
+
+const disclosureButtonStyle: React.CSSProperties = {
+  ...disclosureSlotStyle,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  opacity: 0.45,
+  cursor: 'pointer',
+}
+
+/** 展开后的子附件列表：缩进到主行标题的起点，与父条目的标题左对齐。 */
+const childListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  padding: '0 6px 4px',
+}
+
+const childRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+  // 6(列表内边距) + 52 = 58，正好对上主行标题起点。
+  padding: '2px 4px 2px 52px',
+  borderRadius: 5,
+  cursor: 'pointer',
+  fontSize: 12,
+  opacity: 0.85,
+}
+
+const childIconStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  width: 16,
+  height: 16,
+}
+
+const childTitleStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
 
 /** 图标固定占位 24px，只居中图标本身，不铺底色。 */
 const itemIconStyle: React.CSSProperties = {
@@ -222,6 +294,42 @@ function SortIcon({ sort }: { sort: ItemSort }): ReactElement {
   )
 }
 
+/** 展开 / 收起的小三角，Zotero 树里同款：收起朝右、展开朝下。 */
+function DisclosureIcon({ open }: { open: boolean }): ReactElement {
+  return (
+    <svg
+      width={8}
+      height={8}
+      viewBox="0 0 8 8"
+      aria-hidden
+      focusable="false"
+      style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms ease' }}
+    >
+      <path d="M2.4 1.4 6.1 4l-3.7 2.6z" fill="currentColor" />
+    </svg>
+  )
+}
+
+/** 第二行附件数前的纸夹。 */
+function PaperclipIcon(): ReactElement {
+  return (
+    <svg
+      width={10}
+      height={10}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable="false"
+    >
+      <path d="M10.4 4.2 6 8.6a1.8 1.8 0 0 0 2.5 2.5l4.4-4.4a3 3 0 0 0-4.2-4.2L4.3 6.9a4.2 4.2 0 0 0 5.9 5.9l1.1-1.1" />
+    </svg>
+  )
+}
+
 /** 排序按钮的提示文案随状态变，点了知道下一步会变成什么。 */
 function sortHint(t: Translate, sort: ItemSort): string {
   if (sort === 'asc') return t('list.sortAsc')
@@ -262,8 +370,11 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
   onInsert(item: ZoteroItemSummary): void
 }): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const read = isRead(item)
   const typeLabel = itemTypeLabel(t, item.itemType)
+  const attachments = item.attachments
+  const hasAttachments = attachments.length > 0
   return (
     <div
       className="dsh-zotero-item-shell"
@@ -291,20 +402,65 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
             }}
             style={itemRowStyle}
           >
+            {hasAttachments ? (
+              <button
+                type="button"
+                className="dsh-zotero-disclosure"
+                aria-expanded={expanded}
+                aria-label={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
+                title={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
+                onClick={(event) => {
+                  // 只开合附件，不连带选中 / 打开条目。
+                  event.stopPropagation()
+                  setExpanded((open) => !open)
+                }}
+                onDoubleClick={(event) => event.stopPropagation()}
+                style={disclosureButtonStyle}
+              >
+                <DisclosureIcon open={expanded} />
+              </button>
+            ) : (
+              <span style={disclosureSlotStyle} aria-hidden />
+            )}
             <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
             <div style={itemBodyStyle}>
               <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-              {(typeLabel !== '' || item.year !== '' || item.creators !== '') && (
+              {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasAttachments) && (
                 <div style={itemMetaStyle}>
                   {typeLabel !== '' && <span style={itemMetaTypeStyle}>{typeLabel}</span>}
                   {item.year !== '' && <span style={itemMetaYearStyle}>{item.year}</span>}
                   {item.creators !== '' && <span style={itemMetaTextStyle}>{item.creators}</span>}
+                  {hasAttachments && (
+                    <span
+                      style={itemMetaAttachStyle}
+                      title={tpl(t('list.attachmentCount'), { n: attachments.length })}
+                    >
+                      <PaperclipIcon />
+                      {attachments.length}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
           </div>
         )}
       />
+      {expanded && hasAttachments && (
+        <div style={childListStyle}>
+          {attachments.map((attachment) => (
+            <div
+              key={attachment.key}
+              className="dsh-zotero-child-row"
+              title={`${attachment.title}\n${t('list.openAttachment')}`}
+              onClick={() => onOpen(attachment.key, attachment.title)}
+              style={childRowStyle}
+            >
+              <span style={childIconStyle}><ItemTypeIcon itemType="attachment" size={15} /></span>
+              <span style={childTitleStyle}>{attachment.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

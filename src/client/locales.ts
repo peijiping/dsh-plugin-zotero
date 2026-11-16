@@ -108,6 +108,10 @@ const zh: Record<string, string> = {
   'list.sortNone': '按标题排序（当前为 Zotero 原始顺序）',
   'list.sortAsc': '标题正序 A→Z（再点切换为倒序）',
   'list.sortDesc': '标题倒序 Z→A（再点恢复原始顺序）',
+  'list.expandAttachments': '展开附件',
+  'list.collapseAttachments': '收起附件',
+  'list.attachmentCount': '附件 {n}',
+  'list.openAttachment': '打开附件',
 
   'tags.title': '标签',
   'tags.filterPlaceholder': '筛选标签名称',
@@ -532,6 +536,10 @@ const en: Record<string, string> = {
   'list.sortNone': 'Sort by title (currently Zotero default order)',
   'list.sortAsc': 'Title A→Z (click again for Z→A)',
   'list.sortDesc': 'Title Z→A (click again for default order)',
+  'list.expandAttachments': 'Expand attachments',
+  'list.collapseAttachments': 'Collapse attachments',
+  'list.attachmentCount': 'Attachments: {n}',
+  'list.openAttachment': 'Open attachment',
 
   'tags.title': 'Tags',
   'tags.filterPlaceholder': 'Filter tag names',

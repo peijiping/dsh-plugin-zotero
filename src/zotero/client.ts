@@ -34,6 +34,7 @@ import type {
   ZoteroAnnotationState,
   ZoteroAttachment,
   ZoteroAttachmentFile,
+  ZoteroChildAttachment,
   ZoteroCollection,
   ZoteroFulltext,
   ZoteroHealth,
@@ -426,14 +427,9 @@ export async function getAnnotationHost(key: string): Promise<AnnotationHostInfo
   }
 }
 
-function toSummary(raw: RawItem, lastRead: number | null): ZoteroItemSummary {
+function toSummary(raw: RawItem, child: ChildState): ZoteroItemSummary {
   const data = raw.data ?? {}
   const itemType = data.itemType ?? ''
-  const hasAttachment = itemType === 'attachment'
-    ? true
-    : itemType === 'note'
-      ? false
-      : (raw.meta?.numChildren ?? 0) > 0
   // 笔记没有 title 字段，用正文首段摘要当标题。
   const title = data.title
     || data.filename
@@ -445,25 +441,37 @@ function toSummary(raw: RawItem, lastRead: number | null): ZoteroItemSummary {
     creators: raw.meta?.creatorSummary ?? '',
     year: yearOf(raw.meta, data),
     itemType,
-    hasAttachment,
-    lastRead,
+    attachments: child.attachments,
+    lastRead: child.lastRead,
   }
 }
 
+/** 列表行额外要的子条目状态：一次 children 请求算齐已读时间与附件清单。 */
+interface ChildState {
+  lastRead: number | null
+  attachments: ZoteroChildAttachment[]
+}
+
+const NO_CHILD_STATE: ChildState = { lastRead: null, attachments: [] }
+
 /** 附件自己的 `lastRead` 就在它的 JSON 里，笔记没有，其余条目去问子附件。 */
-function lastReadOf(raw: RawItem): Promise<number | null> {
+function childStateOf(raw: RawItem): Promise<ChildState> {
   const data = raw.data ?? {}
   if (data.itemType === 'attachment') {
     const value = data.lastRead
-    return Promise.resolve(typeof value === 'number' && value > 0 ? value : null)
+    // 顶层附件没有子附件可展开，但它自己的阅读时间仍要报。
+    return Promise.resolve({
+      lastRead: typeof value === 'number' && value > 0 ? value : null,
+      attachments: [],
+    })
   }
-  if (data.itemType === 'note') return Promise.resolve(null)
-  return itemLastRead(raw.key)
+  if (data.itemType === 'note') return Promise.resolve(NO_CHILD_STATE)
+  return itemChildState(raw.key)
 }
 
-/** 列表归一化：已读状态并发取，单条失败按未读（不拖垮整页）。 */
+/** 列表归一化：已读状态与附件清单并发取，单条失败按未读 / 无附件（不拖垮整页）。 */
 async function toSummaries(raws: RawItem[]): Promise<ZoteroItemSummary[]> {
-  return Promise.all(raws.map(async (raw) => toSummary(raw, await lastReadOf(raw))))
+  return Promise.all(raws.map(async (raw) => toSummary(raw, await childStateOf(raw))))
 }
 
 /** 从库名 `library.name` 或条目数据里取文库名（缺省回退）。 */
@@ -801,46 +809,52 @@ const UNFILED_SCAN_MAX = 1000
 /** 一页扫描条数（本地 API 上限 100）。 */
 const PAGE_SIZE = 100
 
-// ---- 已读状态 ---------------------------------------------------------------
+// ---- 子附件状态（已读 + 附件清单） -----------------------------------------
 
-/** 已读状态缓存时长：`lastRead` 由 Zotero 阅读器写入，分钟级刷新足够。 */
-const READ_STATE_TTL_MS = 60_000
+/** 子附件状态缓存时长：`lastRead` 由 Zotero 阅读器写入，分钟级刷新足够。 */
+const CHILD_STATE_TTL_MS = 60_000
 
-/** 单条已读状态缓存的上限；超了就整体丢弃（重新查一遍即可）。 */
-const READ_STATE_CACHE_MAX = 5000
+/** 单条子附件状态缓存的上限；超了就整体丢弃（重新查一遍即可）。 */
+const CHILD_STATE_CACHE_MAX = 5000
 
-interface ReadStateEntry {
+interface ChildStateEntry {
   at: number
-  lastRead: number | null
+  state: ChildState
 }
 
-const readStateCache = new Map<string, ReadStateEntry>()
+const childStateCache = new Map<string, ChildStateEntry>()
 
 /**
- * 条目（父条目）的最晚阅读时间（Unix 秒），`null` 表示没读过。
+ * 父条目的子附件状态：最晚阅读时间 + 子附件清单。
  *
- * 已读状态只记在附件上，父条目要问它的子附件（原生 `getItemLastRead()` 同理）。
- * 按条目查而不是扫全库：单条约 6ms，只查当前列表里的条目，大口库也不会卡。
- * 取不到按未读处理——已读标志是附加信息，不能拖垮条目列表。
+ * 两样都来自同一次 `/children?itemType=attachment`：列表行要画已读标志，
+ * 还要数附件、展开附件，没必要多打一份请求。已读状态只记在附件上，父条目
+ * 要问它的子附件（原生 `getItemLastRead()` 同理）。按条目查而不是扫全库：
+ * 单条约 6ms，只查当前列表里的条目，大口库也不会卡。
+ * 取不到按「无子附件、未读」处理——附加信息不能拖垮条目列表。
  */
-async function itemLastRead(key: string): Promise<number | null> {
-  const cached = readStateCache.get(key)
-  if (cached !== undefined && Date.now() - cached.at < READ_STATE_TTL_MS) return cached.lastRead
+async function itemChildState(key: string): Promise<ChildState> {
+  const cached = childStateCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < CHILD_STATE_TTL_MS) return cached.state
   try {
     const { body } = await requestJson<RawItem[]>(
       `${libraryBase()}/items/${encode(key)}/children?itemType=attachment`,
     )
     let lastRead: number | null = null
+    const attachments: ZoteroChildAttachment[] = []
     for (const child of Array.isArray(body) ? body : []) {
       const value = child.data?.lastRead
-      if (typeof value !== 'number' || value <= 0) continue
-      if (lastRead === null || value > lastRead) lastRead = value
+      if (typeof value === 'number' && value > 0 && (lastRead === null || value > lastRead)) {
+        lastRead = value
+      }
+      attachments.push({ key: child.key, title: attachmentTitle(child) })
     }
-    if (readStateCache.size >= READ_STATE_CACHE_MAX) readStateCache.clear()
-    readStateCache.set(key, { at: Date.now(), lastRead })
-    return lastRead
+    const state: ChildState = { lastRead, attachments }
+    if (childStateCache.size >= CHILD_STATE_CACHE_MAX) childStateCache.clear()
+    childStateCache.set(key, { at: Date.now(), state })
+    return state
   } catch {
-    return null
+    return NO_CHILD_STATE
   }
 }
 
@@ -1035,11 +1049,12 @@ export async function listRecentItems(
 
   const search = (options.q ?? '').trim().toLowerCase()
   const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
+  // 附件清单只给当前页取：筛选 / 排序都只用到标题与作者，没必要为整份名单打请求。
   const rows: ZoteroItemSummary[] = []
   for (const key of itemKeys) {
     const raw = itemByKey.get(key)
     if (raw === undefined) continue
-    const row = toSummary(raw, readAtByKey.get(key) ?? null)
+    const row = toSummary(raw, { lastRead: readAtByKey.get(key) ?? null, attachments: [] })
     if (
       search !== ''
       && !row.title.toLowerCase().includes(search)
@@ -1058,7 +1073,15 @@ export async function listRecentItems(
     const sign = options.direction === 'desc' ? -1 : 1
     rows.sort((a, b) => sign * a.title.localeCompare(b.title, 'zh'))
   }
-  return { total: rows.length, items: rows.slice(options.offset, options.offset + options.limit) }
+  const page = rows.slice(options.offset, options.offset + options.limit)
+  const items = await Promise.all(page.map(async (row) => {
+    const raw = itemByKey.get(row.key)
+    if (raw === undefined) return row
+    const child = await childStateOf(raw)
+    // 阅读时间保持本插件记录的，别被 Zotero 的 lastRead 覆盖。
+    return { ...row, attachments: child.attachments }
+  }))
+  return { total: rows.length, items }
 }
 
 /**
