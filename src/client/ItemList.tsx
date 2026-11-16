@@ -5,6 +5,9 @@
  * 多选，右上角「引用 N」把选中的每条各插一个胶囊。右键单行仍能直接插该条引用。
  * 列表分页（加载更多），筛选后为空与本来为空分开提示。
  *
+ * 标题排序按钮只在真实分类 / 虚拟分类下出现：「最近阅读」恒按最后打开时间倒序，
+ * 那一栏不给排序入口（见 {@link isRecentSelection}）。
+ *
  * 行内排版是两行：第一行只放标题，第二行小字灰色放「类型 + 年份 + 作者」，
  * 行与行之间用一条浅色细线分隔。
  */
@@ -18,7 +21,7 @@ import { ItemTypeIcon, itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ItemSort } from './paneStore'
-import { TREE_ROOT_ID } from './paneStore'
+import { isRecentSelection, TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
 import { SearchField } from './SearchField'
 import { Button, SectionTitle } from './ui'
@@ -496,6 +499,8 @@ export function ItemList(props: Props): ReactElement {
   const isRealCollection = selectedCollection !== null
     && selectedCollection.key !== TREE_ROOT_ID
     && selectedCollection.scope === undefined
+  /** 「最近阅读」恒按最后打开时间倒序：不给标题排序入口，省得点了没反应。 */
+  const recent = isRecentSelection(selectedCollection)
   const tags = [...selectedTags]
   const filtered = tags.length > 0 || query.trim() !== ''
   /** 按列表顺序取选中项，插进草稿的 chip 顺序才与眼前一致。 */
@@ -531,18 +536,20 @@ export function ItemList(props: Props): ReactElement {
               {t('action.insertItemShort')}
             </Button>
           ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            title={sortHint(t, sort)}
-            aria-label={sortHint(t, sort)}
-            style={sort === 'none'
-              ? sortButtonStyle
-              : { ...sortButtonStyle, color: SORT_ACTIVE_COLOR }}
-            onClick={onCycleSort}
-          >
-            <SortIcon sort={sort} />
-          </Button>
+          {!recent && (
+            <Button
+              variant="ghost"
+              size="sm"
+              title={sortHint(t, sort)}
+              aria-label={sortHint(t, sort)}
+              style={sort === 'none'
+                ? sortButtonStyle
+                : { ...sortButtonStyle, color: SORT_ACTIVE_COLOR }}
+              onClick={onCycleSort}
+            >
+              <SortIcon sort={sort} />
+            </Button>
+          )}
         </div>
         <SearchField
           value={query}

@@ -3,7 +3,8 @@
  *
  * 与 Zotero 一致：左侧只有分类与标签，条目一律在右侧列表；列表行单击选中、
  * 双击才在本面板顶层开独立 tab（`onOpenItem`），详情不再占列表位置。
- * 标签面板跟随当前目录：选中目录只列该目录自身的标签，切目录清空已选。
+ * 标签面板跟随当前目录：选中目录只列该目录自身的标签，切目录清空已选；
+ * 「最近阅读」下整块标签面板不渲染（只按最后打开时间列条目，不参与标签筛选）。
  *
  * 两栏之间是可拖动的分隔条（宽度存 localStorage，跨会话/重启都记住）。
  * 数据与选择状态都在 {@link paneStore} 的模块级单例里（跨会话共用同一块面板）。
@@ -23,6 +24,7 @@ import {
   clearItemSelection,
   clearTags,
   cycleItemSort,
+  isRecentSelection,
   loadMoreItems,
   loadTree,
   retryItems,
@@ -119,6 +121,12 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     void loadTree()
   }, [])
 
+  /**
+   * 「最近阅读」下不渲染标签面板：那份名单只来自本插件的阅读记录，
+   * 标签过滤在里面筛不出东西，留着只会占掉分类树的高度。
+   */
+  const recent = isRecentSelection(selectedCollection)
+
   const insertion = useInsertion(t, sessions, sessionId, inputActions)
 
   const [treeWidth, setTreeWidth] = useState(readTreeWidth)
@@ -213,27 +221,29 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
               />
             )}
           </div>
-          <TagPanel
-            t={t}
-            tags={tags}
-            tagsLoading={tagsLoading}
-            tagsError={tagsError}
-            tagQuery={tagQuery}
-            selectedTags={selectedTags}
-            tagMode={tagMode}
-            scoped={selectedCollection !== null
-              && selectedCollection.key !== TREE_ROOT_ID
-              && selectedCollection.scope !== 'recent'}
-            tagUsage={tagUsage}
-            tagUsageLoading={tagUsageLoading}
-            onTagQuery={setTagQuery}
-            onToggleTag={toggleTag}
-            onClearTags={clearTags}
-            onSetTagMode={setTagMode}
-            onRetry={retryTags}
-            onInsertTag={insertion.insertTag}
-            onInsertTagSet={insertion.insertTagSet}
-          />
+          {!recent && (
+            <TagPanel
+              t={t}
+              tags={tags}
+              tagsLoading={tagsLoading}
+              tagsError={tagsError}
+              tagQuery={tagQuery}
+              selectedTags={selectedTags}
+              tagMode={tagMode}
+              scoped={selectedCollection !== null
+                && selectedCollection.key !== TREE_ROOT_ID
+                && selectedCollection.scope !== 'recent'}
+              tagUsage={tagUsage}
+              tagUsageLoading={tagUsageLoading}
+              onTagQuery={setTagQuery}
+              onToggleTag={toggleTag}
+              onClearTags={clearTags}
+              onSetTagMode={setTagMode}
+              onRetry={retryTags}
+              onInsertTag={insertion.insertTag}
+              onInsertTagSet={insertion.insertTagSet}
+            />
+          )}
         </aside>
 
         <div

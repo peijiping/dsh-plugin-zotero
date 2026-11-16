@@ -46,6 +46,16 @@ const KNOWN_SCOPES: readonly ZoteroItemScope[] = ['library', 'publications', 'un
 export const TREE_ROOT_ID = '__library__'
 
 /**
+ * 是否选中「最近阅读」。
+ *
+ * 这份名单来自本插件的阅读记录，Host 端本来就按最后打开时间倒序拼好；
+ * 标题排序对它没有意义，标签面板在这里也搜不到东西，所以两处都要按它关掉。
+ */
+export function isRecentSelection(collection: ZoteroCollection | null): boolean {
+  return collection !== null && collection.scope === 'recent'
+}
+
+/**
  * 条目列表排序：`none` 走 Zotero 原始顺序，其余按标题。
  *
  * 排序由 Host 转成 Zotero 本地 API 的 `sort=title&direction=` 参数，分页才连得起来
@@ -499,14 +509,16 @@ export function reloadItems(options: { reset: boolean; append?: boolean }): void
   if (!append) patch({ items: [], itemsTotal: 0, itemsError: null, selectedItemKeys: new Set() })
   patch({ itemsLoading: true })
 
-  const tags = [...state.selectedTags]
+  // 「最近阅读」固定按最后打开时间倒序（Host 拼名单的顺序），标题排序与标签筛选都不参与。
+  const recent = isRecentSelection(state.selectedCollection)
+  const tags = recent ? [] : [...state.selectedTags]
   fetchItems({
     ...selectionQuery(),
     q: state.query.trim(),
     tags: tags.length === 0 ? undefined : tags,
     tagMode: tags.length === 0 ? undefined : state.tagMode,
-    sort: state.sort === 'none' ? undefined : 'title',
-    direction: state.sort === 'none' ? undefined : state.sort,
+    sort: recent || state.sort === 'none' ? undefined : 'title',
+    direction: recent || state.sort === 'none' ? undefined : state.sort,
     limit: ITEMS_PAGE_SIZE,
     offset,
   }, controller.signal)
@@ -541,6 +553,8 @@ export function loadMoreItems(): void {
  * 状态写进 localStorage：所有会话共用同一块面板，重启后也保持上次的选择。
  */
 export function cycleItemSort(): void {
+  // 「最近阅读」恒按最后打开时间倒序，排序按钮也藏了，这里兜一层避免状态被改。
+  if (isRecentSelection(state.selectedCollection)) return
   const next: ItemSort = state.sort === 'none' ? 'asc' : state.sort === 'asc' ? 'desc' : 'none'
   patch({ sort: next })
   try {
