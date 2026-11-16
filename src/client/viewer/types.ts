@@ -114,6 +114,16 @@ export interface DocumentRendererProps {
    */
   onOutlineChange?(outline: DocumentOutlineItem[]): void
   /**
+   * 上报「正文现在读到哪一条目录」，供目录浮层反向高亮（页面跟着走，选中项跟着变）。
+   *
+   * 参数是本次 `onOutlineChange` 上报的那份数组里的**下标**，不是 `target`：目录项与
+   * 正文位置怎么对应，只有渲染器自己清楚（PDF 按页、HTML 按标题锚点、纯文本按字符
+   * 偏移），面板只认下标。`null` 表示判断不了（没目录 / 文档还没就绪）。
+   *
+   * 只在值变化时上报：滚动一秒能来上百条事件，逐帧刷会把父级重渲染也带成逐帧。
+   */
+  onOutlineActiveChange?(index: number | null): void
+  /**
    * 采集能力自注册。
    *
    * PDF / 纯文本的采集由 `shot/` 按正文容器自己做，不需要渲染器参与；网页快照

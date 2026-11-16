@@ -55,7 +55,7 @@ import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
 import { OpenInZoteroIcon } from './OpenInZoteroIcon'
-import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS, pageTarget } from './outline'
+import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS, pageActiveIndex, pageTarget } from './outline'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import {
   enqueueRender,
@@ -646,6 +646,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     onOpenInZotero,
     onChanged,
     onOutlineChange,
+    onOutlineActiveChange,
   } = props
 
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -681,6 +682,17 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
    */
   const outlineRef = useRef(onOutlineChange)
   outlineRef.current = onOutlineChange
+  /**
+   * 目录反向跟随：当前页 → 目录下标。
+   *
+   * 书签只带页码，所以「读到哪一节」是按页推的（见 `pageActiveIndex`）。这里同时
+   * 记着**上一次报出去的下标**，同页有多条书签时用它把结论钉住，免得点了 `1.1`
+   * 却被改判成同页的 `1.2`。
+   */
+  const outlineActiveRef = useRef(onOutlineActiveChange)
+  outlineActiveRef.current = onOutlineActiveChange
+  const outlineItemsRef = useRef<DocumentOutlineItem[]>([])
+  const activeIndexRef = useRef<number | null>(null)
 
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -719,6 +731,24 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   /** 用户是否真的滚动过：没滚动就不写进度，免得「打开又关掉」盖掉 Zotero 的位置。 */
   const scrolledRef = useRef(false)
 
+  /**
+   * 按当前页重算目录高亮。
+   *
+   * 只在结论变化时上报：滚动一秒几十次 `currentPage` 更新，直接透传会让父级
+   * （以及整块正文）跟着逐帧重渲染。书签还没解析出来时 `outlineItemsRef` 是空数组，
+   * 结论 `null`，面板不高亮任何一条。
+   */
+  const reportOutlineActive = useCallback((page: number): void => {
+    const next = pageActiveIndex(outlineItemsRef.current, page, activeIndexRef.current)
+    if (next === activeIndexRef.current) return
+    activeIndexRef.current = next
+    outlineActiveRef.current?.(next)
+  }, [])
+
+  useEffect(() => {
+    reportOutlineActive(currentPage)
+  }, [currentPage, reportOutlineActive])
+
   useEffect(() => {
     if (url === '') {
       setPdf(null)
@@ -739,6 +769,12 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     setCurrentPage(1)
     setActivePages(EMPTY_PAGES)
     setRetainedPages(EMPTY_PAGES)
+    // 换文档：旧的目录与高亮一起清掉，别让上一份书签的结论留在面板上。
+    outlineItemsRef.current = []
+    if (activeIndexRef.current !== null) {
+      activeIndexRef.current = null
+      outlineActiveRef.current?.(null)
+    }
 
     const task = getDocument({
       url,
@@ -766,7 +802,11 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         onReady()
         // 书签单独解析、不 await：目录晚一两帧没有关系，别拖住首屏。
         void readOutline(proxy).then((items) => {
-          if (!disposed) outlineRef.current?.(items)
+          if (disposed) return
+          outlineItemsRef.current = items
+          outlineRef.current?.(items)
+          // 目录可能比首屏晚到：到了就按当前页补一次高亮。
+          reportOutlineActive(currentPageRef.current)
         })
       })
       .catch((loadError: unknown) => {
@@ -776,7 +816,9 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         setError({ text: tpl(t('viewer.failed'), { message: tidyLoadError(errorText(loadError)) }) })
         setLoading(false)
         // 明确报「没有目录」：不然面板会永远停在「正在读取目录…」。
+        outlineItemsRef.current = []
         outlineRef.current?.([])
+        reportOutlineActive(1)
         // 只读这一条 url 对应的附件；effect 的依赖里不放 `t` / `source`，
         // 否则切语言或每次渲染新建的 source 对象都会把 PDF 重新加载一遍。
         void explainLoadFailure(loadError, key, t, probe.signal).then((reason) => {
@@ -789,7 +831,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       probe.abort()
       void task.destroy()
     }
-  }, [url, retry, onReady])
+  }, [url, retry, onReady, reportOutlineActive])
 
   useEffect(() => {
     const element = scrollRef.current

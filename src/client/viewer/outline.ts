@@ -43,6 +43,51 @@ export function anchorTarget(id: string | number): OutlineTarget {
  * 以整篇文档里**最小的标题级别**为 0：通篇只有 h3 的页面不该整体缩进两格，
  * 网页快照尤其常见（正文从 h2 起）。PDF 书签不用这个，它自带树形层级。
  */
+/**
+ * 「当前第 page 页」对应的目录项下标（滚动跟随用）。
+ *
+ * 规则：取**最后一个起始页 ≤ 当前页**的条目 —— 也就是最近一次被跨过的章节边界，
+ * 与阅读顺序一致。跳转类条目（`target === null`）只占位、不参与判断。
+ *
+ * `pinned` 是上一条被选中的下标：PDF 书签只带页码，同一页上常有好几条（`1.1`、
+ * `1.2` 起在同一页），此时「最后一个」未必是用户刚点的那条。若 `pinned` 与结论
+ * 落在同一页，就保留 `pinned` —— 同一页里不再改判，避免点了 A 高亮跳到 B。
+ *
+ * 没有可用的页码目标时返回 `null`（例如整份书签都是外链）。
+ */
+export function pageActiveIndex(
+  items: DocumentOutlineItem[],
+  page: number,
+  pinned: number | null = null,
+): number | null {
+  let last = -1
+  for (let index = 0; index < items.length; index += 1) {
+    const target = items[index].target
+    if (target?.kind !== 'page') continue
+    if (target.page <= page) last = index
+  }
+  if (last < 0) return null
+
+  if (pinned !== null && pinned >= 0 && pinned < items.length) {
+    const pinnedTarget = items[pinned].target
+    const lastTarget = items[last].target
+    if (pinnedTarget?.kind === 'page' && lastTarget?.kind === 'page' && pinnedTarget.page === lastTarget.page) {
+      return pinned
+    }
+  }
+  return last
+}
+
+/** 一维偏移表（升序）里最后一个 ≤ `y` 的下标；全都大于 `y` 时返回 `null`。 */
+export function offsetIndexAt(tops: number[], y: number): number | null {
+  let hit: number | null = null
+  for (let index = 0; index < tops.length; index += 1) {
+    if (!(tops[index] <= y)) break
+    hit = index
+  }
+  return hit
+}
+
 export function headingDepths(levels: number[]): number[] {
   if (levels.length === 0) return []
   const base = Math.min(...levels)

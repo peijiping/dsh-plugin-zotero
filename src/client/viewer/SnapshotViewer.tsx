@@ -114,6 +114,7 @@ export function SnapshotViewer({
   onOpenInZotero,
   onChanged,
   onOutlineChange,
+  onOutlineActiveChange,
   captureRef,
   onCaptureChange,
 }: DocumentRendererProps): ReactElement {
@@ -128,6 +129,9 @@ export function SnapshotViewer({
   /** 目录回调走 ref：message 监听只该挂一次，不该因父级重渲染换了回调身份就重挂。 */
   const outlineRef = useRef(onOutlineChange)
   outlineRef.current = onOutlineChange
+  /** 目录反向跟随：iframe 报「滚到哪一条」，转成下标交给面板高亮。 */
+  const activeRef = useRef(onOutlineActiveChange)
+  activeRef.current = onOutlineActiveChange
   /** 桥接脚本版本；`0` 表示还没 `ready`。截图按钮的可用性看它。 */
   const bridgeVersionRef = useRef(0)
   /** 等 `capture-result` 的那一个 resolve；同一时刻只允许一个采集在跑。 */
@@ -278,6 +282,12 @@ export function SnapshotViewer({
         outlineRef.current?.(outlineOf(Array.isArray(data.items) ? data.items : []))
         return
       }
+      if (data.type === 'outline-active') {
+        // 桥接脚本给的是它自己那份列表的下标（十进制序号），无效值一概当作「说不清」。
+        const index = data.id === null ? Number.NaN : Number.parseInt(data.id, 10)
+        activeRef.current?.(Number.isInteger(index) && index >= 0 ? index : null)
+        return
+      }
       if (data.type === 'applied') {
         // `error` 非空表示整轮应用失败（桥接脚本已兜住异常并上报），
         // 这时按「全部未定位」提示，比静默停在加载态好。
@@ -390,6 +400,8 @@ export function SnapshotViewer({
     setBridgeReady(false)
     setBridgeMissing(false)
     setMissed(0)
+    // 重载后旧文档的高亮已经没有意义，等新脚本重新报到。
+    activeRef.current?.(null)
     setReloadKey((key) => key + 1)
   }
 

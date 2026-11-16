@@ -37,6 +37,8 @@ interface Props {
   onRefresh(): void
   /** 渲染器报上来的目录（PDF 书签 / 网页标题 / 笔记标题），交给左上角统一的目录浮层。 */
   onOutlineChange(outline: DocumentOutlineItem[]): void
+  /** 渲染器报上来的「当前读到哪一条目录」（下标），交给目录浮层做反向高亮。 */
+  onOutlineActiveChange(index: number | null): void
   /** 正文容器：覆盖所有渲染器、位于 30px 工具条之下，是截图范围的唯一边界。 */
   contentRef: MutableRefObject<HTMLDivElement | null>
   /** 截图状态机；遮罩挂在这层，天然不含工具条与左上角悬浮按钮。 */
@@ -165,6 +167,7 @@ export function DocumentView({
   refreshing,
   onRefresh,
   onOutlineChange,
+  onOutlineActiveChange,
   contentRef,
   shot,
   captureRef,
@@ -264,6 +267,7 @@ export function DocumentView({
           onOpenInZotero={onOpenInZotero}
           onChanged={onChanged}
           onOutlineChange={onOutlineChange}
+          onOutlineActiveChange={onOutlineActiveChange}
           captureRef={captureRef}
           onCaptureChange={onCaptureChange}
         />

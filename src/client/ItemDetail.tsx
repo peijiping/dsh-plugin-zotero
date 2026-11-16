@@ -74,6 +74,18 @@ interface OutlineState {
   items: DocumentOutlineItem[] | null
 }
 
+/**
+ * 「正文读到哪一条目录」。
+ *
+ * 和目录本身一样按当前文档归属：切附件 / 切条目时旧下标属于上一份文档，绝不能
+ * 拿去高亮新文档的同序号条目（那一条可能完全是另一节）。
+ */
+interface OutlineActiveState {
+  documentKey: string
+  /** 上报数组里的下标；`null` = 判断不了（没目录 / 文档还没就绪）。 */
+  index: number | null
+}
+
 /** 目录来源说明：同一份浮层服务三类文档，给用户一句口径。 */
 const OUTLINE_SOURCE_LABEL: Record<string, string> = {
   pdf: 'outline.source.pdf',
@@ -105,6 +117,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
+  const [outlineActive, setOutlineActive] = useState<OutlineActiveState>({ documentKey: '', index: null })
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>({ type: 'all', color: null })
   /** 页面级刷新的进行中状态：工具条按钮在 `DocumentView`，动作来源在 `ZoteroItemPane`。 */
@@ -204,6 +217,17 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
   const handleOutlineChange = useCallback((items: DocumentOutlineItem[]): void => {
     setOutline({ documentKey, items })
   }, [documentKey])
+  /** 渲染器报上来的高亮下标；越界（目录刚换、条数还是旧的）一律当作「没高亮」。 */
+  const handleOutlineActiveChange = useCallback((index: number | null): void => {
+    setOutlineActive({ documentKey, index })
+  }, [documentKey])
+  const activeOutlineIndex = outlineActive.documentKey === documentKey
+    && outlineItems !== null
+    && outlineActive.index !== null
+    && outlineActive.index >= 0
+    && outlineActive.index < outlineItems.length
+    ? outlineActive.index
+    : null
   const renderer = pickRenderer(source, detail)
   /** 目录按钮按渲染器能力出现：PDF / 快照 / 笔记 / 全文共用左上角那一个浮层。 */
   const outlineAvailable = renderer.capabilities.outline
@@ -294,9 +318,14 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
    * 目标原样交给渲染器：PDF 按页、网页快照 / 笔记按标题锚点，面板不解释。
    * **跳完不收起**：目录浮层保持打开，可以连着点好几条反复导航；收起交给
    * `OutlinePanel` 的 `useDismiss`（点浮层外 / 按 Esc）或再点一次目录按钮。
+   *
+   * 点下去就先把这条标成当前项：平滑滚动的几百毫秒里高亮不该在中途那些章节上
+   * 乱跳，等渲染器停稳后再由滚动跟随接手（各渲染器有自己的静默窗口）。
    */
-  function jumpToOutline(item: DocumentOutlineItem): void {
-    if (item.target !== null) viewerRef.current?.goToOutline(item.target)
+  function jumpToOutline(item: DocumentOutlineItem, index: number): void {
+    if (item.target === null) return
+    setOutlineActive({ documentKey, index })
+    viewerRef.current?.goToOutline(item.target)
   }
 
   return (
@@ -316,6 +345,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
         refreshing={refreshing}
         onRefresh={() => void handleRefresh()}
         onOutlineChange={handleOutlineChange}
+        onOutlineActiveChange={handleOutlineActiveChange}
         contentRef={contentRef}
         shot={shot}
         captureRef={captureRef}
@@ -333,6 +363,7 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
           t={t}
           itemKey={detail.key}
           items={outlineItems}
+          activeIndex={activeOutlineIndex}
           sourceLabel={outlineSourceLabel}
           open={outlineOpen}
           onToggle={() => {

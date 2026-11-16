@@ -14,7 +14,8 @@
  *   2. rebuild highlights from Zotero's `CssSelector` + `TextPositionSelector`
  *   3. report the user's selection back to the parent (as plain data)
  *   4. scroll/flash on `locate`, forward link clicks out of the sandbox
- *   5. publish the h1-h6 outline and scroll to a heading on request
+ *   5. publish the h1-h6 outline, scroll to a heading on request, and report
+ *      which heading the reader has scrolled into (outline follow)
  *   6. serialise the page for the screenshot feature (`capture`): the parent
  *      cannot read this document, so it gets HTML + CSS + geometry instead of
  *      a bitmap and rasterises it on its own side
@@ -174,6 +175,65 @@
   var OUTLINE_MAX_ITEMS = 800;
   var OUTLINE_MAX_DEPTH = 8;
 
+  /* ------------------------------------------------------- outline follow */
+
+  /* Which heading the reader is currently inside: the last one whose top is
+     above the viewport line. Measured here because only this side can see the
+     iframe's layout; the parent turns the index into its own outline item. */
+  var OUTLINE_LINE = 12;
+  var outlineEntries = [];
+  var lastActive = -1;
+  var activeRaf = 0;
+  /* Set while a `scroll-to-outline` jump is animating: the parent has already
+     highlighted the clicked entry and must not see it flip through every
+     section passed on the way there. */
+  var jumpQuiet = false;
+  var jumpQuietTimer = 0;
+
+  function outlineTopOf(index) {
+    var entry = outlineEntries[index];
+    if (!entry || !entry.node || !entry.node.isConnected) return Infinity;
+    return entry.node.getBoundingClientRect().top;
+  }
+
+  function activeOutlineIndex() {
+    var count = outlineEntries.length;
+    if (count === 0) return -1;
+    var index = lastActive < 0 || lastActive >= count ? 0 : lastActive;
+    /* Rects are monotonic in document order, so walk from the previous answer:
+       a normal scroll moves the boundary by one entry instead of measuring all
+       of them every frame. */
+    while (index + 1 < count && outlineTopOf(index + 1) <= OUTLINE_LINE) index += 1;
+    while (index > 0 && outlineTopOf(index) > OUTLINE_LINE) index -= 1;
+    return index;
+  }
+
+  function publishActive(force) {
+    if (!force && jumpQuiet) return;
+    var index = activeOutlineIndex();
+    if (!force && index === lastActive) return;
+    lastActive = index;
+    post({ type: 'outline-active', id: index < 0 ? null : String(index) });
+  }
+
+  function scheduleActive() {
+    if (activeRaf !== 0) return;
+    activeRaf = window.requestAnimationFrame(function () {
+      activeRaf = 0;
+      publishActive(false);
+    });
+  }
+
+  function holdJumpQuiet() {
+    jumpQuiet = true;
+    if (jumpQuietTimer !== 0) window.clearTimeout(jumpQuietTimer);
+    jumpQuietTimer = window.setTimeout(function () {
+      jumpQuietTimer = 0;
+      jumpQuiet = false;
+      publishActive(true);
+    }, 250);
+  }
+
   function publishOutline() {
     var nodes = [];
     try {
@@ -208,7 +268,10 @@
         id: String(j)
       });
     }
+    outlineEntries = entries;
+    lastActive = -1;
     post({ type: 'outline', items: items });
+    publishActive(true);
   }
 
   function scrollToOutline(rawId) {
@@ -234,6 +297,9 @@
       }
     }
     if (target === null) return;
+    /* The parent already highlighted this entry; keep it steady while the
+       smooth scroll passes through the sections in between. */
+    holdJumpQuiet();
     try {
       target.scrollIntoView({ block: 'start', behavior: 'smooth' });
     } catch (error) {
@@ -1021,6 +1087,10 @@
   document.addEventListener('selectionchange', scheduleSelection);
   document.addEventListener('scroll', function () {
     post({ type: 'selection', selection: null });
+    /* A jump in flight keeps extending its own quiet window, so the highlight
+       only catches up once the page has actually stopped. */
+    if (jumpQuiet) holdJumpQuiet();
+    scheduleActive();
   }, { passive: true, capture: true });
 
   if (document.body === null) {
@@ -1042,5 +1112,5 @@
   installStorageShim('localStorage');
   installStorageShim('sessionStorage');
 
-  post({ type: 'ready', bridge: 4 });
+  post({ type: 'ready', bridge: 5 });
 }());

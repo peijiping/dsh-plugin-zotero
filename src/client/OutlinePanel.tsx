@@ -13,9 +13,13 @@
  * 于是 PDF 跳页、HTML 滚到标题可以共用同一份 UI。
  *
  * 点条目只跳转、不收起：浮层要留着让用户连点几条反复导航。
+ *
+ * 反向跟随：正文滚到哪里，对应那条自动高亮（渲染器上报下标，见 `onOutlineActiveChange`）。
+ * 高亮行若滚出列表可视区，列表会把它带回来 —— 但用户刚自己拖过目录时先不动，
+ * 免得抢滚动。
  */
 
-import { useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { useDismiss } from './dismiss'
 import { useFloatingBox } from './floatingBox'
@@ -31,10 +35,12 @@ interface Props {
   items: DocumentOutlineItem[] | null
   /** 目录来源的一句说明：PDF 书签 / 网页标题 / 笔记标题 …，只作展示。 */
   sourceLabel: string
+  /** 正文当前读到的那一条（下标）；`null` 表示没有可跟随的位置。 */
+  activeIndex: number | null
   open: boolean
   onToggle(): void
   onClose(): void
-  onJump(item: DocumentOutlineItem): void
+  onJump(item: DocumentOutlineItem, index: number): void
 }
 
 /** 缩进宽度；层级再深也不再往外推，免得窄面板里标题全被挤成一点。 */
@@ -46,11 +52,15 @@ const PANEL_WIDTH = 360
 const PANEL_MIN_WIDTH = 260
 const PANEL_MIN_HEIGHT = 200
 
+/** 用户自己滚过目录后，这么久之内不再把高亮行带回可视区（别抢滚动）。 */
+const FOLLOW_HOLD_MS = 2500
+
 export function OutlinePanel({
   t,
   itemKey,
   items,
   sourceLabel,
+  activeIndex,
   open,
   onToggle,
   onClose,
@@ -60,6 +70,12 @@ export function OutlinePanel({
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   /** 测量基准：覆盖整个文献阅读区的透明容器。 */
   const rootRef = useRef<HTMLDivElement | null>(null)
+  /** 列表容器与每条行的节点：跟随高亮要按它们的实际位置算滚动。 */
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([])
+  /** 用户最后一次自己动目录的时间戳（滚轮 / 拖滚动条 / 触摸）。 */
+  const userScrollAt = useRef(0)
+  const wasOpen = useRef(false)
 
   const [pinned, setPinned] = useState(false)
   /** 悬停行：内联 style 写不了 `:hover`，只能自己记一个下标。 */
@@ -78,6 +94,34 @@ export function OutlinePanel({
   })
 
   useDismiss(open, box.panelRef, onClose, { pinned, extraRef: triggerRef })
+
+  /**
+   * 跟随高亮：当前读到的那一条滚出列表可视区时，把它带回来。
+   *
+   * 用 `getBoundingClientRect` 算位置而不是 `offsetTop`：行的 offsetParent 是浮层
+   * （`position: fixed`）而不是列表，两套坐标系不能混。也不用 `scrollIntoView` ——
+   * 那个会连外层一起滚，浮层是 fixed 的，不该动到页面任何东西。
+   *
+   * 用户自己翻目录的那两秒半里不抢滚动（否则手指还在拖、列表却被拽走）；刚打开
+   * 浮层时例外：直接把当前项摆到可见区，省得又得自己找。
+   */
+  useEffect(() => {
+    const justOpened = open && !wasOpen.current
+    wasOpen.current = open
+    if (!open || activeIndex === null) return
+    if (!justOpened && Date.now() - userScrollAt.current < FOLLOW_HOLD_MS) return
+    const list = listRef.current
+    const row = rowRefs.current[activeIndex]
+    if (list === null || row === undefined || row === null) return
+    const listRect = list.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    const overflowTop = rowRect.top - listRect.top
+    if (overflowTop >= 0 && rowRect.bottom <= listRect.bottom) return
+    list.scrollTo({
+      top: Math.max(0, list.scrollTop + overflowTop - list.clientHeight / 3),
+      behavior: 'smooth',
+    })
+  }, [activeIndex, open, items])
 
   return (
     <div ref={rootRef} style={rootStyle}>
@@ -131,9 +175,22 @@ export function OutlinePanel({
           {items !== null && items.length === 0 && <p style={emptyStyle}>{t('outline.empty')}</p>}
 
           {items !== null && items.length > 0 && (
-            <div style={listStyle}>
+            <div
+              ref={listRef}
+              style={listStyle}
+              // 只认「用户自己动目录」的手势：跟随高亮引起的滚动不会触发这三个。
+              onWheel={() => { userScrollAt.current = Date.now() }}
+              onTouchStart={() => { userScrollAt.current = Date.now() }}
+              onPointerDown={(event) => {
+                // 点某一条是「跳转」，不是「我在翻目录」：别把它算成手动滚动，
+                // 否则点完那两秒半里高亮跟不过来（比如滚轮接着往下读）。
+                if ((event.target as HTMLElement | null)?.closest('button') != null) return
+                userScrollAt.current = Date.now()
+              }}
+            >
               {items.map((item, index) => {
                 const target = item.target
+                const active = index === activeIndex
                 const hint = target === null
                   ? item.title
                   : `${item.title}\n${target.kind === 'page'
@@ -142,17 +199,25 @@ export function OutlinePanel({
                 return (
                   <button
                     key={`${index}-${item.title}`}
+                    ref={(node) => { rowRefs.current[index] = node }}
                     type="button"
+                    aria-current={active ? 'true' : undefined}
                     disabled={target === null}
-                    onClick={() => onJump(item)}
+                    onClick={() => onJump(item, index)}
                     onMouseEnter={() => setHovered(index)}
                     onMouseLeave={() => setHovered((current) => (current === index ? null : current))}
                     title={hint}
                     style={{
                       ...rowStyle,
+                      ...(active ? activeRowStyle : null),
                       paddingLeft: 6 + Math.min(item.depth, MAX_INDENT_DEPTH) * INDENT,
                       opacity: target === null ? 0.5 : 1,
-                      background: hovered === index && target !== null ? 'rgba(127,127,127,0.14)' : 'transparent',
+                      // 高亮压过悬停：悬停只是「要点这里」，高亮是「你正在这里读」。
+                      background: active
+                        ? ACTIVE_ROW_BACKGROUND
+                        : hovered === index && target !== null
+                          ? 'rgba(127,127,127,0.14)'
+                          : 'transparent',
                       cursor: target === null ? 'default' : 'pointer',
                     }}
                   >
@@ -365,6 +430,15 @@ const rowStyle = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+} as const
+
+/** 正在读的那一条：淡蓝底 + 左侧色条 + 蓝字加粗，蓝底见 {@link ACTIVE_ROW_BACKGROUND}。 */
+const ACTIVE_ROW_BACKGROUND = 'rgba(80,140,255,0.14)'
+
+const activeRowStyle = {
+  color: ACCENT,
+  fontWeight: 600,
+  boxShadow: `inset 2px 0 0 ${ACCENT}`,
 } as const
 
 const emptyStyle = {

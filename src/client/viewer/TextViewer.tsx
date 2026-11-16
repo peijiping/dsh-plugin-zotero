@@ -26,7 +26,7 @@ import type { ZoteroAnnotation } from '../../zotero/types'
 import { buildSegments, type Segment } from '../annotationRuns'
 import type { Translate } from '../locales'
 import { NOTE_CSS } from '../NoteList'
-import { OUTLINE_ANCHOR_ATTR, parseHtmlHeadings, parseMarkdownHeadings } from './outline'
+import { OUTLINE_ANCHOR_ATTR, offsetIndexAt, parseHtmlHeadings, parseMarkdownHeadings } from './outline'
 import { SelectionBar } from './SelectionBar'
 import { TranslationCard, isInsideTranslation } from './TranslationCard'
 import { useTranslation } from './useTranslation'
@@ -35,6 +35,10 @@ import type { DocumentRendererProps, OutlineTarget } from './types'
 const FLASH_CLASS = 'dsh-zotero-ann-flash'
 const FLASH_MS = 1200
 const OUTLINE_FLASH_CLASS = 'dsh-zp-outline-flash'
+/** 目录跟随的判定线：标题落到视口顶端往下这么多，就算「读到这里了」。 */
+const ACTIVE_LINE = 12
+/** 跳转后滚动停稳多久恢复跟随（平滑滚动期间不抢用户点中的那一条）。 */
+const JUMP_QUIET_MS = 180
 const TEXT_TYPES = new Set(['highlight', 'underline'])
 
 /** 把视口里的某个 y 坐标滚到滚动容器顶部偏下一点的位置。 */
@@ -103,6 +107,7 @@ export function TextViewer({
   onInsertExcerpt,
   onInsertTranslation,
   onOutlineChange,
+  onOutlineActiveChange,
 }: DocumentRendererProps): ReactElement {
   const boxRef = useRef<HTMLDivElement | null>(null)
   /** 纯文本正文的内层：字符偏移只在这层里数，排除上下两条提示文字。 */
@@ -140,8 +145,146 @@ export function TextViewer({
   /** 目录回调走 ref：上报 effect 不该因父级重渲染换了回调身份就重跑。 */
   const outlineRef = useRef(onOutlineChange)
   outlineRef.current = onOutlineChange
+  /** 目录跟随的上报通道：同理走 ref，滚动监听只该挂一次。 */
+  const activeRef = useRef(onOutlineActiveChange)
+  activeRef.current = onOutlineActiveChange
+  /** 上一次报出去的下标：只在变化时上报，滚动时不逐帧刷父级。 */
+  const activeIndexRef = useRef<number | null>(null)
+  /** 跳转后的静默窗口：平滑滚动这几百毫秒里别把用户点中的那一条改掉。 */
+  const jumpQuietRef = useRef(false)
+  const jumpTimerRef = useRef<number | null>(null)
+  /** 停稳后补判一次；跟随 effect 卸掉时置空。 */
+  const outlineTickRef = useRef<(() => void) | null>(null)
+
+  /** 重新起算静默窗口（滚动还在继续就一直往后推）。 */
+  function rearmJumpQuiet(): void {
+    if (jumpTimerRef.current !== null) window.clearTimeout(jumpTimerRef.current)
+    jumpTimerRef.current = window.setTimeout(() => {
+      jumpTimerRef.current = null
+      jumpQuietRef.current = false
+      outlineTickRef.current?.()
+    }, JUMP_QUIET_MS)
+  }
+
+  function beginJumpQuiet(): void {
+    jumpQuietRef.current = true
+    rearmJumpQuiet()
+  }
+
   useEffect(() => {
     outlineRef.current?.(noteParsed?.items ?? textOutline)
+  }, [noteParsed, textOutline])
+
+  /**
+   * 目录反向跟随（滚动 → 高亮）：视口顶端之上最后一个标题就是「正在读的那一节」。
+   *
+   * 位置在内容变化时量一次（标题的 y 坐标缓存成数组），滚动帧里只做一次比较 ——
+   * 每帧都调 `getBoundingClientRect` 会在滚动时反复强制同步布局。
+   * 笔记按锚点元素量，纯文本按字符偏移找到文字节点再量（正文不能被插锚点，
+   * 否则按同样偏移切分的标注会错位），两路的结论都收敛成「下标」。
+   */
+  useEffect(() => {
+    const box = boxRef.current
+    if (box === null) return
+    const items = noteParsed?.items ?? textOutline
+    // 目录换了（换文档 / 改了笔记正文）：先把上一条结论作废，下面会重新报一次。
+    activeIndexRef.current = null
+    if (items.length === 0) {
+      activeRef.current?.(null)
+      return
+    }
+
+    let tops: number[] | null = null
+    let frame = 0
+
+    const measure = (): number[] | null => {
+      const boxRect = box.getBoundingClientRect()
+      const scrolled = box.scrollTop
+
+      if (noteParsed !== null) {
+        const elements = Array.from(box.querySelectorAll<HTMLElement>(`[${OUTLINE_ANCHOR_ATTR}]`))
+        // 条目与锚点一一对应（`parseHtmlHeadings` 按序号打属性）；对不上就是还没提交布局。
+        if (elements.length !== items.length) return null
+        return elements.map((element) => element.getBoundingClientRect().top - boxRect.top + scrolled)
+      }
+
+      const root = contentRef.current
+      if (root === null) return null
+      const nodes: { node: Text; start: number }[] = []
+      let total = 0
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      let current = walker.nextNode() as Text | null
+      while (current !== null) {
+        nodes.push({ node: current, start: total })
+        total += current.nodeValue?.length ?? 0
+        current = walker.nextNode() as Text | null
+      }
+      if (nodes.length === 0) return null
+
+      const out: number[] = []
+      let cursor = 0
+      for (const item of items) {
+        const offset = item.target?.kind === 'anchor' ? Number.parseInt(item.target.id, 10) : Number.NaN
+        // 偏移是升序的（按正文顺序解析），从上一个命中的节点往后找就够了。
+        while (cursor + 1 < nodes.length && nodes[cursor + 1].start <= offset) cursor += 1
+        const hit = nodes[cursor]
+        if (!Number.isFinite(offset) || hit === undefined) {
+          out.push(Number.NaN)
+          continue
+        }
+        const range = document.createRange()
+        range.setStart(hit.node, Math.min(Math.max(offset - hit.start, 0), hit.node.nodeValue?.length ?? 0))
+        range.collapse(true)
+        out.push(range.getBoundingClientRect().top - boxRect.top + scrolled)
+      }
+      return out
+    }
+
+    const tick = (): void => {
+      frame = 0
+      if (jumpQuietRef.current) return
+      const measured = tops ?? (tops = measure())
+      if (measured === null) return
+      // 文档顶端还没到第一个标题时也算第一节在读（与 Zotero 大纲的行为一致）。
+      const index = offsetIndexAt(measured, box.scrollTop + ACTIVE_LINE) ?? 0
+      if (activeIndexRef.current === index) return
+      activeIndexRef.current = index
+      activeRef.current?.(index)
+    }
+    outlineTickRef.current = tick
+
+    const schedule = (): void => {
+      if (frame !== 0) return
+      frame = window.requestAnimationFrame(tick)
+    }
+    const onScroll = (): void => {
+      // 跳转引起的滚动：一直把静默窗口往后推，停稳 JUMP_QUIET_MS 后才恢复跟随。
+      if (jumpQuietRef.current) rearmJumpQuiet()
+      schedule()
+    }
+
+    box.addEventListener('scroll', onScroll, { passive: true })
+    // 宽度变了会重排（图片、缩放、分栏），缓存的 y 坐标要重新量。
+    const observer = new ResizeObserver(() => {
+      tops = null
+      schedule()
+    })
+    observer.observe(box)
+    // 图片加载完高度会变（笔记里的图是 data: 内联的，加载时机不好预判）。
+    const onLoad = (): void => {
+      tops = null
+      schedule()
+    }
+    box.addEventListener('load', onLoad, true)
+    tick()
+
+    return () => {
+      box.removeEventListener('scroll', onScroll)
+      box.removeEventListener('load', onLoad, true)
+      observer.disconnect()
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+      outlineTickRef.current = null
+    }
   }, [noteParsed, textOutline])
 
   useEffect(() => {
@@ -152,6 +295,7 @@ export function TextViewer({
   useEffect(() => () => {
     if (flashTimer.current !== null) window.clearTimeout(flashTimer.current)
     if (outlineTimer.current !== null) window.clearTimeout(outlineTimer.current)
+    if (jumpTimerRef.current !== null) window.clearTimeout(jumpTimerRef.current)
   }, [])
 
   function locate(annotationKey: string): boolean {
@@ -190,6 +334,7 @@ export function TextViewer({
   function goToOutline(target: OutlineTarget | null): void {
     const box = boxRef.current
     if (target === null || target.kind !== 'anchor' || box === null) return
+    beginJumpQuiet()
 
     // 笔记 / HTML：id 是标题锚点的序号，由 parseHtmlHeadings 打进正文。
     if (noteParsed !== null) {

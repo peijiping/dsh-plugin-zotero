@@ -23,8 +23,9 @@ export const SNAPSHOT_VERSION = 1
  * 2：`annotation-click` 携带 `rect`（点击位置）。
  * 3：上报网页标题目录 `outline`，并能响应 `scroll-to-outline`。
  * 4：响应 `capture`，把整页序列化成自包含 HTML + CSS 回传（截图用）。
+ * 5：滚动时上报 `outline-active`（目录反向跟随），跳转动画期间不自作主张改选。
  */
-export const SNAPSHOT_BRIDGE_VERSION = 4
+export const SNAPSHOT_BRIDGE_VERSION = 5
 
 /** 桥接脚本响应 `capture` 时回传的自包含页面快照。 */
 export interface SnapshotCapturePayload {
@@ -136,6 +137,13 @@ export type SnapshotEvent =
   /** `bridge` 缺省视为 1（没有这个字段的老脚本）。 */
   | { type: 'ready'; bridge?: number }
   | { type: 'outline'; items: SnapshotOutlineItem[] }
+  /**
+   * 正文滚动到哪一条目录（`id` 是 `outline` 里的锚点序号）。
+   *
+   * 目录反向跟随用：父页面据此把对应那条高亮。`id` 为 `null` 表示当前判断不了
+   * （没有标题）。只在结论变化时发，不会逐帧刷。
+   */
+  | { type: 'outline-active'; id: string | null }
   | { type: 'applied'; total: number; resolved: number; rev: number; error?: string | null }
   | { type: 'selection'; selection: SnapshotSelection | null }
   | { type: 'locate-result'; key: string; ok: boolean }
@@ -163,6 +171,7 @@ export type SnapshotEvent =
 const EVENT_TYPES = new Set([
   'ready',
   'outline',
+  'outline-active',
   'applied',
   'selection',
   'locate-result',
