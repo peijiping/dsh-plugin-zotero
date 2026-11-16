@@ -21,7 +21,7 @@
  * 渲染，所以开合状态用 `composing` / `onComposingChange` 受控传入。
  */
 
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 
 import { Button } from './ui'
 
@@ -135,6 +135,7 @@ function NoteComposer({
         html=""
         t={t}
         autoFocus
+        minHeight={600}
         placeholder={t('note.bodyPlaceholder')}
         ariaLabel={t('note.new')}
         onDirty={() => setNotice(null)}
@@ -195,6 +196,13 @@ function NoteItem({
       if (timer.current !== null) window.clearTimeout(timer.current)
     }
   }, [])
+
+  // 卸载前最后冲一次盘。
+  //
+  // 收起、切换条目、关浮层都有 blur 兜着，但**按 Esc 关浮层不会**——DOM 直接被移除，
+  // 不派发 blur。layout cleanup 是唯一还能读到编辑器 DOM 的时机（ref 尚未 detach、
+  // 节点尚未移除），所以这里挂一发 fire-and-forget，成败都不再回报。
+  useLayoutEffect(() => () => void flush(), [])
 
   // 保存成功后 `onChanged()` 会带回新版本，本地版本号只涨不退。
   useEffect(() => {
@@ -257,6 +265,9 @@ function NoteItem({
       return
     }
     const html = handle.getHtml()
+    // 顺手把缓存更新成最新正文：收起再展开时编辑器会用这份重新挂载，否则会看到
+    // 打开时那份旧内容。
+    if (alive.current) setRaw(html)
     if (inflight.current) {
       queued.current = true
       return
@@ -302,11 +313,19 @@ function NoteItem({
     setRemoving(true)
     setNotice(null)
     try {
-      await deleteNote({ key: note.key, version: version.current })
+      // 删除紧跟在一次自动保存后面时，本地版本号已经落后一轮：412 就重取再删。
+      try {
+        await deleteNote({ key: note.key, version: version.current })
+      } catch (error) {
+        if (!(error instanceof ApiFailure) || error.code !== 'zotero_stale') throw error
+        const fresh = await fetchNoteRaw(note.key)
+        version.current = fresh.version
+        await deleteNote({ key: note.key, version: fresh.version })
+      }
       showToast(t('note.deleted'))
       onChanged()
     } catch (error) {
-      setNotice(tpl(t('note.writeFailed'), { message: errorMessage(error) }))
+      if (alive.current) setNotice(tpl(t('note.writeFailed'), { message: errorMessage(error) }))
     } finally {
       if (alive.current) setRemoving(false)
     }
@@ -361,8 +380,9 @@ function NoteItem({
 
       {open && loading && <div style={hintStyle}>{t('note.loading')}</div>}
 
-      {/* 不可写时退回原来的只读渲染：清洗版 HTML 已经把 data-* 剥掉了，不适合回写。 */}
-      {open && !canWrite && (
+      {/* 不可写、或可写但没取到原始正文（加载失败）时，退回只读展示。清洗版 HTML
+          已经把 data-* 剥掉了，只能看不能回写，所以只在编辑不可用时用。 */}
+      {open && !loading && raw === null && (
         <div
           className="dsh-zotero-note"
           dangerouslySetInnerHTML={{ __html: note.html }}
@@ -376,9 +396,9 @@ function NoteItem({
             // 换条目才重建编辑器：光靠 `open` 切换会让同一份 DOM 留着上一条的内容。
             key={note.key}
             ref={editor}
-            html={raw}
+            html={raw ?? ''}
             t={t}
-            minHeight={140}
+            minHeight={600}
             placeholder={t('note.bodyPlaceholder')}
             ariaLabel={note.title}
             onDirty={markDirty}
@@ -386,15 +406,14 @@ function NoteItem({
             onCommit={() => void flush()}
           />
           <div style={editorFootStyle}>
-            <span style={note.anchored ? anchorHintStyle : editorHintStyle}>
-              {note.anchored
-                ? t('note.anchorWarn')
-                : status === 'saving'
-                  ? t('note.saving')
-                  : status === 'saved'
-                    ? t('note.savedShort')
-                    : t('note.autosaveHint')}
+            <span style={statusStyle}>
+              {status === 'saving' ? t('note.saving') : status === 'saved' ? t('note.savedShort') : t('note.autosaveHint')}
             </span>
+            {note.anchored && (
+              <span style={anchorHintStyle} title={t('note.anchorWarn')}>
+                {t('note.anchorWarn')}
+              </span>
+            )}
           </div>
         </>
       )}
@@ -420,10 +439,10 @@ function NoteItem({
 export const NOTE_CSS = `
 .dsh-zotero-note p { margin: 0 0 6px; }
 .dsh-zotero-note p:last-child { margin-bottom: 0; }
-.dsh-zotero-note h1 { font-size: 16px; line-height: 1.5; margin: 10px 0 6px; }
-.dsh-zotero-note h2 { font-size: 14.5px; line-height: 1.5; margin: 9px 0 5px; }
-.dsh-zotero-note h3 { font-size: 13.5px; line-height: 1.5; margin: 8px 0 4px; }
-.dsh-zotero-note h4 { font-size: 13px; line-height: 1.5; margin: 6px 0 4px; }
+.dsh-zotero-note h1 { margin: 10px 0 6px; line-height: 1.45; }
+.dsh-zotero-note h2 { margin: 9px 0 5px; line-height: 1.45; }
+.dsh-zotero-note h3 { margin: 8px 0 4px; line-height: 1.45; }
+.dsh-zotero-note h4 { margin: 6px 0 4px; line-height: 1.45; }
 .dsh-zotero-note h1:first-child, .dsh-zotero-note h2:first-child { margin-top: 0; }
 .dsh-zotero-note ul, .dsh-zotero-note ol { margin: 4px 0 6px; padding-left: 20px; }
 .dsh-zotero-note li { margin: 2px 0; }
@@ -514,18 +533,21 @@ const editorFootStyle = {
   marginTop: 4,
 } as const
 
-const editorHintStyle = {
-  flex: 1,
+/** 保存状态：固定在左侧，别被锚点提示挤动，否则「保存中」一闪就换位置。 */
+const statusStyle = {
+  flexShrink: 0,
   fontSize: 11,
   opacity: 0.6,
 } as const
 
-/** 锚点提示：比普通提示更显眼，但别做成错误色——它只是「别手改这些标签」。 */
+/** 锚点提示：只是「这几块别指望能改」，别做成错误色。 */
 const anchorHintStyle = {
   flex: 1,
-  fontSize: 11,
+  minWidth: 0,
+  fontSize: 10.5,
   lineHeight: 1.5,
   color: '#d29922',
+  textAlign: 'right',
 } as const
 
 const hintStyle = {

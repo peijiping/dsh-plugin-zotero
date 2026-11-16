@@ -176,7 +176,7 @@ const STATE_COMMANDS: ReadonlyArray<readonly [string, string]> = [
 ]
 
 export const NoteEditor = forwardRef<NoteEditorHandle, Props>(function NoteEditor(
-  { html, onDirty, onCommit, t, placeholder, ariaLabel, minHeight = 96, autoFocus = false },
+  { html, onDirty, onCommit, t, placeholder, ariaLabel, minHeight = 150, autoFocus = false },
   ref,
 ): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -364,6 +364,7 @@ const EDITOR_CSS = `
 
 const shellStyle = {
   marginTop: 6,
+  boxSizing: 'border-box',
   border: '1px solid rgba(127,127,127,0.3)',
   borderRadius: 6,
   background: 'rgba(127,127,127,0.04)',
@@ -379,14 +380,20 @@ const toolbarStyle = {
   borderBottom: '1px solid rgba(127,127,127,0.2)',
 } as const
 
+/**
+ * 编辑区本身。
+ *
+ * 高度三段式：`minHeight`（调用方给，笔记默认 600）→ 内容撑开 → `maxHeight` 封顶。
+ * 夹在中间可以两全：短笔记是一大片能直接写的区域，不缩成一条；长笔记也不会把整块
+ * 面板撞飞，超过上限后在框内滚。
+ */
 const bodyStyle = {
   padding: '6px 8px',
   fontSize: 12.5,
   lineHeight: 1.75,
   overflowWrap: 'break-word',
-  resize: 'vertical',
   overflow: 'auto',
-  maxHeight: 520,
+  maxHeight: 900,
 } as const
 
 /** 工具条上的高亮按钮：小黄块比任何图标都直观。 */
