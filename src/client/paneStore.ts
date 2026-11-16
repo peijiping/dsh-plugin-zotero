@@ -42,6 +42,16 @@ const TREE_STATE_KEY = 'dsh-plugin-zotero.treeState'
 /** 合法的虚拟分类范围（存档里的 scope 不在其中就丢弃）。 */
 const KNOWN_SCOPES: readonly ZoteroItemScope[] = ['library', 'publications', 'unfiled', 'trash', 'recent']
 
+/** 需要在分类树里显示数量的特殊目录（「最近阅读」走 recentCount）。 */
+export type VirtualCountScope = Exclude<ZoteroItemScope, 'library' | 'recent'>
+
+const VIRTUAL_COUNT_SCOPES: readonly VirtualCountScope[] = ['publications', 'unfiled', 'trash']
+
+/** scope 是否是树里要显示数量的特殊目录。 */
+export function isVirtualCountScope(scope: ZoteroItemScope | undefined): scope is VirtualCountScope {
+  return scope === 'publications' || scope === 'unfiled' || scope === 'trash'
+}
+
 /** 文库根节点的 id（只存在于客户端，不对应任何 Zotero 分类）。 */
 export const TREE_ROOT_ID = '__library__'
 
@@ -166,6 +176,11 @@ export interface PaneState {
   treeQuery: string
   /** 「最近阅读」可列出的条数（由分类树接口下发，上限 50）。 */
   recentCount: number
+  /**
+   * 特殊目录的条目总数（不带搜索/标签筛选）。
+   * 后台异步补齐；未取到时对应键缺失，树里就不显示数字。
+   */
+  virtualCounts: Readonly<Partial<Record<VirtualCountScope, number>>>
 
   /** 当前选择：文库根（key = TREE_ROOT_ID）/ 真实分类 / 虚拟分类。 */
   selectedCollection: ZoteroCollection | null
@@ -213,6 +228,7 @@ function initialState(): PaneState {
     expanded: new Set([TREE_ROOT_ID, ...saved.expanded]),
     treeQuery: '',
     recentCount: 0,
+    virtualCounts: {},
     selectedCollection: saved.selected === null
       ? null
       : {
@@ -247,6 +263,8 @@ function errorMessage(error: unknown): string {
 let state: PaneState = initialState()
 const listeners = new Set<() => void>()
 let treeInflight: Promise<void> | null = null
+/** 特殊目录计数的请求序号：刷新后迟到的旧结果不能覆盖新数量。 */
+let virtualCountsSeq = 0
 let tagsInflight: Promise<void> | null = null
 let searchTimer: number | null = null
 let toastTimer: number | null = null
@@ -312,6 +330,26 @@ function selectionQuery(): {
 }
 
 /**
+ * 后台补「我的出版物 / 未分类条目 / 回收站」的数量。
+ *
+ * 复用条目列表接口，只取一条读总数；不阻塞分类树渲染。单项失败保留上一次
+ * 成功的值（如果还没有则继续不显示），刷新时靠序号丢掉迟到的旧结果。
+ */
+function loadVirtualCounts(): void {
+  const seq = ++virtualCountsSeq
+  for (const scope of VIRTUAL_COUNT_SCOPES) {
+    void fetchItems({ scope, limit: 1 })
+      .then((data) => {
+        if (seq !== virtualCountsSeq) return
+        patch({ virtualCounts: { ...state.virtualCounts, [scope]: data.total } })
+      })
+      .catch(() => {
+        // 单个目录计数失败不影响树或列表。
+      })
+  }
+}
+
+/**
  * 拉取状态与分类树。
  *
  * 成功后按 key 保留原选择（真实分类被删则回到文库根），再重拉条目列表；
@@ -357,6 +395,8 @@ export function loadTree(force = false): Promise<void> {
         expanded,
         selectedCollection: selected,
       })
+      // 特殊目录数量后台补，不拖慢树首屏；force 刷新时也会重取。
+      loadVirtualCounts()
       // 选中的分类若已被删掉（回落到文库根），把回落结果写回存档。
       saveTreeState()
       reloadItems({ reset: true })
@@ -512,9 +552,16 @@ export function reloadItems(options: { reset: boolean; append?: boolean }): void
   // 「最近阅读」固定按最后打开时间倒序（Host 拼名单的顺序），标题排序与标签筛选都不参与。
   const recent = isRecentSelection(state.selectedCollection)
   const tags = recent ? [] : [...state.selectedTags]
+  const query = state.query.trim()
+  const selectedScope = state.selectedCollection?.scope
+  // 选中特殊目录且没有搜索/标签筛选时，列表返回的 total 就是树里要显示的数量；
+  // 带筛选的 total 只能代表筛选结果，不能覆盖树上的目录总数。
+  const countScope = !append && query === '' && tags.length === 0 && isVirtualCountScope(selectedScope)
+    ? selectedScope
+    : null
   fetchItems({
     ...selectionQuery(),
-    q: state.query.trim(),
+    q: query,
     tags: tags.length === 0 ? undefined : tags,
     tagMode: tags.length === 0 ? undefined : state.tagMode,
     sort: recent || state.sort === 'none' ? undefined : 'title',
@@ -524,10 +571,13 @@ export function reloadItems(options: { reset: boolean; append?: boolean }): void
   }, controller.signal)
     .then((data) => {
       if (current !== itemsSeq) return
+      const virtualCounts: Partial<Record<VirtualCountScope, number>> = { ...state.virtualCounts }
+      if (countScope !== null) virtualCounts[countScope] = data.total
       patch({
         items: append ? [...state.items, ...data.items] : data.items,
         itemsTotal: data.total,
         itemsError: null,
+        virtualCounts,
       })
     })
     .catch((error: unknown) => {

@@ -16,10 +16,11 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { Button, SectionTitle } from './ui'
 
+import { openInZotero } from './api'
 import { CollectionTree } from './CollectionTree'
 import type { InputActions } from './inline'
 import { ItemList } from './ItemList'
-import type { Translate } from './locales'
+import { tpl, type Translate } from './locales'
 import {
   clearItemSelection,
   clearTags,
@@ -35,6 +36,7 @@ import {
   setTagMode,
   setTagQuery,
   setTreeQuery,
+  showToast,
   toggleTag,
   TREE_ROOT_ID,
   usePaneState,
@@ -44,6 +46,7 @@ import { SearchField } from './SearchField'
 import { TagPanel } from './TagPanel'
 import { Toast } from './Toast'
 import { useInsertion } from './useInsertion'
+import { OpenInZoteroIcon } from './viewer/OpenInZoteroIcon'
 
 /** 左栏宽度的存储键与取值范围。 */
 const TREE_WIDTH_KEY = 'dsh-plugin-zotero.treeWidth'
@@ -90,6 +93,10 @@ function StatusDot({ ok, label }: { ok: boolean; label: string }): ReactElement 
   )
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }: Props): ReactElement {
   const {
     health,
@@ -108,6 +115,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     tagsError,
     treeQuery,
     recentCount,
+    virtualCounts,
     tagQuery,
     selectedTags,
     tagMode,
@@ -128,6 +136,20 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
   const recent = isRecentSelection(selectedCollection)
 
   const insertion = useInsertion(t, sessions, sessionId, inputActions)
+
+  /**
+   * 跳回 Zotero 主窗口：真实分类带 key 跳到该分类（目录树 + 列表），
+   * 文库根与「最近阅读」等虚拟分类没有 select URL，只唤起主窗口。
+   */
+  function openCurrentInZotero(): void {
+    const collection = selectedCollection
+    const key = collection !== null && collection.key !== TREE_ROOT_ID && collection.scope === undefined
+      ? collection.key
+      : null
+    openInZotero(key === null ? { kind: 'library' } : { kind: 'collection', key }).catch((error: unknown) => {
+      showToast(tpl(t('viewer.openFailed'), { message: errorMessage(error) }))
+    })
+  }
 
   const [treeWidth, setTreeWidth] = useState(readTreeWidth)
   const [splitHover, setSplitHover] = useState(false)
@@ -183,6 +205,16 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
         <Button variant="ghost" size="sm" onClick={() => void loadTree(true)}>
           {t('action.refresh')}
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={openCurrentInZotero}
+          title={t('viewer.openInZotero')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+        >
+          <OpenInZoteroIcon size={12} />
+          {t('viewer.openInZoteroShort')}
+        </Button>
       </header>
 
       <div ref={bodyRef} style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -216,6 +248,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
                 treeQuery={treeQuery}
                 selectedCollectionKey={selectedCollection?.key ?? null}
                 recentCount={recentCount}
+                virtualCounts={virtualCounts}
                 onSelectCollection={selectCollection}
                 onInsertCollection={insertion.insertCollection}
               />

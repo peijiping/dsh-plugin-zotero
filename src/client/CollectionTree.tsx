@@ -3,7 +3,8 @@
  *
  * - 行首三角箭头只管开合，且只在有子分类的行出现；点行体选中该范围。
  * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin。
- * - 真实分类行右侧显示条目数；右键 → 「添加整目录引用」。
+ * - 真实分类与特殊目录（我的出版物 / 未分类条目 / 回收站）右侧显示条目数；
+ *   右键真实分类 → 「添加整目录引用」。
  * - 「我的文库」根节点是可选中的全库范围；其下挂三个虚拟分类
  *   （我的出版物 / 未分类条目 / 回收站），与 Zotero 左侧栏一致。
  * - 顶部筛选框只筛目录名（同 Zotero 左栏）：命中分类保留、非命中的祖先作为
@@ -19,7 +20,13 @@ import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroCollection, ZoteroItemScope } from '../zotero/types'
 import type { Translate } from './locales'
-import { toggleTreeNode, TREE_ROOT_ID, usePaneState } from './paneStore'
+import {
+  isVirtualCountScope,
+  toggleTreeNode,
+  TREE_ROOT_ID,
+  usePaneState,
+  type VirtualCountScope,
+} from './paneStore'
 import { TREE_BLUE, TREE_GRAY, TREE_GREEN, TREE_ORANGE, TREE_RED } from './styles'
 
 /** 每层缩进量（px）。 */
@@ -69,8 +76,10 @@ interface TreeCtx {
   /** 当前筛选词（已小写）；空串表示不筛选。 */
   filter: string
   selectedCollectionKey: string | null
-  /** 「最近阅读」可列出的条数（只给这一个虚拟分类显示计数）。 */
+  /** 「最近阅读」可列出的条数。 */
   recentCount: number
+  /** 我的出版物 / 未分类条目 / 回收站的条目总数（未取到就不显示）。 */
+  virtualCounts: Readonly<Partial<Record<VirtualCountScope, number>>>
   toggle(nodeId: string): void
   select(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
@@ -85,6 +94,8 @@ interface Props {
   selectedCollectionKey: string | null
   /** 「最近阅读」可列出的条数。 */
   recentCount: number
+  /** 我的出版物 / 未分类条目 / 回收站的条目总数。 */
+  virtualCounts: Readonly<Partial<Record<VirtualCountScope, number>>>
   onSelectCollection(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
 }
@@ -335,8 +346,15 @@ function virtualCollection(node: VirtualNode, t: Translate): ZoteroCollection {
 function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; depth: number }): ReactElement {
   const collection = virtualCollection(node, ctx.t)
   const selected = ctx.selectedCollectionKey === collection.key
-  /** 只有「最近阅读」显示计数：其余虚拟分类的条目数要扫全库，代价不值得。 */
-  const count = node.scope === 'recent' ? ctx.recentCount : undefined
+  /**
+   * 最近阅读读插件自己的进度记录；其余三个特殊目录读后台补的 total。
+   * 数量异步返回，没取到时保持不显示，不让数字把树撑变形。
+   */
+  const count = node.scope === 'recent'
+    ? ctx.recentCount
+    : isVirtualCountScope(node.scope)
+      ? ctx.virtualCounts[node.scope]
+      : undefined
   return (
     <div
       onClick={() => ctx.select(collection)}
@@ -360,6 +378,7 @@ export function CollectionTree(props: Props): ReactElement {
     treeQuery,
     selectedCollectionKey,
     recentCount,
+    virtualCounts,
     onSelectCollection,
     onInsertCollection,
   } = props
@@ -382,6 +401,7 @@ export function CollectionTree(props: Props): ReactElement {
     filter,
     selectedCollectionKey,
     recentCount,
+    virtualCounts,
     toggle: toggleTreeNode,
     select: onSelectCollection,
     onInsertCollection,

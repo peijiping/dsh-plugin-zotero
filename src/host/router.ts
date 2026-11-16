@@ -441,7 +441,21 @@ async function handleAttachmentInfo(res: ServerResponse, params: URLSearchParams
   ok(res, data)
 }
 
-/** 用系统默认处理器打开 `zotero://` URL；参数数组传递，不经过 shell。 */
+/** 分离进程启动外部命令；参数数组传递，不经过 shell。 */
+function spawnDetached(command: string, args: string[]): Promise<void> {
+  return new Promise<void>((resolvePromise, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    child.once('spawn', () => {
+      child.unref()
+      resolvePromise()
+    })
+    child.once('error', (error: Error) => {
+      reject(new ZoteroError('internal_error', `无法打开外部应用：${error.message}`))
+    })
+  })
+}
+
+/** 用系统默认处理器打开 `zotero://` URL。 */
 function openExternal(url: string): Promise<void> {
   const command = process.platform === 'darwin'
     ? 'open'
@@ -451,16 +465,17 @@ function openExternal(url: string): Promise<void> {
   const args = process.platform === 'win32'
     ? ['url.dll,FileProtocolHandler', url]
     : [url]
-  return new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
-    child.once('spawn', () => {
-      child.unref()
-      resolvePromise()
-    })
-    child.once('error', (error) => {
-      reject(new ZoteroError('internal_error', `无法打开外部应用：${error.message}`))
-    })
-  })
+  return spawnDetached(command, args)
+}
+
+/**
+ * 启动 / 激活 Zotero 主窗口：没有可定位的分类 key 时用（文库根、虚拟分类）。
+ * `zotero://select/library` 不是合法的 select URL，只能交给系统唤起应用。
+ */
+function activateZotero(): Promise<void> {
+  if (process.platform === 'darwin') return spawnDetached('open', ['-a', 'Zotero'])
+  if (process.platform === 'win32') return spawnDetached('cmd.exe', ['/c', 'start', '', 'zotero'])
+  return spawnDetached('zotero', [])
 }
 
 /** 读取小请求体；超过上限直接拒绝，避免被大 body 拖住。 */
@@ -479,9 +494,29 @@ async function readBody(req: IncomingMessage, limit: number): Promise<string> {
 async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const record = await readJsonBody(req, 4096)
   const key = typeof record.key === 'string' ? record.key : ''
-  const kind = record.kind === 'item' || record.kind === 'attachment' ? record.kind : null
-  if (!KEY_PATTERN.test(key) || kind === null) {
-    fail(res, 400, 'bad_request', 'key 或 kind 不合法')
+  const kind = record.kind === 'item'
+    || record.kind === 'attachment'
+    || record.kind === 'collection'
+    || record.kind === 'library'
+    ? record.kind
+    : null
+  if (kind === null) {
+    fail(res, 400, 'bad_request', 'kind 不合法')
+    return
+  }
+  if (kind === 'library') {
+    await activateZotero()
+    ok(res, { opened: true })
+    return
+  }
+  if (!KEY_PATTERN.test(key)) {
+    fail(res, 400, 'bad_request', 'key 格式不合法')
+    return
+  }
+  if (kind === 'collection') {
+    // Zotero 主窗口选中该分类，右侧即为该分类的文献列表。
+    await openExternal(`zotero://select/library/collections/${key}`)
+    ok(res, { opened: true })
     return
   }
   let url = `zotero://select/library/items/${key}`

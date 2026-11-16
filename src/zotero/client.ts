@@ -737,6 +737,8 @@ export interface ListTagUsageOptions {
  * 传多个 `collectionKeys` 时分目录扫描，并按条目 key 去重——同一篇条目可能
  * 同时挂在父分类与子分类里，不能重复计数。超过 `USAGE_SCAN_MAX` 条的大范围
  * 按前若干页截断，超大目录可能漏掉靠后的标签（本地 API 没有按分类列标签的端点）。
+ *
+ * 回收站走 `/items/trash/top`：不带 `/top` 会把子附件也扫进来，与列表口径不一致。
  */
 export async function listTagUsage(options: ListTagUsageOptions): Promise<ZoteroTags> {
   // 「最近阅读」没有可按分类扫描的端点，也没有必要：面板在选它时不请求标签用量。
@@ -750,7 +752,7 @@ export async function listTagUsage(options: ListTagUsageOptions): Promise<Zotero
     options.scope === 'publications'
       ? [`${libraryBase()}/publications/items`]
       : options.scope === 'trash'
-        ? [`${libraryBase()}/items/trash`]
+        ? [`${libraryBase()}/items/trash/top`]
         : (options.collectionKeys ?? []).length > 0
           ? options.collectionKeys!.map((key) => `${libraryBase()}/collections/${encode(key)}/items/top`)
           : [`${libraryBase()}/items/top`]
@@ -877,12 +879,18 @@ function appendItemSort(params: URLSearchParams, options: ListItemsOptions): voi
   params.set('direction', options.direction === 'desc' ? 'desc' : 'asc')
 }
 
-/** 范围内的顶层条目端点基址（条目列表与标签用量共用同一套范围规则）。 */
+/**
+ * 范围内的顶层条目端点基址（条目列表与标签用量共用同一套范围规则）。
+ *
+ * 回收站必须用 `/items/trash/top`：Zotero 本地 API 的 `/items/trash` 会把
+ * 子附件一并列出，`Total-Results` 因此比客户端回收站的顶层条目数多（实测
+ * 126 = 94 顶层 + 32 子附件），列表里也会多出一批子附件行。
+ */
 function itemListBase(options: { scope?: ZoteroItemScope; collectionKey?: string }): string {
   return options.scope === 'publications'
     ? `${libraryBase()}/publications/items`
     : options.scope === 'trash'
-      ? `${libraryBase()}/items/trash`
+      ? `${libraryBase()}/items/trash/top`
       : options.collectionKey
         ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items/top`
         : `${libraryBase()}/items/top`

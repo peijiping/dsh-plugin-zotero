@@ -185,10 +185,13 @@ export function snapshotUrl(key: string): string {
   return `/dsh-zotero/snapshot/${encodeURIComponent(key)}/`
 }
 
-/** 用系统 Zotero 打开条目或附件页。 */
-export async function openInZotero(
-  input: { key: string; kind: 'item' | 'attachment'; page?: number },
-): Promise<void> {
+/** 用系统 Zotero 打开条目、附件页或分类；`library` 只唤起主窗口。 */
+export type OpenInZoteroInput =
+  | { kind: 'item' | 'collection'; key: string }
+  | { kind: 'attachment'; key: string; page?: number }
+  | { kind: 'library' }
+
+export async function openInZotero(input: OpenInZoteroInput): Promise<void> {
   await post<{ opened: boolean }>('open-in-zotero', input)
 }
 
