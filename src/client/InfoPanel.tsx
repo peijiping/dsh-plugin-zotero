@@ -227,6 +227,7 @@ export function InfoPanel({
           ref={box.panelRef}
           role="dialog"
           aria-label={t('detail.info')}
+          {...box.panelProps}
           style={{ ...panelStyle, ...box.style }}
         >
           <div style={panelHeaderStyle} {...box.moveProps}>

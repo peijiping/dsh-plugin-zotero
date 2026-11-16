@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 
 import { writeClipboard } from '../clipboard'
 import { useDismiss } from '../dismiss'
+import { WINDOW_DRAG_EXCLUDE } from '../floatingBox'
 import { type Translate } from '../locales'
 import { showToast } from '../paneStore'
 import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from '../styles'
@@ -150,6 +151,7 @@ export function TranslationCard(
     <div
       ref={cardRef}
       {...{ [MARK]: '' }}
+      {...WINDOW_DRAG_EXCLUDE}
       style={{ ...cardStyle, width: size.width, height: size.height, left: pos.left, top: pos.top }}
       role="dialog"
       aria-label={t('translate.title')}

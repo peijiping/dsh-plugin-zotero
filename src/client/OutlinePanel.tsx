@@ -142,6 +142,7 @@ export function OutlinePanel({
           ref={box.panelRef}
           role="dialog"
           aria-label={t('outline.title')}
+          {...box.panelProps}
           style={{ ...panelStyle, ...box.style }}
         >
           <div style={panelHeaderStyle} {...box.moveProps}>

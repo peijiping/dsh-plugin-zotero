@@ -58,6 +58,8 @@ export interface FloatingBoxApi {
   panelRef: RefObject<HTMLDivElement>
   /** 面板几何；`null` 表示还没量到（先别渲染面板，否则会闪一帧）。 */
   style: CSSProperties | null
+  /** 铺到面板根节点上：把浮层矩形从宿主的窗口拖拽区里挖掉（见 {@link WINDOW_DRAG_EXCLUDE}）。 */
+  panelProps: { 'data-window-drag-exclude': string }
   /** 标题栏用：按住拖动位置。 */
   moveProps: DragHandlers
   /** 右下角把手用：拖动大小。 */
@@ -74,6 +76,24 @@ const INSIDE_INSET = 8
 const INSIDE_MIN_WIDTH = 160
 /** 拖宽的硬上限，再宽只是白白盖住正文。 */
 const RESIZE_MAX_WIDTH = 720
+
+/**
+ * 面板根节点上的「别拖窗口」声明。
+ *
+ * macOS 宿主的窗口拖拽区是**几何矩形**，不是命中测试：它给整行 chrome 打
+ * `data-window-drag`（对话头部、侧栏顶条、dockkit tabStrip …），浮层只要在几何上
+ * 压住那一行，那段像素就归窗口拖拽 —— 谁画在上层、有没有 pointer capture 都不算数。
+ * 于是把浮层拖到 y≈22（压到对话头部那行）后按住标题栏，动的是整个 DSH 窗口，
+ * 浮层反而拖不动了。
+ *
+ * 宿主留的出口是 `[data-window-drag-exclude]{-webkit-app-region:no-drag}`（base.css），
+ * 且 0.2.2-rc.1 起 `role="dialog"` 之类只在 `data-window-drag` / `-controls` 作用域内
+ * 才自动豁免 no-drag —— 浮层在阅读区里，拿不到那份豁免，必须自己声明。挂了它，
+ * 浮层的整个矩形从拖拽区里被减掉：无论拖到窗口哪儿，按下的都是浮层自己。
+ *
+ * 译文浮层（`viewer/TranslationCard`）压在正文上，会碰到同一行带子，共用这一份。
+ */
+export const WINDOW_DRAG_EXCLUDE = { 'data-window-drag-exclude': '' } as const
 
 /** 手动拖动出来的位置（视口坐标）。`null` 表示用初始位置。 */
 interface PanelPos {
@@ -419,5 +439,5 @@ export function useFloatingBox(options: FloatingBoxOptions): FloatingBoxApi {
     onPointerCancel: endDrag,
   }
 
-  return { panelRef, style, moveProps, resizeProps }
+  return { panelRef, style, panelProps: WINDOW_DRAG_EXCLUDE, moveProps, resizeProps }
 }
