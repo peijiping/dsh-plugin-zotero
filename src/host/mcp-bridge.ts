@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { callMcpTool, listMcpTools, type McpToolInfo } from '../zotero/client.js'
 import { getSettings } from '../zotero/config.js'
+import { requireApproval, type ApprovalExec, type ApprovalText } from './approval.js'
 
 /** `ctx.tools` 的最小结构接口（真实类型由 dsh 装配，不在本包类型面内）。 */
 export interface ToolsService {
@@ -48,8 +49,14 @@ export function blocksToText(content: unknown): string {
  */
 const WRITE_TOOL_RE = /^(write|add|create|update|delete|remove)_/i
 
-/** 破坏性写工具：删除/移除类，需要额外的确认提示。 */
-const DESTRUCTIVE_TOOL_RE = /^(delete|remove)_/i
+/**
+ * 破坏性写工具：删除/移除/移入回收站类，需要对话框审批 + 额外提示。
+ *
+ * 实测集成 MCP 的这类工具有 `delete_collection` / `remove_items_from_collection`
+ * / `trash_item`，统一命中。注意 `add_*_to_collection`（移入分类）不是破坏性的，
+ * 不在此列。
+ */
+const DESTRUCTIVE_TOOL_RE = /^(delete|remove|trash)_/i
 
 /**
  * 注入到写工具描述前面的引导语。
@@ -97,8 +104,33 @@ function descriptionFor(tool: McpToolInfo): string {
   return `${parts.join('\n\n')}\n\n${base}`
 }
 
+/**
+ * 给 MCP 破坏性工具生成审批文案：尽量把调用里的条目 / 分类 key 摆到卡片上。
+ *
+ * 这几类工具的 args 形状不统一（`trash_item` 是 `itemKeys`，`delete_collection` 是
+ * `collectionKey`，`remove_items_from_collection` 两者都有），所以宽松地收集几个
+ * 常见字段，拿不到就只显示工具名 —— 审批卡片本身还会挂 callId 展示完整参数。
+ */
+function mcpApprovalText(tool: McpToolInfo, args: unknown): ApprovalText {
+  const record = args as Record<string, unknown> | null
+  const keys: string[] = []
+  if (typeof record === 'object' && record !== null) {
+    for (const field of ['itemKeys', 'itemKey', 'collectionKey', 'keys']) {
+      const value = record[field]
+      if (Array.isArray(value)) keys.push(...value.filter((k): k is string => typeof k === 'string'))
+      else if (typeof value === 'string') keys.push(value)
+    }
+  }
+  const target = keys.length === 0 ? '' : `：${keys.slice(0, 8).join('、')}${keys.length > 8 ? ` 等 ${keys.length} 个` : ''}`
+  const action = tool.name === 'trash_item' ? '移入回收站（可在 Zotero 恢复）' : '删除'
+  return {
+    en: `Approve Zotero ${tool.name}: ${action}${target}.`,
+    zh: `即将对 Zotero 执行 ${action} ${tool.name}${target}，请核对后确认。`,
+  }
+}
+
 /** 由 MCP 工具造一条 dsh 工具定义（参数直接沿用上游 JSON Schema）。 */
-function definitionFor(tool: McpToolInfo): unknown {
+function definitionFor(tool: McpToolInfo, ctx: Context): unknown {
   return {
     name: publicName(tool.name),
     description: descriptionFor(tool),
@@ -114,7 +146,10 @@ function definitionFor(tool: McpToolInfo): unknown {
         { type: 'text', text: blocksToText(value.content) },
       ],
     },
-    async execute(args: unknown, exec: { signal?: AbortSignal }): Promise<unknown> {
+    async execute(args: unknown, exec: ApprovalExec): Promise<unknown> {
+      if (DESTRUCTIVE_TOOL_RE.test(tool.name)) {
+        await requireApproval(ctx, exec, publicName(tool.name), mcpApprovalText(tool, args))
+      }
       const result = await callMcpTool(tool.name, args, exec.signal)
       const text = blocksToText(result.content)
       if (result.isError) throw new Error(text === '' ? `${tool.name} 执行失败` : text)
@@ -148,7 +183,7 @@ export class McpToolBridge {
     try {
       for (const tool of tools) {
         if (disabled.has(tool.name)) continue
-        next.push(toolsService.register(definitionFor(tool)))
+        next.push(toolsService.register(definitionFor(tool, this.ctx)))
       }
     } catch (error) {
       for (const dispose of next) dispose()

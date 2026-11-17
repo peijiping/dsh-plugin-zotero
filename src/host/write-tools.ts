@@ -21,6 +21,7 @@ import { deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.j
 import { getAnnotationState, getNoteRaw, ZoteroError } from '../zotero/client.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
 import { getSettings } from '../zotero/config.js'
+import { requireApproval, type ApprovalExec, type ApprovalText } from './approval.js'
 import { blocksToText, type ToolsService } from './mcp-bridge.js'
 import { requireKey } from './router.js'
 
@@ -43,7 +44,21 @@ interface WriteToolDefinition {
   name: string
   description: string
   parameters: Record<string, unknown>
+  /** 非空表示破坏性操作，执行前要过对话框审批；文案随调用参数生成。 */
+  approval?: (args: unknown) => ApprovalText
   execute: (args: unknown) => Promise<string>
+}
+
+/** 给删除工具用的审批文案：把被删的 key 摆到卡片上，让用户核对具体对象。 */
+function deleteApprovalText(label: string, keyField: string, args: unknown): ApprovalText {
+  const record = args as Record<string, unknown> | null
+  const key = typeof record === 'object' && record !== null && typeof record[keyField] === 'string'
+    ? record[keyField]
+    : '(未识别)'
+  return {
+    en: `Delete Zotero ${label} ${key}? Hard delete, cannot be undone.`,
+    zh: `即将删除 Zotero ${label} ${key} —— 硬删除，不进回收站、无法撤销。请核对后确认。`,
+  }
 }
 
 /** 结果统一压成 MCP 那种内容块，渲染与序列化只有一份实现。 */
@@ -139,6 +154,7 @@ const TOOL_DEFINITIONS: WriteToolDefinition[] = [
       required: ['key'],
       additionalProperties: false,
     },
+    approval: (args) => deleteApprovalText('笔记', 'key', args),
     async execute(args) {
       const record = readArgs(args)
       assertKnown(record, ['key'], 'zotero_delete_note')
@@ -207,6 +223,7 @@ const TOOL_DEFINITIONS: WriteToolDefinition[] = [
       required: ['key'],
       additionalProperties: false,
     },
+    approval: (args) => deleteApprovalText('标注', 'key', args),
     async execute(args) {
       const record = readArgs(args)
       assertKnown(record, ['key'], 'zotero_delete_annotation')
@@ -241,7 +258,8 @@ export class ZoteroWriteToolBridge {
     this.enabled = enabled
     if (!enabled) return
 
-    const toolsService = (this.ctx as unknown as { tools: ToolsService }).tools
+    const ctx = this.ctx
+    const toolsService = (ctx as unknown as { tools: ToolsService }).tools
     const next: (() => void)[] = []
     try {
       for (const tool of TOOL_DEFINITIONS) {
@@ -261,7 +279,10 @@ export class ZoteroWriteToolBridge {
                 { type: 'text', text: blocksToText(value.content) },
               ],
             },
-            async execute(args: unknown): Promise<unknown> {
+            async execute(args: unknown, exec: ApprovalExec): Promise<unknown> {
+              if (tool.approval) {
+                await requireApproval(ctx, exec, tool.name, tool.approval(args))
+              }
               return resultFor(await tool.execute(args))
             },
           }),
