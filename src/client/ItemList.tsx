@@ -426,7 +426,11 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
             ) : (
               <span style={disclosureSlotStyle} aria-hidden />
             )}
-            <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
+            <span style={itemIconStyle}>
+              {item.itemType === 'attachment'
+                ? <ChildKindIcon kind={item.kind} read={read} size={22} />
+                : <ItemTypeIcon itemType={item.itemType} read={read} />}
+            </span>
             <div style={itemBodyStyle}>
               <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
               {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasChildren) && (

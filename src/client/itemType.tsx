@@ -151,9 +151,11 @@ const CHILD_KIND_PATH: Record<ZoteroChildKind, string> = {
 /** 条目列表子项（附件 / 笔记）图标；`pdf` 额外在页内印三个字母。 */
 export function ChildKindIcon({
   kind,
+  read = false,
   size = 15,
 }: {
   kind: ZoteroChildKind
+  read?: boolean
   size?: number
 }): ReactElement {
   return (
@@ -166,7 +168,7 @@ export function ChildKindIcon({
       strokeWidth={1.2}
       strokeLinejoin="round"
       strokeLinecap="round"
-      className={childKindIconClass(kind)}
+      className={childKindIconClass(kind, read)}
       aria-hidden
       focusable="false"
     >

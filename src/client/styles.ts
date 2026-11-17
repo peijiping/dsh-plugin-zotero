@@ -140,8 +140,10 @@ export function itemTypeIconClass(family: string, read = false): string {
  * 子项（附件 / 笔记）图标的 class：复用条目图标的墨色与 light/dark 处理，
  * 只多三类特征色。`file` 不进配色表，落回默认墨色。
  */
-export function childKindIconClass(kind: ZoteroChildKind): string {
-  return `${ITEM_ICON_CLASS} is-${kind}`
+export function childKindIconClass(kind: ZoteroChildKind, read = false): string {
+  const parts = [ITEM_ICON_CLASS, `is-${kind}`]
+  if (read) parts.push('is-read')
+  return parts.join(' ')
 }
 
 /** 全局主题样式：只在入口注入一次，portal / 浮层里的按钮同样生效。 */

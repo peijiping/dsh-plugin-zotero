@@ -475,6 +475,7 @@ function toSummary(raw: RawItem, child: ChildState): ZoteroItemSummary {
     creators: raw.meta?.creatorSummary ?? '',
     year: yearOf(raw.meta, data),
     itemType,
+    kind: childKind(raw),
     attachments: child.children,
     lastRead: child.lastRead,
   }

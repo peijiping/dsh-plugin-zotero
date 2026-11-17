@@ -26,11 +26,11 @@ export interface ZoteroCollection {
 }
 
 /**
- * 条目列表展开行里的子项形态。
+ * 条目列表里「附件形态」的判定结果。
  *
- * Host 从 Zotero 子条目的 `itemType` / `contentType` / `linkMode` / 文件名判定，
- * Client 只负责按它挑图标和文案；笔记也在内（`note`），虽然 Zotero 严格意义上
- * 不把它算作附件。
+ * 同时用于展开行的子项和顶层裸附件条目（直接导进库的 PDF / 快照等）。
+ * Host 从 `itemType` / `contentType` / `linkMode` / 文件名判定，Client 只按它挑图标；
+ * 笔记也在内（`note`），虽然 Zotero 严格意义上不把它算作附件。
  */
 export type ZoteroChildKind = 'pdf' | 'snapshot' | 'webpage' | 'note' | 'file'
 
@@ -49,6 +49,8 @@ export interface ZoteroItemSummary {
   creators: string
   year: string
   itemType: string
+  /** 条目自身的形态；`itemType === 'attachment'` 时据此画具体图标而非纸夹。 */
+  kind: ZoteroChildKind
   /** 子项（附件 + 子笔记）；空数组表示没有可展开内容。 */
   attachments: ZoteroChildAttachment[]
   /**
