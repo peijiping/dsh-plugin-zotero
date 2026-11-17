@@ -25,10 +25,20 @@ export interface ZoteroCollection {
   scope?: ZoteroItemScope
 }
 
-/** 列表展开行里的子附件（只够渲染一行）。 */
+/**
+ * 条目列表展开行里的子项形态。
+ *
+ * Host 从 Zotero 子条目的 `itemType` / `contentType` / `linkMode` / 文件名判定，
+ * Client 只负责按它挑图标和文案；笔记也在内（`note`），虽然 Zotero 严格意义上
+ * 不把它算作附件。
+ */
+export type ZoteroChildKind = 'pdf' | 'snapshot' | 'webpage' | 'note' | 'file'
+
+/** 列表展开行里的子项（附件与笔记，只够渲染一行）。 */
 export interface ZoteroChildAttachment {
   key: string
   title: string
+  kind: ZoteroChildKind
 }
 
 /** 列表行用的条目摘要。 */
@@ -39,7 +49,7 @@ export interface ZoteroItemSummary {
   creators: string
   year: string
   itemType: string
-  /** 子附件；空数组表示没有附件，列表行不显示展开图标。 */
+  /** 子项（附件 + 子笔记）；空数组表示没有可展开内容。 */
   attachments: ZoteroChildAttachment[]
   /**
    * 子附件里最晚的阅读时间（Unix **秒**），与 Zotero 原生 `getItemLastRead()` 一致；

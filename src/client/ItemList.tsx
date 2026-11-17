@@ -16,8 +16,8 @@ import { useState, type ReactElement } from 'react'
 
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
-import { ItemTypeIcon, itemTypeLabel } from './itemType'
+import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
+import { ChildKindIcon, childKindLabel, ItemTypeIcon, itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ItemSort } from './paneStore'
@@ -156,15 +156,23 @@ const itemMetaTypeStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85
 
 const itemMetaYearStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85 }
 
-/** 第二行末尾的附件数：纸夹 + 数字，固定宽度不参与作者截断。 */
-const itemMetaAttachStyle: React.CSSProperties = {
+/** 第二行末尾的子项统计：一组「类型图标 + 数字」，靠右且不参与作者截断。 */
+const itemMetaChildKindsStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  flex: '0 0 auto',
+  // 作者缺失时没有可伸展元素把统计顶到右边，这里显式靠右对齐。
+  marginLeft: 'auto',
+  opacity: 0.85,
+}
+
+/** 单种类型的「图标 + 个数」。 */
+const itemMetaChildKindStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 2,
   flex: '0 0 auto',
-  // 作者缺失时没有可伸展元素把附件数顶到右边，这里显式靠右对齐。
-  marginLeft: 'auto',
-  opacity: 0.85,
 }
 
 const itemMetaTextStyle: React.CSSProperties = {
@@ -269,6 +277,9 @@ const sortButtonStyle: React.CSSProperties = {
 /** 排序生效时的图标颜色（与列表选中态同一支蓝）。 */
 const SORT_ACTIVE_COLOR = '#508cff'
 
+/** 副标题统计的固定顺序：先看得到 PDF / 快照，再看笔记与其余文件。 */
+const CHILD_KIND_ORDER: readonly ZoteroChildKind[] = ['pdf', 'snapshot', 'webpage', 'note', 'file']
+
 /**
  * 排序图标：三条长短不一的横线 + 右侧方向箭头。
  *
@@ -311,26 +322,6 @@ function DisclosureIcon({ open }: { open: boolean }): ReactElement {
       style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms ease' }}
     >
       <path d="M2.4 1.4 6.1 4l-3.7 2.6z" fill="currentColor" />
-    </svg>
-  )
-}
-
-/** 第二行附件数前的纸夹。 */
-function PaperclipIcon(): ReactElement {
-  return (
-    <svg
-      width={10}
-      height={10}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.4}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      focusable="false"
-    >
-      <path d="M10.4 4.2 6 8.6a1.8 1.8 0 0 0 2.5 2.5l4.4-4.4a3 3 0 0 0-4.2-4.2L4.3 6.9a4.2 4.2 0 0 0 5.9 5.9l1.1-1.1" />
     </svg>
   )
 }
@@ -378,8 +369,16 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
   const [expanded, setExpanded] = useState(false)
   const read = isRead(item)
   const typeLabel = itemTypeLabel(t, item.itemType)
-  const attachments = item.attachments
-  const hasAttachments = attachments.length > 0
+  const children = item.attachments
+  const hasChildren = children.length > 0
+  const kindCounts = new Map<ZoteroChildKind, number>()
+  for (const child of children) {
+    kindCounts.set(child.kind, (kindCounts.get(child.kind) ?? 0) + 1)
+  }
+  const shownKinds = CHILD_KIND_ORDER.filter((kind) => kindCounts.has(kind))
+  const countTitle = shownKinds
+    .map((kind) => `${childKindLabel(t, kind)} ${kindCounts.get(kind)}`)
+    .join(' · ')
   return (
     <div
       className="dsh-zotero-item-shell"
@@ -407,7 +406,7 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
             }}
             style={itemRowStyle}
           >
-            {hasAttachments ? (
+            {hasChildren ? (
               <button
                 type="button"
                 className="dsh-zotero-disclosure"
@@ -415,7 +414,7 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
                 aria-label={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
                 title={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
                 onClick={(event) => {
-                  // 只开合附件，不连带选中 / 打开条目。
+                  // 只开合子项，不连带选中 / 打开条目。
                   event.stopPropagation()
                   setExpanded((open) => !open)
                 }}
@@ -430,18 +429,23 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
             <span style={itemIconStyle}><ItemTypeIcon itemType={item.itemType} read={read} /></span>
             <div style={itemBodyStyle}>
               <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-              {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasAttachments) && (
+              {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasChildren) && (
                 <div style={itemMetaStyle}>
                   {typeLabel !== '' && <span style={itemMetaTypeStyle}>{typeLabel}</span>}
                   {item.year !== '' && <span style={itemMetaYearStyle}>{item.year}</span>}
                   {item.creators !== '' && <span style={itemMetaTextStyle}>{item.creators}</span>}
-                  {hasAttachments && (
-                    <span
-                      style={itemMetaAttachStyle}
-                      title={tpl(t('list.attachmentCount'), { n: attachments.length })}
-                    >
-                      <PaperclipIcon />
-                      {attachments.length}
+                  {hasChildren && (
+                    <span style={itemMetaChildKindsStyle} title={countTitle}>
+                      {shownKinds.map((kind) => (
+                        <span
+                          key={kind}
+                          style={itemMetaChildKindStyle}
+                          title={childKindLabel(t, kind)}
+                        >
+                          <ChildKindIcon kind={kind} size={12} />
+                          {kindCounts.get(kind)}
+                        </span>
+                      ))}
                     </span>
                   )}
                 </div>
@@ -450,18 +454,20 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
           </div>
         )}
       />
-      {expanded && hasAttachments && (
+      {expanded && hasChildren && (
         <div style={childListStyle}>
-          {attachments.map((attachment) => (
+          {children.map((child) => (
             <div
-              key={attachment.key}
+              key={child.key}
               className="dsh-zotero-child-row"
-              title={`${attachment.title}\n${t('list.openAttachment')}`}
-              onClick={() => onOpen(attachment.key, attachment.title)}
+              title={`${child.title}\n${t('list.openAttachment')}`}
+              onClick={() => onOpen(child.key, child.title)}
               style={childRowStyle}
             >
-              <span style={childIconStyle}><ItemTypeIcon itemType="attachment" size={15} /></span>
-              <span style={childTitleStyle}>{attachment.title}</span>
+              <span style={childIconStyle}>
+                <ChildKindIcon kind={child.kind} size={15} />
+              </span>
+              <span style={childTitleStyle}>{child.title}</span>
             </div>
           ))}
         </div>

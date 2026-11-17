@@ -11,6 +11,8 @@
 
 import type { CSSProperties } from 'react'
 
+import type { ZoteroChildKind } from '../zotero/types'
+
 /** 蓝色高亮色（详情面板的区块标题、当前附件标记等旧调用）。 */
 export const ACCENT = '#508cff'
 
@@ -50,6 +52,23 @@ export const SOFT_BUTTON_ACTIVE_STYLE: CSSProperties = {
 
 /** 所有「浅底 + 描边」按钮共用的 class（primary 实心主操作不加）。 */
 export const SOFT_BUTTON_CLASS = 'dsh-zp-soft-btn'
+/**
+ * 「使用帮助」按钮：实心蓝底 + 白字，刻意比旁边的浅底描边按钮醒目。
+ *
+ * 蓝底是固定的品牌色、白字压在上面深浅主题都够对比，不需要 light-dark()。
+ * hover / active 的加深写在 {@link THEME_CSS}（内联 style 写不了伪类）。
+ */
+export const HELP_PRIMARY_STYLE: CSSProperties = {
+  color: '#ffffff',
+  background: ACCENT,
+  border: `1px solid ${ACCENT}`,
+  boxShadow: '0 1px 3px rgba(31,64,128,0.28)',
+  boxSizing: 'border-box',
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+}
+/** 帮助按钮的专属 class，供 THEME_CSS 写 hover / active（!important 盖住宿主 primary 默认态）。 */
+export const HELP_BUTTON_CLASS = 'dsh-zp-help-btn'
 /** 标题外壳 class；文字色与渐变竖条写在 CSS 里（要做 light/dark 渐进增强）。 */
 export const SECTION_TITLE_CLASS = 'dsh-zp-title'
 
@@ -117,6 +136,14 @@ export function itemTypeIconClass(family: string, read = false): string {
   return parts.join(' ')
 }
 
+/**
+ * 子项（附件 / 笔记）图标的 class：复用条目图标的墨色与 light/dark 处理，
+ * 只多三类特征色。`file` 不进配色表，落回默认墨色。
+ */
+export function childKindIconClass(kind: ZoteroChildKind): string {
+  return `${ITEM_ICON_CLASS} is-${kind}`
+}
+
 /** 全局主题样式：只在入口注入一次，portal / 浮层里的按钮同样生效。 */
 export const THEME_CSS = `
 .dsh-zp-soft-btn {
@@ -153,6 +180,20 @@ export const THEME_CSS = `
 .dsh-zp-tag.is-selected:active {
   background-color: #404040 !important;
 }
+/* 帮助按钮：宿主 primary 默认色可能不是这支蓝，用 !important 钉住实心蓝底与 hover/active 加深。 */
+.dsh-zp-help-btn,
+.dsh-zp-help-btn:hover:not(:disabled),
+.dsh-zp-help-btn:active:not(:disabled) {
+  color: #ffffff !important;
+}
+.dsh-zp-help-btn:hover:not(:disabled) {
+  background-color: #3f7cf0 !important;
+  border-color: #3f7cf0 !important;
+}
+.dsh-zp-help-btn:active:not(:disabled) {
+  background-color: #3669d6 !important;
+  border-color: #3669d6 !important;
+}
 /* 条目类型图标：近黑墨色为主，只有书 / 笔记 / 附件留 Zotero 特征色。
    先给宿主文字色兜底，再用 light-dark() 做深浅两套；老浏览器退成墨色。 */
 .dsh-zp-item-icon {
@@ -168,6 +209,16 @@ export const THEME_CSS = `
 }
 .dsh-zp-item-icon.is-attachment {
   color: light-dark(#d32f3c, #f0727a);
+}
+/* 列表子项：与条目图标共用描边与主题色，只给 PDF / 快照 / 网页 / 笔记分支。 */
+.dsh-zp-item-icon.is-pdf {
+  color: light-dark(#d32f3c, #f0727a);
+}
+.dsh-zp-item-icon.is-snapshot {
+  color: light-dark(#4072e5, #8eaef5);
+}
+.dsh-zp-item-icon.is-webpage {
+  color: light-dark(#2f9e63, #6ec79a);
 }
 .dsh-zp-item-icon.is-read {
   opacity: 0.5;

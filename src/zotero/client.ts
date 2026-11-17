@@ -35,6 +35,7 @@ import type {
   ZoteroAttachment,
   ZoteroAttachmentFile,
   ZoteroChildAttachment,
+  ZoteroChildKind,
   ZoteroCollection,
   ZoteroFulltext,
   ZoteroHealth,
@@ -98,6 +99,8 @@ interface RawItemData {
   collections?: string[]
   contentType?: string
   filename?: string
+  /** 附件形态：`imported_file` / `linked_file` / `imported_url` / `linked_url`。 */
+  linkMode?: string
   /**
    * 链接附件的路径，只有 `linkMode: linked_file` 才有。
    *
@@ -224,6 +227,37 @@ function toAttachment(raw: RawItem): ZoteroAttachment {
     // 本地 API 只在 links.enclosure.length 上暴露大小；缺失时记 0。
     size: raw.links?.enclosure?.length ?? 0,
   }
+}
+
+/**
+ * 列表行子项的图标分类。
+ *
+ * 只认 Zotero 子条目 JSON 里现成的字段，不额外请求详情：
+ * - `note` 是子笔记（itemType 就是 note，不是附件）；
+ * - PDF 看规范化后的 MIME，MIME 缺失时按文件名后缀兜底；
+ * - `linked_url` 是「链接到网页」，与 `imported_url` 存下来的网页快照分开画；
+ * - HTML / XHTML 一律按快照（Zotero 的 SingleFile 快照就是本地 HTML）；
+ * - 其余附件（Word / 图片 / 音频 / EPUB …）统一用通用文件图标。
+ */
+function childKind(raw: RawItem): ZoteroChildKind {
+  const data = raw.data ?? {}
+  if (data.itemType === 'note') return 'note'
+  const filename = data.filename ?? ''
+  const mime = normalizeContentType(data.contentType ?? '', filename)
+  if (mime === 'application/pdf' || /\.pdf$/iu.test(filename)) return 'pdf'
+  if (data.linkMode === 'linked_url') return 'webpage'
+  if (
+    mime === 'text/html'
+    || mime === 'application/xhtml+xml'
+    || /\.x?html?$/iu.test(filename)
+  ) return 'snapshot'
+  return 'file'
+}
+
+/** 子项标题：笔记没有 title 字段，跟顶层摘要行一样取正文首段。 */
+function childTitle(raw: RawItem): string {
+  const data = raw.data ?? {}
+  return data.itemType === 'note' ? noteTitle(data.note ?? '') : attachmentTitle(raw)
 }
 
 // ---- 笔记正文清洗 ------------------------------------------------------------
@@ -441,18 +475,19 @@ function toSummary(raw: RawItem, child: ChildState): ZoteroItemSummary {
     creators: raw.meta?.creatorSummary ?? '',
     year: yearOf(raw.meta, data),
     itemType,
-    attachments: child.attachments,
+    attachments: child.children,
     lastRead: child.lastRead,
   }
 }
 
-/** 列表行额外要的子条目状态：一次 children 请求算齐已读时间与附件清单。 */
+/** 列表行额外要的子条目状态：一次 children 请求算齐已读时间与子项清单。 */
 interface ChildState {
   lastRead: number | null
-  attachments: ZoteroChildAttachment[]
+  /** 附件 + 子笔记；供列表行按形态计数与展开。 */
+  children: ZoteroChildAttachment[]
 }
 
-const NO_CHILD_STATE: ChildState = { lastRead: null, attachments: [] }
+const NO_CHILD_STATE: ChildState = { lastRead: null, children: [] }
 
 /** 附件自己的 `lastRead` 就在它的 JSON 里，笔记没有，其余条目去问子附件。 */
 function childStateOf(raw: RawItem): Promise<ChildState> {
@@ -462,7 +497,7 @@ function childStateOf(raw: RawItem): Promise<ChildState> {
     // 顶层附件没有子附件可展开，但它自己的阅读时间仍要报。
     return Promise.resolve({
       lastRead: typeof value === 'number' && value > 0 ? value : null,
-      attachments: [],
+      children: [],
     })
   }
   if (data.itemType === 'note') return Promise.resolve(NO_CHILD_STATE)
@@ -827,31 +862,34 @@ interface ChildStateEntry {
 const childStateCache = new Map<string, ChildStateEntry>()
 
 /**
- * 父条目的子附件状态：最晚阅读时间 + 子附件清单。
+ * 父条目的子项状态：最晚阅读时间 + 附件与子笔记清单。
  *
- * 两样都来自同一次 `/children?itemType=attachment`：列表行要画已读标志，
- * 还要数附件、展开附件，没必要多打一份请求。已读状态只记在附件上，父条目
- * 要问它的子附件（原生 `getItemLastRead()` 同理）。按条目查而不是扫全库：
+ * 两样都来自同一次 `/children`：列表行要画已读标志、按形态计数、展开子项，
+ * 没必要多打一份请求。本机 API 不带 `itemType` 时不返回标注（标注要显式
+ * `itemType=annotation` 才给），这里再按 itemType 兜一层；已读时间只记在附件上，
+ * 父条目要问它的子附件（原生 `getItemLastRead()` 同理）。按条目查而不是扫全库：
  * 单条约 6ms，只查当前列表里的条目，大口库也不会卡。
- * 取不到按「无子附件、未读」处理——附加信息不能拖垮条目列表。
+ * 取不到按「无子项、未读」处理——附加信息不能拖垮条目列表。
  */
 async function itemChildState(key: string): Promise<ChildState> {
   const cached = childStateCache.get(key)
   if (cached !== undefined && Date.now() - cached.at < CHILD_STATE_TTL_MS) return cached.state
   try {
     const { body } = await requestJson<RawItem[]>(
-      `${libraryBase()}/items/${encode(key)}/children?itemType=attachment`,
+      `${libraryBase()}/items/${encode(key)}/children`,
     )
     let lastRead: number | null = null
-    const attachments: ZoteroChildAttachment[] = []
+    const children: ZoteroChildAttachment[] = []
     for (const child of Array.isArray(body) ? body : []) {
+      const itemType = child.data?.itemType ?? ''
+      if (itemType !== 'attachment' && itemType !== 'note') continue
       const value = child.data?.lastRead
       if (typeof value === 'number' && value > 0 && (lastRead === null || value > lastRead)) {
         lastRead = value
       }
-      attachments.push({ key: child.key, title: attachmentTitle(child) })
+      children.push({ key: child.key, title: childTitle(child), kind: childKind(child) })
     }
-    const state: ChildState = { lastRead, attachments }
+    const state: ChildState = { lastRead, children }
     if (childStateCache.size >= CHILD_STATE_CACHE_MAX) childStateCache.clear()
     childStateCache.set(key, { at: Date.now(), state })
     return state
@@ -1062,7 +1100,7 @@ export async function listRecentItems(
   for (const key of itemKeys) {
     const raw = itemByKey.get(key)
     if (raw === undefined) continue
-    const row = toSummary(raw, { lastRead: readAtByKey.get(key) ?? null, attachments: [] })
+    const row = toSummary(raw, { lastRead: readAtByKey.get(key) ?? null, children: [] })
     if (
       search !== ''
       && !row.title.toLowerCase().includes(search)
@@ -1087,7 +1125,7 @@ export async function listRecentItems(
     if (raw === undefined) return row
     const child = await childStateOf(raw)
     // 阅读时间保持本插件记录的，别被 Zotero 的 lastRead 覆盖。
-    return { ...row, attachments: child.attachments }
+    return { ...row, attachments: child.children }
   }))
   return { total: rows.length, items }
 }

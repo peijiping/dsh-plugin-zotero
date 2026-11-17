@@ -43,6 +43,13 @@ export interface FloatingBoxOptions {
   minWidth: number
   /** 拖出来的高度下限。 */
   minHeight: number
+  /**
+   * 是否把几何持久化到 view-state（默认 `true`，供按条目记位置的目录 / 信息浮层用）。
+   *
+   * `false` 给面板级浮层（如「使用帮助」）：没有真实 itemKey，拖 / 缩只在本会话内存里
+   * 生效，关掉或刷新后复位，绝不往 view-state 写假条目键。
+   */
+  persist?: boolean
 }
 
 /** 一组指针事件处理器，直接铺到拖动把手上。 */
@@ -237,7 +244,7 @@ export function useFloatingBox(options: FloatingBoxOptions): FloatingBoxApi {
     draggedRef.current = false
     setBlockedOutside(false)
     blockedRef.current = false
-    const saved = readPanelBox(itemKey, kind)
+    const saved = optsRef.current.persist === false ? null : readPanelBox(itemKey, kind)
     const nextSize = saved?.size === undefined ? null : clampSize(saved.size, 0, 0, optsRef.current)
     setSize(nextSize)
     const savedPos = lastProbeBlocked ? undefined : saved?.pos
@@ -406,6 +413,7 @@ export function useFloatingBox(options: FloatingBoxOptions): FloatingBoxApi {
     const node = panelRef.current
     if (node === null) return
     const rect = node.getBoundingClientRect()
+    if (optsRef.current.persist === false) return
     if (drag.kind === 'move') {
       writePanelBox(itemKey, kind, { pos: { left: Math.round(rect.left), top: Math.round(rect.top) } })
       return

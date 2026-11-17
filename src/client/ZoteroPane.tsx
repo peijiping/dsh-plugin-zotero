@@ -18,6 +18,7 @@ import { Button, SectionTitle } from './ui'
 
 import { openInZotero } from './api'
 import { CollectionTree } from './CollectionTree'
+import { HelpWindow } from './HelpWindow'
 import type { InputActions } from './inline'
 import { ItemList } from './ItemList'
 import { tpl, type Translate } from './locales'
@@ -43,6 +44,7 @@ import {
 } from './paneStore'
 import type { SessionsFace } from './reference'
 import { SearchField } from './SearchField'
+import { HELP_BUTTON_CLASS, HELP_PRIMARY_STYLE } from './styles'
 import { TagPanel } from './TagPanel'
 import { Toast } from './Toast'
 import { useInsertion } from './useInsertion'
@@ -155,6 +157,9 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
   const [splitHover, setSplitHover] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ x: number; width: number } | null>(null)
+  /** 「使用帮助」浮窗的开合；包裹触发按钮的 span 作为 useDismiss 的 extraRef。 */
+  const [helpOpen, setHelpOpen] = useState(false)
+  const helpTriggerRef = useRef<HTMLSpanElement | null>(null)
 
   /** 左栏宽度夹在 [TREE_WIDTH_MIN, 容器宽 - DETAIL_WIDTH_MIN] 之间。 */
   function clampTreeWidth(next: number): number {
@@ -202,6 +207,20 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
         <StatusDot ok={health?.zotero.running === true} label={t(health?.zotero.running === true ? 'status.zoteroOn' : 'status.zoteroOff')} />
         <StatusDot ok={health?.mcp.running === true} label={t(health?.mcp.running === true ? 'status.mcpOn' : 'status.mcpOff')} />
         <div style={{ flex: 1 }} />
+        <span ref={helpTriggerRef} style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Button
+            variant="primary"
+            size="sm"
+            className={HELP_BUTTON_CLASS}
+            style={HELP_PRIMARY_STYLE}
+            title={t('help.buttonTitle')}
+            aria-expanded={helpOpen}
+            onClick={() => setHelpOpen((open) => !open)}
+          >
+            <span aria-hidden="true" style={{ fontWeight: 700, marginRight: 4 }}>?</span>
+            {t('help.button')}
+          </Button>
+        </span>
         <Button variant="ghost" size="sm" onClick={() => void loadTree(true)}>
           {t('action.refresh')}
         </Button>
@@ -336,6 +355,13 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
         </section>
       </div>
 
+      <HelpWindow
+        t={t}
+        open={helpOpen}
+        anchorRef={bodyRef}
+        triggerRef={helpTriggerRef}
+        onClose={() => setHelpOpen(false)}
+      />
       <Toast />
     </div>
   )

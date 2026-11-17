@@ -10,8 +10,9 @@
 
 import type { ReactElement } from 'react'
 
+import type { ZoteroChildKind } from '../zotero/types'
 import type { Translate } from './locales'
-import { itemTypeIconClass } from './styles'
+import { childKindIconClass, itemTypeIconClass } from './styles'
 
 type IconFamily =
   | 'document'
@@ -130,4 +131,64 @@ export function itemTypeLabel(t: Translate, itemType: string): string {
   const key = `type.${itemType}`
   const label = t(key)
   return label === '' || label === key ? itemType : label
+}
+
+/**
+ * 子项形态 → 图标（16×16 viewBox）。
+ *
+ * 与条目类型图标同一套单线描边，但形态更具体：PDF 是有角标的纸页并在页内写
+ * `PDF`，网页快照是浏览器窗口，网页链接是地球，笔记是横线纸，其余是普通文档。
+ * 颜色仍在 `styles.ts` 的 `THEME_CSS` 里统一管。
+ */
+const CHILD_KIND_PATH: Record<ZoteroChildKind, string> = {
+  pdf: 'M4 2.4h5l3 3v8.2H4z M9 2.4v3h3',
+  snapshot: 'M2.4 3.2h11.2v9.6H2.4z M2.4 5.8h11.2 M4 4.5h.6 M5.7 4.5h.6 M4.4 8.3h3.8 M4.4 10.4h5.2',
+  webpage: 'M8 2.6c3 0 5.4 2.4 5.4 5.4S11 13.4 8 13.4 2.6 11 2.6 8 5 2.6 8 2.6z M2.9 8h10.2 M8 2.7c1.5 1.6 2.2 3.4 2.2 5.3S9.5 11.8 8 13.3 M8 2.7C6.5 4.3 5.8 6.1 5.8 8s.7 3.9 2.2 5.3',
+  note: 'M4.2 2.6h7.6v10.8H4.2z M4.2 5.4h7.6 M6 7.8h4 M6 10.1h4',
+  file: 'M4.5 2.5h5l3 3v8h-8z M9.5 2.5v3h3 M6.5 8h4.5 M6.5 10.5h4.5',
+}
+
+/** 条目列表子项（附件 / 笔记）图标；`pdf` 额外在页内印三个字母。 */
+export function ChildKindIcon({
+  kind,
+  size = 15,
+}: {
+  kind: ZoteroChildKind
+  size?: number
+}): ReactElement {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.2}
+      strokeLinejoin="round"
+      strokeLinecap="round"
+      className={childKindIconClass(kind)}
+      aria-hidden
+      focusable="false"
+    >
+      <path d={CHILD_KIND_PATH[kind]} />
+      {kind === 'pdf' && (
+        <text
+          x={8}
+          y={11.6}
+          textAnchor="middle"
+          fontSize={4.1}
+          fontWeight={700}
+          fill="currentColor"
+          stroke="none"
+        >
+          PDF
+        </text>
+      )}
+    </svg>
+  )
+}
+
+/** 子项形态的本地化名称，用于展开行与副标题计数的悬停提示。 */
+export function childKindLabel(t: Translate, kind: ZoteroChildKind): string {
+  return t(`list.childKind.${kind}`)
 }
