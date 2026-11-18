@@ -664,6 +664,10 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const topsRef = useRef<number[] | null>(null)
   /** 滚动容器可视高度（只随尺寸变，不随滚动变），免得每帧读一次 `clientHeight`。 */
   const viewportHeightRef = useRef(0)
+  /** 上一次的容器宽度：用来判断这次 resize 是否真的改了宽度（高度变化不该动锚点）。 */
+  const containerWidthRef = useRef(0)
+  /** 「适应宽度」的最新值：ResizeObserver 回调里读它决定要不要重新锚定。 */
+  const fitWidthRef = useRef(true)
   const selectionRef = useRef<{ text: string; x: number; y: number } | null>(null)
   /**
    * 上一次鼠标松开时的选区快照。
@@ -719,6 +723,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   selectionRef.current = selection
   const currentPageRef = useRef(1)
   currentPageRef.current = currentPage
+  fitWidthRef.current = fitWidth
 
   /** 队列优先级：离当前页越近越先画；读 ref，避免滚动时重建回调打破子树 memo。 */
   const priorityOf = useCallback((pageNumber: number) => Math.abs(pageNumber - currentPageRef.current), [])
@@ -832,21 +837,6 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
       void task.destroy()
     }
   }, [url, retry, onReady, reportOutlineActive])
-
-  useEffect(() => {
-    const element = scrollRef.current
-    if (element === null) return
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect
-      if (rect === undefined) return
-      if (rect.width > 0) setContainerWidth(rect.width)
-      viewportHeightRef.current = rect.height
-    })
-    observer.observe(element)
-    setContainerWidth(element.clientWidth)
-    viewportHeightRef.current = element.clientHeight
-    return () => observer.disconnect()
-  }, [])
 
   // 页面 wrapper 提交后再挂观察器：两个观察器共用滚动容器，避免每页各养一个。
   useEffect(() => {
@@ -968,6 +958,35 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     }
     setZoomTick((value) => value + 1)
   }, [])
+
+  // 容器尺寸：宽度变了就重算「适应宽度」的倍率，并在重排前记下视口里的文档位置。
+  //
+  // 拖右侧面板改宽度时，所有页的高都跟着倍率变；浏览器只保留 scrollTop 的像素值，
+  // 同一个 scrollTop 在新布局里会落到完全不同的页（第 25 页直接显示成第 43 页，
+  // 拉回来又跳到第 18 页）。所以这里在把新宽度交给 React 之前，按**旧布局**记下
+  // 视口中线对应的文档点（页号 + 页内比例），等新布局提交后由下面的
+  // useLayoutEffect 连同缩放一起放回原处。
+  useEffect(() => {
+    const element = scrollRef.current
+    if (element === null) return
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect
+      if (rect === undefined) return
+      viewportHeightRef.current = rect.height
+      if (rect.width <= 0) return
+      // 只有「适应宽度」下宽度变化才会改倍率；手动倍率时页面尺寸不变，不需要锚定。
+      if (fitWidthRef.current && Math.abs(rect.width - containerWidthRef.current) > 0.5) {
+        captureZoomAnchor(element.clientWidth / 2, element.clientHeight / 2)
+      }
+      containerWidthRef.current = rect.width
+      setContainerWidth(rect.width)
+    })
+    observer.observe(element)
+    containerWidthRef.current = element.clientWidth
+    setContainerWidth(element.clientWidth)
+    viewportHeightRef.current = element.clientHeight
+    return () => observer.disconnect()
+  }, [captureZoomAnchor])
 
   /** 按钮 / 命令行缩放按视口中心锚定；Ctrl+滚轮按鼠标位置锚定。 */
   const applyZoom = useCallback((next: number, at?: { x: number; y: number }): void => {
