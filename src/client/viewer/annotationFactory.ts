@@ -1,8 +1,8 @@
 /**
  * 选区 → 待写入 Zotero 的标注。
  *
- * 只有客户端手里有三样东西：pdf.js 的 viewport、文本层的 DOM、以及当前的缩放，
- * 所以位置、排序键、原文都在这里算完，Host 只负责校验和序列化。
+ * 只有客户端手里有三样东西：pdf.js 的页面 viewport、文本层的 DOM、以及当前的缩放
+ * （体现在 viewport 里），所以位置、排序键、原文都在这里算完，Host 只负责校验和序列化。
  *
  * 算法逐条对齐本机 Zotero 10.0.7 阅读器的实现（`resource/reader/reader.js`），
  * 「复刻」而非「自创」，插件建的标注才会和 Zotero 自建的那条画在同一个矩形、
@@ -26,7 +26,7 @@ const MAX_PAGES = 20
 /** 原文长度上限，与 Host 的正文体量校验同一意图。 */
 const MAX_TEXT_CHARS = 20_000
 
-const PAGE_SELECTOR = '[data-zp-page]'
+const PAGE_SELECTOR = '.page[data-page-number]'
 
 /** 页面元素左上角为原点的矩形（即 viewport 坐标）。 */
 interface PageBox {
@@ -50,7 +50,7 @@ function pad(value: number, length: number): string {
 }
 
 function pageNumberOf(element: Element): number {
-  const raw = Number.parseInt(element.getAttribute('data-zp-page') ?? '', 10)
+  const raw = Number.parseInt(element.getAttribute('data-page-number') ?? '', 10)
   return Number.isFinite(raw) && raw > 0 ? raw : 0
 }
 
@@ -123,7 +123,7 @@ function countBefore(host: Node, node: Node, offset: number): number {
  * 顺序也一致，所以直接数整页 DOM 字符等价，且省掉一次 `getTextContent()`。
  */
 function charOffsetOf(pageElement: HTMLElement, anchor: { node: Node; offset: number }): number {
-  const layer = pageElement.querySelector<HTMLElement>('.dsh-zotero-pdf-text')
+  const layer = pageElement.querySelector<HTMLElement>('.textLayer')
   if (layer === null || !layer.contains(anchor.node)) return 0
   const before = countBefore(layer, anchor.node, anchor.offset)
   return before >= 0 ? before : 0
@@ -162,8 +162,8 @@ export interface SelectionDraftInput {
   pdf: PDFDocumentProxy
   /** 页面 wrapper 所在的那层，用于限定归属范围。 */
   pagesRoot: HTMLElement
-  /** 当前缩放；页面元素的实际尺寸就是同一 scale 下的 viewport。 */
-  scale: number
+  /** 页面当前的 viewport（随缩放变化）；取不到说明该页还没渲染。 */
+  viewportOf: (pageNumber: number) => PageViewport | null
   annotationType: string
   annotationColor: string
   annotationComment?: string
@@ -175,7 +175,7 @@ export interface SelectionDraftInput {
  * 返回空数组表示这段选区没落在任何已渲染的 PDF 页面上（例如选到了信息面板）。
  */
 export async function draftsFromSelection(input: SelectionDraftInput): Promise<ZoteroAnnotationDraft[]> {
-  const { range, pdf, pagesRoot, scale, annotationType, annotationColor, annotationComment } = input
+  const { range, pdf, pagesRoot, viewportOf, annotationType, annotationColor, annotationComment } = input
   if (range.collapsed || pagesRoot.querySelector(PAGE_SELECTOR) === null) return []
 
   const groups = new Map<number, PageGroup>()
@@ -234,8 +234,9 @@ export async function draftsFromSelection(input: SelectionDraftInput): Promise<Z
     if (group === undefined || group.boxes.length === 0 || group.anchor === null) continue
     const text = group.text.replace(/\r\n?/gu, '\n').replace(/\n/gu, ' ').trim()
     if (text === '') continue
+    const viewport = viewportOf(pageNumber)
+    if (viewport === null) continue
     const page = await pdf.getPage(pageNumber)
-    const viewport: PageViewport = page.getViewport({ scale })
     const rects = mergeLines(group.boxes).map((box) => pdfBox(viewport, box).map(roundPosition) as [number, number, number, number])
     const pageIndex = pageNumber - 1
     const position = { pageIndex, rects }

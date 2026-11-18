@@ -40,7 +40,7 @@ function relative(rect: DOMRect, box: DOMRectReadOnly): {
 /** 文本层的 span 用来生成「这一块写了什么」的摘要（不含浮层与按钮）。 */
 function collectText(root: HTMLElement, box: DOMRectReadOnly): TextBox[] {
   const boxes: TextBox[] = []
-  const hosts = root.querySelectorAll<HTMLElement>('.dsh-zotero-pdf-text')
+  const hosts = root.querySelectorAll<HTMLElement>('.textLayer')
   for (const host of hosts) {
     for (const node of host.querySelectorAll<HTMLElement>('span, div')) {
       const text = node.textContent ?? ''
@@ -61,7 +61,7 @@ export function createPdfAdapter(): CaptureAdapter {
       const width = Math.max(1, Math.round(box.width * dpr))
       const height = Math.max(1, Math.round(box.height * dpr))
       // 先收集几何，再建画布：没有任何可见页时不要白白申请一块大内存。
-      const pages = root.querySelectorAll<HTMLElement>('[data-zp-page]')
+      const pages = root.querySelectorAll<HTMLElement>('.page[data-page-number]')
       const sources: {
         canvas: HTMLCanvasElement
         left: number
@@ -72,21 +72,21 @@ export function createPdfAdapter(): CaptureAdapter {
       const pageBoxes: PageBox[] = []
 
       for (const page of pages) {
-        const canvas = page.querySelector<HTMLCanvasElement>('.dsh-zotero-pdf-canvas-host canvas')
+        const canvas = page.querySelector<HTMLCanvasElement>('.canvasWrapper canvas')
         if (canvas === null || canvas.width === 0 || canvas.height === 0) continue
         const rect = relative(canvas.getBoundingClientRect(), box)
         if (rect.left + rect.width <= 0 || rect.top + rect.height <= 0
           || rect.left >= box.width || rect.top >= box.height) continue
         sources.push({ canvas, ...rect })
-        const number = Number.parseInt(page.getAttribute('data-zp-page') ?? '', 10)
+        const number = Number.parseInt(page.dataset.pageNumber ?? '', 10)
         pageBoxes.push({
           pageNumber: Number.isFinite(number) ? number : pageBoxes.length + 1,
           /**
-           * 只用印刷页码（将来渲染器若提供 `data-zp-page-label`）。
+           * 只用印刷页码（渲染器在 `data-zp-page-label` 上写入）。
            * 别退回 `aria-label`：那是「第 3 页」这类随界面语言变化的 UI 文案，
            * 会让水印出现「P第 3 页-第 4 页」。空串时 `pageRange` 自动退回页序号。
            */
-          label: page.getAttribute('data-zp-page-label')?.trim() ?? '',
+          label: page.dataset.zpPageLabel?.trim() ?? '',
           rect: relative(page.getBoundingClientRect(), box),
         })
       }

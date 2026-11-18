@@ -27,7 +27,7 @@ export interface HeadingBox {
 }
 
 export interface PageBox {
-  /** 1 基页号，与 `[data-zp-page]` 一致。 */
+  /** 1 基页号，与 `.page[data-page-number]` 一致。 */
   pageNumber: number
   /** 印刷页码标签（PDF 书签里可能是 `iv` / `S3`）。 */
   label: string

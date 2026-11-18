@@ -1,21 +1,33 @@
 /**
  * PDF.js 运行时初始化与样式。
  *
- * Worker / cmaps / 标准字体 / wasm 都由 Host 的 `/dsh-zotero/static/*`
- * 提供（见 `src/host/static.ts`，资产根就是打包出的 `client/pdfjs/`），
- * 因此 workerSrc 必须是同源绝对路径。
- * 文本层的 CSS 只保留 PDF.js 6 必需的最小集合：定位、缩放变量与选区。
+ * Worker / cmaps / 标准字体 / wasm / `pdf_viewer.css` 都由 Host 的
+ * `/dsh-zotero/static/*` 提供（见 `src/host/static.ts`，资产根就是打包出的
+ * `client/pdfjs/`），因此 workerSrc 必须是同源绝对路径。
+ *
+ * 页面几何、文本层与缩放变量都由 pdf.js 的 `pdf_viewer.css` 负责；它由客户端
+ * 取回后包进 `@scope (.dsh-zotero-pdf-scroll)` 注入（避免 `.page` / `.dialog` 这类
+ * 通用类名影响 DSH 界面）。这里只补阅读器外壳的滚动区域、页面间距和自定义标注层，
+ * 不重复实现文本层样式。
+ *
+ * 运行时走 pdf.js 的 legacy 构建：它内置 core-js polyfill，覆盖
+ * `Map.prototype.getOrInsertComputed`、`Math.sumPrecise` 这类尚未在所有浏览器
+ * 落地的提案 API；否则打开 PDF 会在 Worker 里直接抛
+ * `this._requestsByChunk.getOrInsertComputed is not a function`。
  */
 
-import { GlobalWorkerOptions } from 'pdfjs-dist'
+import { GlobalWorkerOptions, version } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 export const PDF_ASSET_BASE = '/dsh-zotero/static/'
 
-GlobalWorkerOptions.workerSrc = `${PDF_ASSET_BASE}pdf.worker.min.mjs`
+// 带版本号：静态资源响应有 24h 缓存，升级 pdf.js 后不能继续用旧 Worker。
+GlobalWorkerOptions.workerSrc = `${PDF_ASSET_BASE}pdf.worker.min.mjs?v=${version}`
 
 export const PDF_CSS = `
 .dsh-zotero-pdf-scroll {
-  position: relative;
+  /* pdf.js 的 PDFViewer 要求滚动容器绝对定位（它要自己接管 container 的尺寸）。 */
+  position: absolute;
+  inset: 0;
   height: 100%;
   min-height: 0;
   overflow: auto;
@@ -24,94 +36,37 @@ export const PDF_CSS = `
   /* 滚动位置由我们自己锚定（缩放定点、续读跳页），别让浏览器顺带再调一次。 */
   overflow-anchor: none;
 }
-/* 滚动中不画文本层：字本来就是透明的，它只在划选时才有用；撤掉能省下大面积
-   字形光栅化，滚动就只剩搬 canvas 的像素。停手 140ms 后由 JS 摘掉标记放回来。 */
-.dsh-zotero-pdf-scroll[data-zp-scrolling] .dsh-zotero-pdf-text {
-  visibility: hidden;
-}
-.dsh-zotero-pdf-pages {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  /* 宽度固定为可视区：横向页只向右溢出形成滚动条，不能让它把窄页一起推到
-     容器中间（混排文档里会出现一侧几百像素的灰边）。每页靠 JS 算的
-     margin-left 在自己的可视区里居中，宽页则贴着左内边距。 */
-  box-sizing: border-box;
-  width: 100%;
-}
-.dsh-zotero-pdf-page {
+/* pdf.js 的页面尺寸由它自己算；这里只调页间距、阴影，并让标注层有定位基准。 */
+.dsh-zotero-pdf-scroll .pdfViewer {
+  --page-margin: 12px auto 0;
+  --page-border: 0;
+  --pdfViewer-padding-bottom: 24px;
   position: relative;
-  flex: none;
-  background: #fff;
-  box-shadow: 0 1px 5px rgba(0,0,0,0.22);
-  overflow: hidden;
-  /* 把高亮层的混合模式关在页面内，避免合成器跨页重算整个滚动容器。 */
+  /* 标注层与页面是兄弟节点，高亮的 multiply 混合要有一个共同的合成边界。 */
   isolation: isolate;
-  contain: paint;
 }
-.dsh-zotero-pdf-canvas-host {
+.dsh-zotero-pdf-scroll .pdfViewer .page {
+  border: 0;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.22);
+}
+/* 单页标注层：挂在 .pdfViewer 上，按每页 DOM 的 offset* 定位。 */
+.dsh-zotero-pdf-ann-page {
   position: absolute;
-  inset: 0;
-  z-index: 0;
-}
-.dsh-zotero-pdf-canvas {
-  display: block;
-  background: #fff;
-}
-.dsh-zotero-pdf-text {
-  position: absolute;
-  inset: 0;
-  overflow: clip;
-  text-align: initial;
-  line-height: 1;
-  letter-spacing: normal;
-  word-spacing: normal;
-  text-size-adjust: none;
-  forced-color-adjust: none;
-  transform-origin: 0 0;
-  z-index: 1;
-  --min-font-size: 1;
-  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
-  --min-font-size-inv: calc(1 / var(--min-font-size));
-}
-.dsh-zotero-pdf-text :is(span, br) {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-  user-select: text;
-}
-.dsh-zotero-pdf-text > :not(.markedContent),
-.dsh-zotero-pdf-text .markedContent span:not(.markedContent) {
-  z-index: 1;
-  --font-height: 0;
-  font-size: calc(var(--text-scale-factor) * var(--font-height));
-  --scale-x: 1;
-  --rotate: 0deg;
-  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
-}
-.dsh-zotero-pdf-text .markedContent {
-  display: contents;
-}
-.dsh-zotero-pdf-text ::selection {
-  background: rgba(0, 100, 255, 0.28);
-  color: transparent;
-}
-/* 换行占位（由 moveLineBreaksOffscreen 生成）：只提供 \n，不参与绘制。 */
-.dsh-zotero-pdf-text .dsh-zotero-pdf-eol {
-  left: -9999px;
-  top: 0;
-  font-size: 0;
-  line-height: 0;
+  z-index: 2;
+  pointer-events: none;
 }
 .dsh-zotero-pdf-overlay {
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
+}
+/* 换行占位（由 moveLineBreaksOffscreen 生成）：只提供 \n，不参与绘制。 */
+.dsh-zotero-pdf-scroll .textLayer .dsh-zotero-pdf-eol {
+  left: -9999px;
+  top: 0;
+  font-size: 0;
+  line-height: 0;
 }
 .dsh-zotero-ann-flash {
   outline: 2px solid transparent;

@@ -1,47 +1,31 @@
 /**
- * PDF 渲染器：连续滚动 + 懒渲染 + 文本层 + 标注叠加 + 缩放。
+ * PDF 渲染器：基于 pdf.js 官方 Viewer（`web/pdf_viewer`）的连续滚动阅读视图。
  *
- * 缩放有两种模式：`fitWidth`（默认，随容器宽度重算）与手动百分比。
- * 页面 wrapper 始终存在（按第一页尺寸占位），因此滚动条高度稳定。
+ * 页面绘制、页面缓存、预渲染、文本层、缩放与页面定位都交给 `PDFViewer`：
+ * - canvas 使用 `width/height:100%`，缩放时旧画面先被 CSS 拉伸，再异步重绘；
+ * - 文本层属于页面渲染的一部分，滚动/缩放期间不会被撤下；
+ * - 高倍缩放由 `PDFPageDetailView` 只重绘可见区域，避免整页 canvas 失控；
+ * - 页面缓存与渲染优先级由 `PDFRenderingQueue` 管理。
  *
- * 可视区由滚动容器上的两个 IntersectionObserver 统一管理：
- * `RENDER_MARGIN` 内的页面才绘制，`RETAIN_MARGIN` 内保留已绘制的像素，
- * 上下回滚时不再重复渲染。
- *
- * 绘制结果先画进脱离文档的 canvas，完成后整块替换进页面，
- * 因此可见 canvas 的尺寸与内容总是一起更新——滚动时不会出现
- * 「canvas 已扩到新尺寸但还没画」的黑色空档。
- *
- * 滚动的帧预算优先给滚动本身：pdf.js 每个绘制分片最多占主线程 15ms，所以
- * 分片节奏由 `renderQueue.paceChunk` 接管（滚动中远处的页等停手、近处的页隔帧），
- * 文本层与选区框校正等停稳后才做，滚动期间文本层直接不上屏（字是透明的，撤掉
- * 不影响画面）；页码定位读缓存的页面 top 数组，不在滚动帧里读 `offsetTop`。
- *
- * 缩放按「页号 + 页内相对坐标」锚定视口中心那个文档点，倍率改完再把它放回中心，
- * 横竖两轴都不跳；之所以不用 scrollHeight 的比例，是因为同一份 PDF 里可能混着
- * 竖排和横排页，总高并不随倍率等比例变化。
+ * 本组件只保留阅读器外壳与 Zotero 特有能力：加载/错误提示、目录联动、续读、
+ * 划词、标注叠加层、标注卡片、翻译与截图。标注层挂到 `.pdfViewer` 上，
+ * 按页面 DOM 的实时几何定位，所以缩放时与页面同步移动。
  */
 
+import { createPortal } from 'react-dom'
 import {
-  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement,
 } from 'react'
 
-import {
-  getDocument,
-  TextLayer,
-  type PDFDocumentProxy,
-  type PDFPageProxy,
-  type PageViewport,
-} from 'pdfjs-dist'
+import { getDocument, type PDFDocumentProxy, type PageViewport } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { EventBus, PDFLinkService, PDFViewer } from 'pdfjs-dist/web/pdf_viewer.mjs'
 
 import type { ApiFix, ZoteroAnnotation } from '../../zotero/types'
 import { EDITABLE_TYPES } from '../annotationRuns'
@@ -57,38 +41,32 @@ import { viewportBox } from './geometry'
 import { OpenInZoteroIcon } from './OpenInZoteroIcon'
 import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS, pageActiveIndex, pageTarget } from './outline'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
-import {
-  enqueueRender,
-  markScrollActivity,
-  paceChunk,
-  SCROLL_IDLE_MS,
-  SCROLL_NEAR_PRIORITY,
-  scrollIdleFor,
-  waitForScrollIdle,
-} from './renderQueue'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import { TranslationCard } from './TranslationCard'
 import { useTranslation } from './useTranslation'
 import type { DocumentOutlineItem, DocumentRendererProps } from './types'
 import { useReadPosition } from './useReadPosition'
 
-const MIN_SCALE = 0.5
-const MAX_SCALE = 3
-const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3]
-/** 页面容器左右内边距（与 PDF_CSS 的 padding 一致），适应宽度和水平居中都按它算。 */
-const GUTTER = 12
+const MIN_ZOOM = 50
+const MAX_ZOOM = 300
+const ZOOM_STEPS = [50, 67, 80, 100, 125, 150, 200, 300]
 const FLASH_MS = 1600
-/** 停手这么久就把文本层放回屏幕（比绘制让路的判定短：字要尽早能选）。 */
-const SCROLLING_FLAG_MS = 140
-/** 进入这个范围就开始绘制（提前约一屏，滚动到位时通常已画好）。 */
-const RENDER_MARGIN = '100% 0px'
-/** 离开这个范围才释放像素；上下各留约两屏，回滚不会重新渲染。 */
-const RETAIN_MARGIN = '300% 0px'
-/** 单页设备像素上限（与 PDF.js 官方阅读器同一量级），避免高倍缩放把 canvas 撑到数千万像素。 */
-const MAX_CANVAS_PIXELS = 5_242_880
-
-const EMPTY_PAGES: ReadonlySet<number> = new Set()
+/** pdf.js 的定位选择器；页码存在 `data-page-number`（1 基）。 */
+const PAGE_SELECTOR = '.page[data-page-number]'
 const EMPTY_ANNOTATIONS: ZoteroAnnotation[] = []
+
+/**
+ * `pdf_viewer.css` 正文只取一次（同一个 Promise 供 StrictMode 双挂载复用）。
+ * 失败返回空串：阅读器仍能用 `PDF_CSS` 里的页面骨架显示，只是文本层样式不全。
+ */
+let viewerCssPromise: Promise<string> | null = null
+
+function loadViewerCss(): Promise<string> {
+  viewerCssPromise ??= fetch(`${PDF_ASSET_BASE}pdf_viewer.css`)
+    .then((response) => (response.ok ? response.text() : ''))
+    .catch(() => '')
+  return viewerCssPromise
+}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -221,127 +199,6 @@ async function readOutline(pdf: PDFDocumentProxy): Promise<DocumentOutlineItem[]
   return out
 }
 
-function clampScale(value: number): number {
-  return Math.min(Math.max(value, MIN_SCALE), MAX_SCALE)
-}
-
-/** 渲染倍率：DPR 封顶 2，再按像素总量封顶。 */
-function outputScale(viewport: PageViewport): number {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  const pixels = Math.max(1, viewport.width * viewport.height)
-  return Math.max(1, Math.min(dpr, Math.sqrt(MAX_CANVAS_PIXELS / pixels)))
-}
-
-type PdfTextContent = Awaited<ReturnType<PDFPageProxy['getTextContent']>>
-
-/** 每帧最多交给文本层的文本项数量（单页文本项的处理成本不低，切小一点让帧留在预算内）。 */
-const TEXT_CHUNK_ITEMS = 8
-
-/**
- * 把整份文本切成小片、每帧喂一片。
- *
- * TextLayer 对每个流片段是同步处理完的，一次灌整份会长时间占住主线程。
- * 每片之前还要等滚动停稳：插 span 会带来样式重算与布局失效，这些都不该落在
- * 滚动的帧上（不滚动时 `waitForScrollIdle` 立即兑现，不影响正常速度）。
- */
-function chunkedText(content: PdfTextContent): ReadableStream<PdfTextContent> {
-  let index = 0
-  let cancelled = false
-  return new ReadableStream<PdfTextContent>({
-    async pull(controller): Promise<void> {
-      await waitForScrollIdle()
-      if (cancelled) return
-      await new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => resolve())
-      })
-      if (cancelled) return
-      if (index >= content.items.length) {
-        controller.close()
-        return
-      }
-      const items = content.items.slice(index, index + TEXT_CHUNK_ITEMS)
-      index += items.length
-      controller.enqueue({ ...content, items })
-    },
-    cancel() {
-      cancelled = true
-    },
-  })
-}
-
-/** 基线差超过 0.6 个字高就算换了一行。 */
-const SAME_LINE_TOLERANCE = 0.6
-/** 向后寻找同一行相邻文本项的最大步数（文本项基本按行顺序发出）。 */
-const NEIGHBOR_LOOKAHEAD = 8
-
-interface TextEntry {
-  div: HTMLElement
-  x: number
-  y: number
-  width: number
-  fontHeight: number
-}
-
-/**
- * 校正每个 span 的命中框（`--scale-x` 只缩放透明文字，不影响画面）。
- *
- * 两处误差都会让鼠标「点这个字却选中旁边那个」：
- * 一是 TextLayer 只对多字符项做横向缩放，单字符项沿用回退字体字宽；
- * 二是 PDF 里相邻文本项的包围盒本身就重叠约一个字宽，浏览器按几何距离
- * 解析选点，重叠区里落到哪个 span 全看遮挡顺序。
- *
- * 因此不按文本项自身宽度，而按「同一行下一个文本项的起点」收紧右边界，
- * 相邻 span 首尾相接，选区与点选就落在实际字形上。
- */
-function fitSelectionBoxes(
-  layer: TextLayer,
-  content: PdfTextContent,
-  viewport: PageViewport,
-): void {
-  const divs = layer.textDivs
-  const entries: TextEntry[] = []
-  let divIndex = 0
-  for (const item of content.items) {
-    // TextLayer 只为带文本字段的项创建 span，空串项也会占一个 div 但不入 DOM。
-    if (!('str' in item)) continue
-    const div = divs[divIndex]
-    divIndex += 1
-    if (div === undefined || item.str === '' || !div.isConnected) continue
-    // 旋转文本的包围盒不是字宽，跳过。
-    if (div.style.getPropertyValue('--rotate') !== '') continue
-    entries.push({
-      div,
-      x: item.transform[4],
-      y: item.transform[5],
-      width: item.width,
-      fontHeight: Math.hypot(item.transform[2], item.transform[3]),
-    })
-  }
-
-  const pending: Array<[HTMLElement, number]> = []
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index]
-    let width = entry.width
-    const limit = Math.min(entries.length, index + NEIGHBOR_LOOKAHEAD)
-    for (let next = index + 1; next < limit; next += 1) {
-      const candidate = entries[next]
-      if (Math.abs(candidate.y - entry.y) > entry.fontHeight * SAME_LINE_TOLERANCE) continue
-      const gap = candidate.x - entry.x
-      if (gap <= 0.5) continue
-      width = Math.min(width, gap)
-      break
-    }
-    if (!(width > 0)) continue
-    const rect = entry.div.getBoundingClientRect()
-    const target = width * viewport.scale
-    if (rect.width <= 0 || Math.abs(rect.width - target) <= 0.5) continue
-    const raw = Number.parseFloat(entry.div.style.getPropertyValue('--scale-x'))
-    const current = Number.isFinite(raw) ? raw : 1
-    pending.push([entry.div, current * (target / rect.width)])
-  }
-  for (const [div, scaleX] of pending) div.style.setProperty('--scale-x', String(scaleX))
-}
-
 /**
  * TextLayer 的换行 `<br>` 是绝对定位、没有偏移量的，实际会堆在页面左上角；
  * 跨行选中时会在页边画出一串竖直的小蓝条。换成离屏的换行 span：
@@ -370,264 +227,61 @@ interface ZoomAnchor {
   y: number
 }
 
-interface PageProps {
-  /** 页面无障碍标签：外层算好，避免把可能不稳定的 `t` 传进 memo 组件。 */
-  label: string
-  pdf: PDFDocumentProxy
+interface PageGeometry {
   pageNumber: number
-  scale: number
-  /** 是否在绘制范围内。 */
-  active: boolean
-  /** 是否保留已绘制的像素。 */
-  retained: boolean
-  estimateWidth: number
-  estimateHeight: number
-  /** 滚动容器可视宽度：页面按自身宽度在视口内水平居中。 */
-  containerWidth: number
-  annotations: ZoteroAnnotation[]
-  flashKey: string | null
-  onAnnotationClick(annotation: ZoteroAnnotation, clientX: number, clientY: number): void
-  /** 渲染优先级（离当前阅读页越近越小），由外层按滚动位置实时计算。 */
-  priorityOf(pageNumber: number): number
+  left: number
+  top: number
+  width: number
+  height: number
+  viewport: PageViewport
 }
 
-const PdfPage = memo(function PdfPage({
-  label,
-  pdf,
-  pageNumber,
-  scale,
-  active,
-  retained,
-  estimateWidth,
-  estimateHeight,
-  containerWidth,
-  annotations,
+/**
+ * 标注层：pdf.js 自带 `.page` DOM，每页的 canvas / 文本层由它维护。
+ * 这里按页面当前的 `offset*` 与 `viewport` 给有标注的页叠一层绝对定位的 React 层，
+ * 缩放或重绘后由外层触发重渲染，位置始终跟着页面走。
+ */
+function AnnotationLayer({
+  viewer,
+  annotationsByPage,
   flashKey,
-  onAnnotationClick,
-  priorityOf,
-}: PageProps): ReactElement {
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-  const hostRef = useRef<HTMLDivElement | null>(null)
-  const textRef = useRef<HTMLDivElement | null>(null)
-  /** 当前显示中的 canvas 及其绘制倍率；回滚到同倍率时跳过重复渲染。 */
-  const paintedRef = useRef<{ canvas: HTMLCanvasElement; scale: number } | null>(null)
-  const textScaleRef = useRef<number | null>(null)
-  const [page, setPage] = useState<PDFPageProxy | null>(null)
-  /** 已上屏 canvas 的绘制倍率；文本层要等画布出来再渲染。 */
-  const [paintedScale, setPaintedScale] = useState<number | null>(null)
-
-  useEffect(() => {
-    if (!(active || retained) || page !== null) return
-    let disposed = false
-    pdf.getPage(pageNumber)
-      .then((proxy) => {
-        if (!disposed) setPage(proxy)
-      })
-      .catch(() => undefined)
-    return () => {
-      disposed = true
-    }
-  }, [pdf, pageNumber, active, retained, page])
-
-  // 画布：渲染到游离 canvas，完成后整块替换，可见 canvas 不会被「先清空后绘制」。
-  // 全局串行排队，一帧里只有一个 pdf.js 绘制分片，滚动时不再被多页叠加抢帧。
-  useEffect(() => {
-    if (!active || page === null) return
-    const host = hostRef.current
-    if (host === null) return
-    const painted = paintedRef.current
-    if (painted !== null && painted.scale === scale && host.firstChild === painted.canvas) return
-
-    let cancelled = false
-    let task: ReturnType<PDFPageProxy['render']> | null = null
-
-    const cancelQueued = enqueueRender({
-      priority: () => priorityOf(pageNumber),
-      // 预渲染余量里的远处页不在滚动中开画：一片就要吃掉主线程 15ms，
-      // 而那些帧正被滚动用着；滚完它往往也已经不在范围里了。
-      ready: () => priorityOf(pageNumber) <= SCROLL_NEAR_PRIORITY || scrollIdleFor() >= SCROLL_IDLE_MS,
-      start: async () => {
-        if (cancelled) return
-        const viewport = page.getViewport({ scale })
-        const ratio = outputScale(viewport)
-        const canvas = document.createElement('canvas')
-        canvas.className = 'dsh-zotero-pdf-canvas'
-        canvas.width = Math.max(1, Math.round(viewport.width * ratio))
-        canvas.height = Math.max(1, Math.round(viewport.height * ratio))
-        canvas.style.width = `${viewport.width}px`
-        canvas.style.height = `${viewport.height}px`
-
-        const renderTask = page.render({
-          canvas,
-          viewport,
-          transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
-        })
-        // pdf.js 默认是「上一片画完，下一个 rAF 接着画」，也就是每帧都塞满 15ms。
-        // 这里把续排的时机接管过来，滚动时让出帧（见 `paceChunk`）。
-        renderTask.onContinue = (scheduleNext: () => void): void => {
-          paceChunk(priorityOf(pageNumber), () => {
-            if (!cancelled) scheduleNext()
-          })
-        }
-        task = renderTask
-        try {
-          await renderTask.promise
-        } catch {
-          return
-        }
-        if (cancelled) return
-        host.replaceChildren(canvas)
-        paintedRef.current = { canvas, scale }
-        setPaintedScale(scale)
-      },
+}: {
+  viewer: PDFViewer
+  annotationsByPage: ReadonlyMap<number, ZoteroAnnotation[]>
+  flashKey: string | null
+}): ReactElement {
+  const pages: PageGeometry[] = []
+  for (const pageIndex of annotationsByPage.keys()) {
+    const pageView = viewer.getPageView(pageIndex)
+    const element = pageView?.div as HTMLElement | undefined
+    if (pageView === undefined || element === undefined) continue
+    pages.push({
+      pageNumber: pageIndex + 1,
+      left: element.offsetLeft,
+      top: element.offsetTop,
+      width: element.offsetWidth,
+      height: element.offsetHeight,
+      viewport: pageView.viewport,
     })
-
-    return () => {
-      cancelled = true
-      cancelQueued()
-      task?.cancel()
-    }
-  }, [active, page, scale, pageNumber, priorityOf])
-
-  // 文本层：等画布上屏、且滚动停下后再渲染，避免和画布绘制分片抢帧。
-  useEffect(() => {
-    if (!active || page === null || paintedScale !== scale) return
-    const container = textRef.current
-    if (container === null) return
-    if (textScaleRef.current === scale) return
-
-    let cancelled = false
-    let layer: TextLayer | null = null
-    const viewport = page.getViewport({ scale })
-
-    const build = async (): Promise<void> => {
-      await waitForScrollIdle()
-      if (cancelled) return
-      const content = await page.getTextContent()
-      if (cancelled) return
-      container.textContent = ''
-      const textLayer = new TextLayer({
-        textContentSource: chunkedText(content),
-        container,
-        viewport,
-      })
-      layer = textLayer
-      await textLayer.render()
-      if (cancelled) return
-      // 校正选区框要逐 span 量一次尺寸（一次强制布局），同样别落在滚动帧上。
-      await waitForScrollIdle()
-      if (cancelled) return
-      fitSelectionBoxes(textLayer, content, viewport)
-      moveLineBreaksOffscreen(container)
-      textScaleRef.current = scale
-    }
-    void build().catch(() => undefined)
-
-    return () => {
-      cancelled = true
-      layer?.cancel()
-    }
-  }, [active, page, scale, paintedScale])
-
-  // 只在离开保留范围时释放像素（此时页面早已滚出视口）。
-  useEffect(() => {
-    if (retained) return
-    paintedRef.current = null
-    textScaleRef.current = null
-    hostRef.current?.replaceChildren()
-    setPaintedScale(null)
-    if (textRef.current !== null) textRef.current.textContent = ''
-  }, [retained])
-
-  const viewport = page === null ? null : page.getViewport({ scale })
-
-  function hitTest(clientX: number, clientY: number): ZoteroAnnotation | null {
-    const element = wrapRef.current
-    if (element === null || viewport === null) return null
-    const rect = element.getBoundingClientRect()
-    const x = clientX - rect.left
-    const y = clientY - rect.top
-    for (const annotation of annotations) {
-      for (const source of annotation.position?.rects ?? []) {
-        const box = viewportBox(viewport, source)
-        if (
-          x >= box.left
-          && x <= box.left + box.width
-          && y >= box.top
-          && y <= box.top + box.height
-        ) {
-          return annotation
-        }
-      }
-    }
-    return null
-  }
-
-  function onClick(event: React.MouseEvent<HTMLDivElement>): void {
-    if (window.getSelection()?.toString().trim() !== '') return
-    const annotation = hitTest(event.clientX, event.clientY)
-    if (annotation !== null) onAnnotationClick(annotation, event.clientX, event.clientY)
-  }
-
-  const pageWidth = viewport?.width ?? estimateWidth
-  // 窄页在可视区里居中；比可视区还宽的页贴着左内边距（向右溢出，由滚动容器提供横向滚动）。
-  const leftInset = Math.max(0, (containerWidth - pageWidth) / 2 - GUTTER)
-  const pageStyle: CSSProperties & Record<string, string | number> = {
-    width: pageWidth,
-    height: viewport?.height ?? estimateHeight,
-    marginLeft: leftInset,
-    '--total-scale-factor': scale,
-    '--scale-round-x': '1px',
-    '--scale-round-y': '1px',
   }
 
   return (
-    <div
-      ref={wrapRef}
-      data-zp-page={pageNumber}
-      className="dsh-zotero-pdf-page"
-      onClick={onClick}
-      style={pageStyle}
-      aria-label={label}
-    >
-      <div ref={hostRef} className="dsh-zotero-pdf-canvas-host" />
-      <div ref={textRef} className="dsh-zotero-pdf-text" />
-      {viewport !== null && (
-        <AnnotationOverlay annotations={annotations} viewport={viewport} flashKey={flashKey} />
-      )}
-    </div>
+    <>
+      {pages.map((page) => (
+        <div
+          key={page.pageNumber}
+          className="dsh-zotero-pdf-ann-page"
+          style={{ left: page.left, top: page.top, width: page.width, height: page.height }}
+        >
+          <AnnotationOverlay
+            annotations={annotationsByPage.get(page.pageNumber - 1) ?? EMPTY_ANNOTATIONS}
+            viewport={page.viewport}
+            flashKey={flashKey}
+          />
+        </div>
+      ))}
+    </>
   )
-})
-
-/** 观察页面 wrapper，把「进入范围」的页号集合交给回调。 */
-function observePages(
-  elements: readonly HTMLElement[],
-  root: HTMLElement,
-  rootMargin: string,
-  onChange: (pages: ReadonlySet<number>) => void,
-): IntersectionObserver {
-  const current = new Set<number>()
-  const observer = new IntersectionObserver(
-    (entries) => {
-      let changed = false
-      for (const entry of entries) {
-        const pageNumber = Number((entry.target as HTMLElement).dataset.zpPage)
-        if (!Number.isFinite(pageNumber)) continue
-        if (entry.isIntersecting) {
-          if (!current.has(pageNumber)) {
-            current.add(pageNumber)
-            changed = true
-          }
-        } else if (current.delete(pageNumber)) {
-          changed = true
-        }
-      }
-      if (changed) onChange(new Set(current))
-    },
-    { root, rootMargin },
-  )
-  for (const element of elements) observer.observe(element)
-  return observer
 }
 
 export function PdfViewer(props: DocumentRendererProps): ReactElement {
@@ -652,22 +306,20 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
-  /** 每次缩放前记下的锚点，由 useLayoutEffect 在新布局里消费一次。 */
+  /** pdf.js Viewer 实例；`element` 是它自己管理的 `.pdfViewer` 容器。 */
+  const [viewerApi, setViewerApi] = useState<{ viewer: PDFViewer; element: HTMLDivElement } | null>(null)
+  const viewerApiRef = useRef<typeof viewerApi>(null)
+  viewerApiRef.current = viewerApi
+  /** 页面 DOM 与尺寸已就绪（可以跳页、续读、挂标注层）。 */
+  const [pagesReady, setPagesReady] = useState(false)
+  /** 所有页都拿到了自己的真实尺寸（`pagesloaded`）；跳页在它之后才准。 */
+  const [pagesSized, setPagesSized] = useState(false)
+  /** 仅用于缩放/重绘后触发标注层按新几何重渲染。 */
+  const [, setGeometryTick] = useState(0)
+  /** 每次缩放前记下的锚点，在新布局里消费一次。 */
   const zoomAnchorRef = useRef<ZoomAnchor | null>(null)
-  /** 即使倍率没变（已到上限、适应宽度时本来就相等）也要消费掉锚点，所以用计数强制跑一次。 */
-  const [zoomTick, setZoomTick] = useState(0)
-  const rafRef = useRef<number | null>(null)
+  const restoreRafRef = useRef<number | null>(null)
   const flashTimerRef = useRef<number | null>(null)
-  /** 「正在滚动」标记的定时器：停手一会儿后把文本层放回屏幕上。 */
-  const scrollingTimerRef = useRef<number | null>(null)
-  /** 页面 top 缓存（页码定位用），见 `pageAt`。 */
-  const topsRef = useRef<number[] | null>(null)
-  /** 滚动容器可视高度（只随尺寸变，不随滚动变），免得每帧读一次 `clientHeight`。 */
-  const viewportHeightRef = useRef(0)
-  /** 上一次的容器宽度：用来判断这次 resize 是否真的改了宽度（高度变化不该动锚点）。 */
-  const containerWidthRef = useRef(0)
-  /** 「适应宽度」的最新值：ResizeObserver 回调里读它决定要不要重新锚定。 */
-  const fitWidthRef = useRef(true)
   const selectionRef = useRef<{ text: string; x: number; y: number } | null>(null)
   /**
    * 上一次鼠标松开时的选区快照。
@@ -703,10 +355,6 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const [error, setError] = useState<LoadError | null>(null)
   const [retry, setRetry] = useState(0)
   const [pageCount, setPageCount] = useState(0)
-  const [baseSize, setBaseSize] = useState<{ width: number; height: number } | null>(null)
-  const [containerWidth, setContainerWidth] = useState(0)
-  const [fitWidth, setFitWidth] = useState(true)
-  const [manualScale, setManualScale] = useState(1)
   const [currentPage, setCurrentPage] = useState(1)
   const [flashKey, setFlashKey] = useState<string | null>(null)
   /**
@@ -717,16 +365,13 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
    */
   const [card, setCard] = useState<{ key: string; x: number; y: number } | null>(null)
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null)
-  const [activePages, setActivePages] = useState<ReadonlySet<number>>(EMPTY_PAGES)
-  const [retainedPages, setRetainedPages] = useState<ReadonlySet<number>>(EMPTY_PAGES)
 
   selectionRef.current = selection
   const currentPageRef = useRef(1)
   currentPageRef.current = currentPage
-  fitWidthRef.current = fitWidth
-
-  /** 队列优先级：离当前页越近越先画；读 ref，避免滚动时重建回调打破子树 memo。 */
-  const priorityOf = useCallback((pageNumber: number) => Math.abs(pageNumber - currentPageRef.current), [])
+  /** 缩放事件的回调走 ref，避免因回调身份变化重建整个 Viewer。 */
+  const onZoomChangeRef = useRef(onZoomChange)
+  onZoomChangeRef.current = onZoomChange
 
   const url = source?.url ?? ''
 
@@ -770,10 +415,9 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     setError(null)
     setPdf(null)
     setPageCount(0)
-    setBaseSize(null)
     setCurrentPage(1)
-    setActivePages(EMPTY_PAGES)
-    setRetainedPages(EMPTY_PAGES)
+    setPagesReady(false)
+    setPagesSized(false)
     // 换文档：旧的目录与高亮一起清掉，别让上一份书签的结论留在面板上。
     outlineItemsRef.current = []
     if (activeIndexRef.current !== null) {
@@ -794,15 +438,8 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
           await task.destroy()
           return
         }
-        const first = await proxy.getPage(1)
-        if (disposed) {
-          await task.destroy()
-          return
-        }
-        const base = first.getViewport({ scale: 1 })
         setPdf(proxy)
         setPageCount(proxy.numPages)
-        setBaseSize({ width: base.width, height: base.height })
         setLoading(false)
         onReady()
         // 书签单独解析、不 await：目录晚一两帧没有关系，别拖住首屏。
@@ -838,44 +475,138 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     }
   }, [url, retry, onReady, reportOutlineActive])
 
-  // 页面 wrapper 提交后再挂观察器：两个观察器共用滚动容器，避免每页各养一个。
+  /**
+   * pdf_viewer.css 的正文只取一次。
+   *
+   * 它是一整套通用类名（`.dialog` / `.page` / `.textLayer` …），直接 `<link>` 进文档会
+   * 改到 DSH 自己的界面，所以包进 `@scope (.dsh-zotero-pdf-scroll)` 再注入。
+   * 作用域只限定匹配范围，不改选择器，pdf.js 后续升级样式也能照用。
+   */
+  const [viewerCssReady, setViewerCssReady] = useState(false)
   useEffect(() => {
-    const root = scrollRef.current
-    if (root === null || pageCount === 0) return
-    const elements = Array.from(root.querySelectorAll<HTMLElement>('[data-zp-page]'))
-    if (elements.length === 0) return
-    const renderObserver = observePages(elements, root, RENDER_MARGIN, setActivePages)
-    const retainObserver = observePages(elements, root, RETAIN_MARGIN, setRetainedPages)
-    return () => {
-      renderObserver.disconnect()
-      retainObserver.disconnect()
+    let disposed = false
+    const done = (): void => {
+      if (!disposed) setViewerCssReady(true)
     }
-  }, [pageCount])
+    void loadViewerCss().then((css) => {
+      if (!disposed && css !== '' && document.querySelector('style[data-dsh-zotero-pdf-viewer]') === null) {
+        const style = document.createElement('style')
+        style.dataset.dshZoteroPdfViewer = 'true'
+        style.textContent = `@scope (.dsh-zotero-pdf-scroll) {\n${css}\n}`
+        document.head.appendChild(style)
+      }
+      done()
+    })
+    return () => {
+      disposed = true
+    }
+  }, [])
 
   /**
-   * 页码 top 缓存：页面总高变了（尺度、页数、个别页与估算尺寸不同）就作废。
+   * 创建 pdf.js Viewer。
    *
-   * 观察的是页面容器的总高，一次改动只回调一次，比每页各挂一个观察器便宜。
+   * 页面 DOM、渲染队列、文本层、缩放与页面定位全部由 `PDFViewer` 维护；
+   * 这里只把事件桥接回 React 状态，并在销毁时清干净（StrictMode 双挂载也安全）。
    */
   useEffect(() => {
-    const pages = scrollRef.current?.firstElementChild
-    if (pages === null || pages === undefined) return
-    topsRef.current = null
-    const observer = new ResizeObserver(() => {
-      topsRef.current = null
-    })
-    observer.observe(pages)
-    return () => observer.disconnect()
-  }, [pageCount])
+    const container = scrollRef.current
+    if (container === null || pdf === null || !viewerCssReady) return
 
-  const fitScale = baseSize !== null && containerWidth > 0
-    ? clampScale((containerWidth - GUTTER * 2) / baseSize.width)
-    : 1
-  const scale = fitWidth ? fitScale : manualScale
+    container.replaceChildren()
+    const element = document.createElement('div')
+    element.className = 'pdfViewer'
+    container.appendChild(element)
 
-  useEffect(() => {
-    onZoomChange({ percent: Math.round(scale * 100), fitWidth })
-  }, [scale, fitWidth, onZoomChange])
+    const eventBus = new EventBus()
+    const linkService = new PDFLinkService({ eventBus })
+    /**
+     * `abortSignal` 会让 pdf.js 自己解绑容器上的 scroll / resize 监听与渲染任务；
+     * 它运行期支持，但类型声明里还没导出，所以先组成对象再传入（避免多余属性检查）。
+     */
+    const abort = new AbortController()
+    const viewerOptions = {
+      container,
+      viewer: element,
+      eventBus,
+      linkService,
+      textLayerMode: 1,
+      annotationMode: 1,
+      imageResourcesPath: `${PDF_ASSET_BASE}images/`,
+      abortSignal: abort.signal,
+    }
+    const viewer = new PDFViewer(viewerOptions)
+    linkService.setDocument(pdf, null)
+    linkService.setViewer(viewer)
+
+    let disposed = false
+    let raf: number | null = null
+
+    const bumpGeometry = (): void => {
+      if (disposed || raf !== null) return
+      raf = window.requestAnimationFrame(() => {
+        raf = null
+        if (!disposed) setGeometryTick((value) => value + 1)
+      })
+    }
+
+    const reportZoom = (): void => {
+      onZoomChangeRef.current({
+        percent: Math.round(viewer.currentScale * 100),
+        fitWidth: viewer.currentScaleValue === 'page-width',
+      })
+    }
+
+    const applyPageLabels = (): void => {
+      void pdf.getPageLabels().then((labels) => {
+        if (disposed || labels === null) return
+        labels.forEach((label, index) => {
+          const page = element.querySelector<HTMLElement>(`.page[data-page-number="${index + 1}"]`)
+          if (page !== null) page.dataset.zpPageLabel = label
+        })
+      }).catch(() => undefined)
+    }
+
+    eventBus.on('pagesinit', () => {
+      viewer.currentScaleValue = 'page-width'
+      setPagesReady(true)
+      reportZoom()
+      bumpGeometry()
+      applyPageLabels()
+    }, { signal: abort.signal })
+    eventBus.on('pagesloaded', () => {
+      setPagesSized(true)
+      bumpGeometry()
+    }, { signal: abort.signal })
+    eventBus.on('pagechanging', (event: { pageNumber: number }) => {
+      setCurrentPage(event.pageNumber)
+    }, { signal: abort.signal })
+    eventBus.on('scalechanging', () => {
+      reportZoom()
+      bumpGeometry()
+    }, { signal: abort.signal })
+    eventBus.on('pagerendered', () => {
+      bumpGeometry()
+    }, { signal: abort.signal })
+    eventBus.on('textlayerrendered', (event: { pageNumber: number }) => {
+      const pageView = viewer.getPageView(event.pageNumber - 1)
+      const layer = pageView?.textLayer?.div as HTMLElement | undefined
+      if (layer !== undefined) moveLineBreaksOffscreen(layer)
+    }, { signal: abort.signal })
+
+    viewer.setDocument(pdf)
+    setViewerApi({ viewer, element })
+
+    return () => {
+      disposed = true
+      abort.abort()
+      if (raf !== null) window.cancelAnimationFrame(raf)
+      viewer.cleanup()
+      element.remove()
+      setViewerApi(null)
+      setPagesReady(false)
+      setPagesSized(false)
+    }
+  }, [pdf, viewerCssReady])
 
   useEffect(() => {
     onPageChange(currentPage, pageCount)
@@ -884,12 +615,12 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   /**
    * 续读：PDF 就绪后滚到上次那页。
    *
-   * 页面 wrapper 先按估算尺寸占位，`offsetTop` 一提交就能算，所以不必等 canvas
-   * 画完；用 rAF 轮询等占位出现（最多约两秒），超时就算了 —— 定位失败比卡在
-   * 空白页好。
+   * pdf.js 在 `pagesinit` 后异步把每页的真实尺寸写进页面 DOM；等 `pagesloaded`
+   * 再跳，目标页的 `offsetTop` 才是准的。仍保留 rAF 轮询兜底（最多约两秒），
+   * 超时就算了 —— 定位失败比卡在空白页好。
    */
   useEffect(() => {
-    if (url === '' || pageCount === 0 || resumePage === null) return
+    if (url === '' || pageCount === 0 || resumePage === null || !pagesReady || !pagesSized) return
     if (resumedUrlRef.current === url) return
     const target = resumePage + 1
     if (target < 1 || target > pageCount) {
@@ -911,7 +642,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [url, pageCount, resumePage, t])
+  }, [url, pageCount, resumePage, t, pagesReady, pagesSized])
 
   /** 翻页就记。防抖与去重都在 hook 里，这里只喂当前页。 */
   useEffect(() => {
@@ -928,88 +659,111 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
    */
   const captureZoomAnchor = useCallback((x: number, y: number): void => {
     const element = scrollRef.current
-    const pages = element?.firstElementChild
-    if (element === null || element === undefined || pages === null || pages === undefined) return
-    const count = pages.children.length
-    if (count === 0) return
+    const viewerElement = viewerApiRef.current?.element
+    if (element === null || viewerElement === undefined) return
+    const pages = Array.from(viewerElement.querySelectorAll<HTMLElement>(PAGE_SELECTOR))
+    if (pages.length === 0) return
+    const box = element.getBoundingClientRect()
     const docX = element.scrollLeft + x
     const docY = element.scrollTop + y
-    let index = 0
-    for (let i = 0; i < count; i += 1) {
-      const child = pages.children[i] as HTMLElement
-      const top = child.offsetTop
-      if (docY <= top + child.offsetHeight) {
-        index = i
-        break
-      }
-      index = i
+    let chosen = pages[0]
+    for (const page of pages) {
+      chosen = page
+      const rect = page.getBoundingClientRect()
+      const top = rect.top - box.top + element.scrollTop
+      if (docY <= top + rect.height) break
     }
-    const page = pages.children[index] as HTMLElement
-    const top = page.offsetTop
-    const width = page.offsetWidth
-    const height = page.offsetHeight
-    if (width <= 0 || height <= 0) return
+    const rect = chosen.getBoundingClientRect()
+    const left = rect.left - box.left + element.scrollLeft
+    const top = rect.top - box.top + element.scrollTop
+    if (rect.width <= 0 || rect.height <= 0) return
     zoomAnchorRef.current = {
-      page: index + 1,
-      fx: (docX - page.offsetLeft) / width,
-      fy: (docY - top) / height,
+      page: Number(chosen.dataset.pageNumber),
+      fx: (docX - left) / rect.width,
+      fy: (docY - top) / rect.height,
       x,
       y,
     }
-    setZoomTick((value) => value + 1)
   }, [])
 
-  // 容器尺寸：宽度变了就重算「适应宽度」的倍率，并在重排前记下视口里的文档位置。
-  //
-  // 拖右侧面板改宽度时，所有页的高都跟着倍率变；浏览器只保留 scrollTop 的像素值，
-  // 同一个 scrollTop 在新布局里会落到完全不同的页（第 25 页直接显示成第 43 页，
-  // 拉回来又跳到第 18 页）。所以这里在把新宽度交给 React 之前，按**旧布局**记下
-  // 视口中线对应的文档点（页号 + 页内比例），等新布局提交后由下面的
-  // useLayoutEffect 连同缩放一起放回原处。
+  /** 新布局落地后，把锚点那个文档点放回原来的屏幕位置（横竖两轴一起调）。 */
+  const restoreZoomAnchor = useCallback((): void => {
+    if (restoreRafRef.current !== null) window.cancelAnimationFrame(restoreRafRef.current)
+    restoreRafRef.current = window.requestAnimationFrame(() => {
+      restoreRafRef.current = null
+      const anchor = zoomAnchorRef.current
+      const element = scrollRef.current
+      const viewerElement = viewerApiRef.current?.element
+      if (anchor === null || element === null || viewerElement === undefined) return
+      zoomAnchorRef.current = null
+      const target = viewerElement.querySelector<HTMLElement>(
+        `.page[data-page-number="${anchor.page}"]`,
+      )
+      if (target === null) return
+      const box = element.getBoundingClientRect()
+      const rect = target.getBoundingClientRect()
+      element.scrollLeft = Math.max(
+        0,
+        element.scrollLeft + (rect.left - box.left) + anchor.fx * rect.width - anchor.x,
+      )
+      element.scrollTop = Math.max(
+        0,
+        element.scrollTop + (rect.top - box.top) + anchor.fy * rect.height - anchor.y,
+      )
+    })
+  }, [])
+
+  // 容器宽度变化：只有「适应宽度」需要重算倍率；重排前先记下视口中的文档点。
   useEffect(() => {
     const element = scrollRef.current
     if (element === null) return
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect
-      if (rect === undefined) return
-      viewportHeightRef.current = rect.height
-      if (rect.width <= 0) return
-      // 只有「适应宽度」下宽度变化才会改倍率；手动倍率时页面尺寸不变，不需要锚定。
-      if (fitWidthRef.current && Math.abs(rect.width - containerWidthRef.current) > 0.5) {
-        captureZoomAnchor(element.clientWidth / 2, element.clientHeight / 2)
-      }
-      containerWidthRef.current = rect.width
-      setContainerWidth(rect.width)
+    let width = element.clientWidth
+    const observer = new ResizeObserver(() => {
+      const next = element.clientWidth
+      if (Math.abs(next - width) < 0.5) return
+      width = next
+      const api = viewerApiRef.current
+      if (api === null || api.viewer.currentScaleValue !== 'page-width') return
+      captureZoomAnchor(next / 2, element.clientHeight / 2)
+      api.viewer.currentScaleValue = 'page-width'
+      restoreZoomAnchor()
     })
     observer.observe(element)
-    containerWidthRef.current = element.clientWidth
-    setContainerWidth(element.clientWidth)
-    viewportHeightRef.current = element.clientHeight
     return () => observer.disconnect()
-  }, [captureZoomAnchor])
+  }, [captureZoomAnchor, restoreZoomAnchor])
 
   /** 按钮 / 命令行缩放按视口中心锚定；Ctrl+滚轮按鼠标位置锚定。 */
   const applyZoom = useCallback((next: number, at?: { x: number; y: number }): void => {
     const element = scrollRef.current
-    if (element !== null) {
-      captureZoomAnchor(at?.x ?? element.clientWidth / 2, at?.y ?? element.clientHeight / 2)
-    }
-    setFitWidth(false)
-    setManualScale(clampScale(next))
-  }, [captureZoomAnchor])
+    const api = viewerApiRef.current
+    if (element === null || api === null) return
+    captureZoomAnchor(at?.x ?? element.clientWidth / 2, at?.y ?? element.clientHeight / 2)
+    const percent = Math.min(Math.max(Math.round(next), MIN_ZOOM), MAX_ZOOM)
+    api.viewer.currentScaleValue = String(percent / 100)
+    restoreZoomAnchor()
+  }, [captureZoomAnchor, restoreZoomAnchor])
 
-  const scaleRef = useRef(scale)
-  scaleRef.current = scale
+  const fitToWidth = useCallback((): void => {
+    const element = scrollRef.current
+    const api = viewerApiRef.current
+    if (element === null || api === null) return
+    captureZoomAnchor(element.clientWidth / 2, element.clientHeight / 2)
+    api.viewer.currentScaleValue = 'page-width'
+    restoreZoomAnchor()
+  }, [captureZoomAnchor, restoreZoomAnchor])
+
   useEffect(() => {
     const element = scrollRef.current
     if (element === null) return
     const onWheel = (event: WheelEvent): void => {
       if (!(event.ctrlKey || event.metaKey)) return
       event.preventDefault()
+      const api = viewerApiRef.current
+      if (api === null) return
       const rect = element.getBoundingClientRect()
       const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1
       // 触控板捏合等合成事件偶尔带 0 坐标，夹回可视区内，免得锚点落到屏外把页面推偏。
-      applyZoom(scaleRef.current * factor, {
+      applyZoom(api.viewer.currentScale * 100 * factor, {
         x: Math.min(Math.max(event.clientX - rect.left, 0), element.clientWidth),
         y: Math.min(Math.max(event.clientY - rect.top, 0), element.clientHeight),
       })
@@ -1017,20 +771,6 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => element.removeEventListener('wheel', onWheel)
   }, [applyZoom])
-
-  /** 布局已按新倍率提交：把锚点那个文档点放回原来的屏幕位置，横竖两轴一起调。 */
-  useLayoutEffect(() => {
-    const anchor = zoomAnchorRef.current
-    const element = scrollRef.current
-    if (anchor === null || element === null) return
-    zoomAnchorRef.current = null
-    // 页面 top 全变了：立刻作废缓存，别让这次滚动派发的 pageAt 拿旧坐标报错页码。
-    topsRef.current = null
-    const target = element.querySelector<HTMLElement>(`[data-zp-page="${anchor.page}"]`)
-    if (target === null) return
-    element.scrollLeft = Math.max(0, target.offsetLeft + anchor.fx * target.offsetWidth - anchor.x)
-    element.scrollTop = Math.max(0, target.offsetTop + anchor.fy * target.offsetHeight - anchor.y)
-  }, [zoomTick, scale, fitWidth])
 
   const annotationsByPage = useMemo(() => {
     const map = new Map<number, ZoteroAnnotation[]>()
@@ -1044,13 +784,6 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     }
     return map
   }, [annotations, source?.attachmentKey])
-
-  /** 闪烁只影响目标页，避免每次高亮都让全部页面重渲染。 */
-  const flashPage = useMemo(() => {
-    if (flashKey === null) return -1
-    const annotation = annotations.find((item) => item.key === flashKey)
-    return annotation?.position?.pageIndex ?? -1
-  }, [flashKey, annotations])
 
   const cardAnnotation = useMemo(
     () => (card === null ? null : annotations.find((item) => item.key === card.key) ?? null),
@@ -1066,101 +799,53 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     [],
   )
 
-  /**
-   * 视口中线落在第几页（1 基）。
-   *
-   * 页面 top 缓存成数组，滚动帧里只做二分。不读 `offsetTop`：一旦有 DOM 改动
-   * （画布、文本层刚插进来）读它就会强制整棵树同步布局，正好压在滚动帧上。
-   */
-  const pageAt = useCallback((element: HTMLDivElement): number => {
-    const pages = element.firstElementChild
-    if (pages === null) return 1
-    const count = pages.children.length
-    let tops = topsRef.current
-    if (tops === null || tops.length !== count) {
-      const next = new Array<number>(count)
-      for (let index = 0; index < count; index += 1) {
-        next[index] = (pages.children[index] as HTMLElement).offsetTop
+  /** 点中标注时打开卡片；命中测试用 pdf.js 页面当前 viewport，和覆盖层保持同一套坐标。 */
+  const onViewerClick = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (window.getSelection()?.toString().trim() !== '') return
+    const target = (event.target as Element | null)?.closest<HTMLElement>(PAGE_SELECTOR)
+    const api = viewerApiRef.current
+    if (target === null || target === undefined || api === null) return
+    const pageNumber = Number(target.dataset.pageNumber)
+    if (!Number.isFinite(pageNumber)) return
+    const pageView = api.viewer.getPageView(pageNumber - 1)
+    const list = annotationsByPage.get(pageNumber - 1)
+    if (pageView === undefined || list === undefined) return
+    const rect = target.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
+    for (const annotation of list) {
+      for (const source of annotation.position?.rects ?? []) {
+        const box = viewportBox(pageView.viewport, source)
+        if (
+          x >= box.left
+          && x <= box.left + box.width
+          && y >= box.top
+          && y <= box.top + box.height
+        ) {
+          onAnnotationClick(annotation, event.clientX, event.clientY)
+          return
+        }
       }
-      tops = next
-      topsRef.current = next
     }
-    const middle = element.scrollTop + viewportHeightRef.current / 2
-    let low = 0
-    let high = count - 1
-    while (low <= high) {
-      const index = (low + high) >> 1
-      if ((tops[index] ?? 0) <= middle) low = index + 1
-      else high = index - 1
-    }
-    return Math.max(1, low)
-  }, [])
+  }, [annotationsByPage, onAnnotationClick])
 
   /**
-   * 滚动监听：更新页码，并给容器打上「正在滚动」标记。
-   *
-   * 用原生 passive 监听而不是 React 合成事件：触控板/滚轮一秒能来上百条事件，
-   * 合成事件每条都要过一遍 React 的派发与批量更新流程。
-   * 标记走 `data-` 属性而不是 state —— 每个滚动动作都要改，不该引起重渲染；
-   * CSS 据此在滚动期间把文本层撤下（见 `PDF_CSS`）。
+   * 滚动只做两件事：标记「用户读过」，以及收起浮条。
+   * 当前页由 pdf.js 的 `pagechanging` 事件维护，不需要自己再算一遍页面位置。
    */
   useEffect(() => {
     const element = scrollRef.current
     if (element === null) return
-    /**
-     * 鼠标按住时不撤文本层：拖选到边缘会触发自动滚动，而 `visibility: hidden`
-     * 的元素不参与命中测试，撤掉会让原生选区当场失去落点。
-     */
-    let pointerHeld = false
-    const press = (): void => {
-      pointerHeld = true
-      // 一按下就把文本层放回来：接下来多半是划选，晚 140ms 会让这一次划选落空。
-      if (scrollingTimerRef.current !== null) {
-        window.clearTimeout(scrollingTimerRef.current)
-        scrollingTimerRef.current = null
-      }
-      delete element.dataset.zpScrolling
-    }
-    const release = (): void => {
-      pointerHeld = false
-    }
     const onScroll = (): void => {
       scrolledRef.current = true
-      markScrollActivity()
-      if (!pointerHeld) {
-        if (element.dataset.zpScrolling !== '1') element.dataset.zpScrolling = '1'
-        if (scrollingTimerRef.current !== null) window.clearTimeout(scrollingTimerRef.current)
-        scrollingTimerRef.current = window.setTimeout(() => {
-          scrollingTimerRef.current = null
-          delete element.dataset.zpScrolling
-        }, SCROLLING_FLAG_MS)
+      if (selectionRef.current !== null) {
+        rangeRef.current = null
+        setSelection(null)
       }
-      if (rafRef.current !== null) return
-      rafRef.current = window.requestAnimationFrame(() => {
-        rafRef.current = null
-        if (selectionRef.current !== null) {
-          rangeRef.current = null
-          setSelection(null)
-        }
-        const page = pageAt(element)
-        setCurrentPage((previous) => (previous === page ? previous : page))
-      })
     }
     element.addEventListener('scroll', onScroll, { passive: true })
-    element.addEventListener('pointerdown', press)
-    window.addEventListener('pointerup', release)
-    window.addEventListener('pointercancel', release)
-    return () => {
-      element.removeEventListener('scroll', onScroll)
-      element.removeEventListener('pointerdown', press)
-      window.removeEventListener('pointerup', release)
-      window.removeEventListener('pointercancel', release)
-      if (scrollingTimerRef.current !== null) {
-        window.clearTimeout(scrollingTimerRef.current)
-        scrollingTimerRef.current = null
-      }
-    }
-  }, [pageAt])
+    return () => element.removeEventListener('scroll', onScroll)
+  }, [])
 
   function onMouseUp(): void {
     const selectionObject = window.getSelection()
@@ -1212,7 +897,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         range,
         pdf,
         pagesRoot: container,
-        scale,
+        viewportOf: (pageNumber) => viewerApiRef.current?.viewer.getPageView(pageNumber - 1)?.viewport ?? null,
         annotationType: type,
         annotationColor: color,
         annotationComment: comment,
@@ -1239,7 +924,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     const pageIndex = annotation?.position?.pageIndex
     const element = scrollRef.current
     if (annotation === undefined || pageIndex === undefined || element === null) return false
-    const target = element.querySelector<HTMLElement>(`[data-zp-page="${pageIndex + 1}"]`)
+    const target = element.querySelector<HTMLElement>(`.page[data-page-number="${pageIndex + 1}"]`)
     if (target === null) return false
     const targetRect = target.getBoundingClientRect()
     const box = element.getBoundingClientRect()
@@ -1257,28 +942,31 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   }
 
   function zoomIn(): void {
-    const next = ZOOM_STEPS.find((step) => step > scale + 0.001) ?? MAX_SCALE
+    const current = Math.round((viewerApiRef.current?.viewer.currentScale ?? 1) * 100)
+    const next = ZOOM_STEPS.find((step) => step > current) ?? MAX_ZOOM
     applyZoom(next)
   }
 
   function zoomOut(): void {
-    const next = [...ZOOM_STEPS].reverse().find((step) => step < scale - 0.001) ?? MIN_SCALE
+    const current = Math.round((viewerApiRef.current?.viewer.currentScale ?? 1) * 100)
+    const next = [...ZOOM_STEPS].reverse().find((step) => step < current) ?? MIN_ZOOM
     applyZoom(next)
   }
 
   /**
    * 把某一页（1 基）滚到视口顶部。
    *
-   * 页面占位还没提交（`data-zp-page` 不在）时返回 false，调用方据此重试 —— 续读与
-   * 页码跳转都要等这一步。
+   * 页面 DOM 还没建好（`setDocument` 尚未跑完）时返回 false，调用方据此重试 ——
+   * 续读与页码跳转都要等这一步。
    */
   function scrollToPage(page: number): boolean {
     const element = scrollRef.current
-    const target = element?.firstElementChild?.children[page - 1] as HTMLElement | undefined
-    if (element === null || target === undefined) return false
-    element.scrollTop = target.offsetTop
+    const target = element?.querySelector<HTMLElement>(`.page[data-page-number="${page}"]`)
+    if (element === null || target === null || target === undefined) return false
+    const rect = target.getBoundingClientRect()
+    const box = element.getBoundingClientRect()
+    element.scrollTop += rect.top - box.top
     setCurrentPage(page)
-    markScrollActivity()
     return true
   }
 
@@ -1296,26 +984,18 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     },
     zoomIn,
     zoomOut,
-    setZoom: (percent: number) => applyZoom(percent / 100),
-    fitToWidth: () => {
-      const element = scrollRef.current
-      if (element !== null) {
-        captureZoomAnchor(element.clientWidth / 2, element.clientHeight / 2)
-      }
-      setFitWidth(true)
-    },
+    setZoom: (percent: number) => applyZoom(percent),
+    fitToWidth,
   }))
 
   useEffect(() => () => {
-    if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current)
+    if (restoreRafRef.current !== null) window.cancelAnimationFrame(restoreRafRef.current)
     if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
   }, [])
 
   // 卡片开着时点别处 / 按 Esc 就收起，与快照渲染器共用同一套（见 `dismiss.ts`）。
   useDismiss(card !== null, cardRef, () => setCard(null))
 
-  const estimateWidth = baseSize === null ? 0 : baseSize.width * scale
-  const estimateHeight = baseSize === null ? 0 : baseSize.height * scale
   const rootWidth = rootRef.current?.clientWidth ?? 320
   const rootHeight = rootRef.current?.clientHeight ?? 400
   const cardLeft = card === null ? 0 : Math.max(8, Math.min(card.x, rootWidth - 268))
@@ -1351,28 +1031,15 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         ref={scrollRef}
         className="dsh-zotero-pdf-scroll"
         onMouseUp={onMouseUp}
+        onClick={onViewerClick}
       >
-        {pageCount > 0 && (
-          <div className="dsh-zotero-pdf-pages">
-            {Array.from({ length: pageCount }, (_, index) => (
-              <PdfPage
-                key={index + 1}
-                label={tpl(t('viewer.page'), { n: index + 1 })}
-                pdf={pdf as PDFDocumentProxy}
-                pageNumber={index + 1}
-                scale={scale}
-                active={activePages.has(index + 1)}
-                retained={retainedPages.has(index + 1)}
-                estimateWidth={estimateWidth}
-                estimateHeight={estimateHeight}
-                containerWidth={containerWidth}
-                annotations={annotationsByPage.get(index) ?? EMPTY_ANNOTATIONS}
-                flashKey={index === flashPage ? flashKey : null}
-                onAnnotationClick={onAnnotationClick}
-                priorityOf={priorityOf}
-              />
-            ))}
-          </div>
+        {viewerApi !== null && createPortal(
+          <AnnotationLayer
+            viewer={viewerApi.viewer}
+            annotationsByPage={annotationsByPage}
+            flashKey={flashKey}
+          />,
+          viewerApi.element,
         )}
       </div>
 
@@ -1384,7 +1051,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
 
       {error !== null && (
         <div style={hintOverlayStyle}>
-          <div style={{ maxWidth: 300, textAlign: 'center' }}>
+          <div style={{ maxWidth: 300, textAlign: 'center', pointerEvents: 'auto' }}>
             <p style={{ margin: '0 0 8px', lineHeight: 1.5 }}>{error.text}</p>
             <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setRetry((value) => value + 1)} style={smallButtonStyle}>

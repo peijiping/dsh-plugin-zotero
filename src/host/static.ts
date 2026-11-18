@@ -18,13 +18,17 @@ import { isTrusted } from './router.js'
 /** `lib/host/static.js` → 包根 `client/pdfjs/`。 */
 const ASSET_ROOT = fileURLToPath(new URL('../../client/pdfjs/', import.meta.url))
 
-/** 白名单：根下单个 Worker 文件 + 三个资产目录。 */
-const ALLOWED_DIRECTORIES = ['cmaps/', 'standard_fonts/', 'wasm/']
-const ALLOWED_FILES = new Set(['pdf.worker.min.mjs', 'pdf.worker.mjs'])
+/** 白名单：根下单个 Worker 文件 + 样式表 + 资产目录。 */
+const ALLOWED_DIRECTORIES = ['images/', 'cmaps/', 'standard_fonts/', 'wasm/']
+const ALLOWED_FILES = new Set(['pdf.worker.min.mjs', 'pdf.worker.mjs', 'pdf_viewer.css'])
 
 const MIME: Record<string, string> = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.gif': 'image/gif',
+  '.png': 'image/png',
   '.wasm': 'application/wasm',
   '.bcmap': 'application/octet-stream',
   '.pfb': 'application/x-font-type1',
