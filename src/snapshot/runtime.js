@@ -680,7 +680,34 @@
     return NO_WRAP[parent.localName] !== 1;
   }
 
-  function makeWrapper(owners, text) {
+  /* Sticky-note badge for annotations that carry a comment. Same folded-corner
+     shape as the client's AnnotationCommentIcon; built with createElementNS
+     because this runtime is a classic IIFE outside the React bundle. */
+  function commentBadge(color) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.cssText = 'position:absolute;left:-3px;top:-9px;pointer-events:none;z-index:1;overflow:visible';
+    var body = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    body.setAttribute('d', 'M2.4 1.9 H13.6 V14.1 H6.3 L2.4 10.2 Z');
+    body.setAttribute('fill', color || '#ffd400');
+    body.setAttribute('stroke', 'rgba(0,0,0,0.55)');
+    body.setAttribute('stroke-width', '1.2');
+    body.setAttribute('stroke-linejoin', 'round');
+    var fold = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    fold.setAttribute('d', 'M2.4 10.2 H6.3 V14.1 Z');
+    fold.setAttribute('fill', 'rgba(255,255,255,0.92)');
+    fold.setAttribute('stroke', 'rgba(0,0,0,0.55)');
+    fold.setAttribute('stroke-width', '1.2');
+    fold.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(body);
+    svg.appendChild(fold);
+    return svg;
+  }
+
+  function makeWrapper(owners, text, badgeColor) {
     var first = owners[0];
     var element;
     if (first.type === 'underline') {
@@ -701,6 +728,12 @@
     element.setAttribute('data-dsh-ann', owners.map(function (owner) {
       return owner.key;
     }).join(' '));
+    /* Only the wrapper covering an annotation's first character carries the
+       badge; `badgeColor` is null on every continuation wrapper. */
+    if (badgeColor) {
+      element.style.position = 'relative';
+      element.appendChild(commentBadge(badgeColor));
+    }
     element.appendChild(document.createTextNode(text));
     return element;
   }
@@ -729,12 +762,21 @@
         if (from >= to) continue;
         var segment = node.nodeValue.slice(from, to);
         var owners = [];
+        var badgeColor = null;
         for (var j = 0; j < list.length; j++) {
-          if (list[j].from <= from && to <= list[j].to) owners.push(list[j].annotation);
+          var entry = list[j];
+          if (entry.from <= from && to <= entry.to) {
+            owners.push(entry.annotation);
+            /* The slice beginning exactly at an annotation's first character
+               is where Zotero draws its comment badge. */
+            if (entry.start && entry.annotation.commented && entry.from === from) {
+              badgeColor = entry.annotation.color || '#ffd400';
+            }
+          }
         }
         fragment.appendChild(owners.length === 0
           ? document.createTextNode(segment)
-          : makeWrapper(owners, segment));
+          : makeWrapper(owners, segment, badgeColor));
       }
 
       var parent = node.parentNode;
@@ -787,6 +829,7 @@
     unwrapAll();
 
     var byNode = new Map();
+    var seenStart = new Set();
     var resolved = 0;
     var failure = null;
     try {
@@ -808,7 +851,14 @@
             list = [];
             byNode.set(part.node, list);
           }
-          list.push({ from: part.from, to: part.to, annotation: annotation });
+          list.push({
+            from: part.from,
+            to: part.to,
+            annotation: annotation,
+            /* parts are in document order; the first wrappable one owns the badge. */
+            start: !seenStart.has(annotation.key),
+          });
+          seenStart.add(annotation.key);
         }
       }
       wrapParts(byNode);
@@ -1112,5 +1162,5 @@
   installStorageShim('localStorage');
   installStorageShim('sessionStorage');
 
-  post({ type: 'ready', bridge: 5 });
+  post({ type: 'ready', bridge: 6 });
 }());

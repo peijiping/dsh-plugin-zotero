@@ -26,6 +26,7 @@ import type { ZoteroAnnotation } from '../../zotero/types'
 import { buildSegments, type Segment } from '../annotationRuns'
 import type { Translate } from '../locales'
 import { NOTE_CSS } from '../NoteList'
+import { AnnotationCommentIcon } from './AnnotationCommentIcon'
 import { OUTLINE_ANCHOR_ATTR, offsetIndexAt, parseHtmlHeadings, parseMarkdownHeadings } from './outline'
 import { SelectionBar } from './SelectionBar'
 import { TranslationCard, isInsideTranslation } from './TranslationCard'
@@ -70,6 +71,19 @@ function textNodeAtOffset(root: HTMLElement, offset: number): { node: Text; loca
   return null
 }
 
+/**
+ * 段首便签角标。用 absolute + 零尺寸容器贴在行首左上角：既压住高亮的起点，
+ * 又不占字符宽度、不产生文本节点——`textNodeAtOffset` / 目录偏移按 textContent
+ * 数字符，插一个带文字的元素会让后面所有标注与标题整体错位。
+ */
+const badgeStyle: CSSProperties = {
+  position: 'absolute',
+  left: -3,
+  top: -9,
+  pointerEvents: 'none',
+  zIndex: 1,
+}
+
 const AnnotatedText = memo(function AnnotatedText({ segments }: { segments: Segment[] }): ReactElement {
   return (
     <>
@@ -83,14 +97,21 @@ const AnnotatedText = memo(function AnnotatedText({ segments }: { segments: Segm
           style.textDecorationThickness = 2
           style.textUnderlineOffset = 2
         }
+        // 角标相对段首定位，段本身要成为包含块。
+        if (segment.badge !== null) style.position = 'relative'
         const owners = segment.owners.join(' ')
+        const badge = segment.badge !== null && (
+          <span className="dsh-zotero-ann-badge" style={badgeStyle}>
+            <AnnotationCommentIcon color={segment.badge} />
+          </span>
+        )
         return segment.background !== null ? (
           <mark key={index} className="dsh-zotero-ann" data-ann={owners} style={style}>
-            {segment.text}
+            {badge}{segment.text}
           </mark>
         ) : (
           <span key={index} className="dsh-zotero-ann" data-ann={owners} style={style}>
-            {segment.text}
+            {badge}{segment.text}
           </span>
         )
       })}

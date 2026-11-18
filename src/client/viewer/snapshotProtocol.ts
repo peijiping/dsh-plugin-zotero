@@ -24,8 +24,9 @@ export const SNAPSHOT_VERSION = 1
  * 3：上报网页标题目录 `outline`，并能响应 `scroll-to-outline`。
  * 4：响应 `capture`，把整页序列化成自包含 HTML + CSS 回传（截图用）。
  * 5：滚动时上报 `outline-active`（目录反向跟随），跳转动画期间不自作主张改选。
+ * 6：`annotations` 条目带 `commented`，带评论的高亮 / 划线在起点画便签角标。
  */
-export const SNAPSHOT_BRIDGE_VERSION = 5
+export const SNAPSHOT_BRIDGE_VERSION = 6
 
 /** 桥接脚本响应 `capture` 时回传的自包含页面快照。 */
 export interface SnapshotCapturePayload {
@@ -92,6 +93,8 @@ export interface SnapshotAnnotationItem {
   color: string
   text: string
   webPosition: { selector: string; start: number; end: number }
+  /** 有评论文字：在起点画一枚便签角标。评论原文不进 iframe。 */
+  commented: boolean
 }
 
 /** iframe 里的一条网页标题（h1–h6 拍平后的层级由 `depth` 表示）。 */

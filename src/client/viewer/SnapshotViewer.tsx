@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
 import type { ZoteroAnnotation, ZoteroAnnotationDraft } from '../../zotero/types'
+import { hasComment } from '../annotationComment'
 import { EDITABLE_TYPES } from '../annotationRuns'
 import { createAnnotations } from '../api'
 import { notifyDocumentPress, useDismiss } from '../dismiss'
@@ -63,6 +64,7 @@ function itemsOf(annotations: ZoteroAnnotation[]): SnapshotAnnotationItem[] {
       color: annotation.color,
       text: annotation.text,
       webPosition: annotation.webPosition,
+      commented: hasComment(annotation.comment),
     })
   }
   return items

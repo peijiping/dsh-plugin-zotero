@@ -6,6 +6,7 @@
  */
 
 import type { ZoteroAnnotation } from '../zotero/types'
+import { hasComment } from './annotationComment'
 
 /** 无有效颜色时的黄底回退（带透明度，适配深浅主题）。 */
 const FALLBACK_TINT = 'rgba(255,212,0,0.32)'
@@ -59,6 +60,11 @@ export interface Segment {
   background: string | null
   /** 划线颜色；无划线覆盖时为 null。 */
   underline: string | null
+  /**
+   * 段首是否恰好是「带评论的标注」的起点（Zotero 便签角标）。
+   * 值为标注颜色；合并段时若不是真正起点会置回 null，见下方 push()。
+   */
+  badge: string | null
 }
 
 /** Zotero 的颜色是三字节十六进制；补一个 alpha 通道做半透明底色。 */
@@ -73,6 +79,8 @@ interface Span {
   color: string
   start: number
   end: number
+  /** 带评论才需要角标；评论原文不必带进渲染层。 */
+  commented: boolean
 }
 
 function spansOf(annotations: ZoteroAnnotation[]): Span[] {
@@ -85,9 +93,11 @@ function spansOf(annotations: ZoteroAnnotation[]): Span[] {
     spans.push({
       key: annotation.key,
       type: annotation.type,
-      color: annotation.color,
+      // 统一成有效十六进制，角标颜色可以直接拿去填充。
+      color: annotationColor(annotation),
       start: range.start,
       end: range.end,
+      commented: hasComment(annotation.comment),
     })
   }
   return spans
@@ -108,7 +118,7 @@ export function buildSegments(content: string, annotations: ZoteroAnnotation[]):
   if (content === '') return []
   const spans = spansOf(annotations)
   if (spans.length === 0) {
-    return [{ kind: 'text', text: content, owners: [], background: null, underline: null }]
+    return [{ kind: 'text', text: content, owners: [], background: null, underline: null, badge: null }]
   }
 
   const bounds = new Set<number>([0, content.length])
@@ -126,6 +136,9 @@ export function buildSegments(content: string, annotations: ZoteroAnnotation[]):
       && last.kind === segment.kind
       && last.background === segment.background
       && last.underline === segment.underline
+      // 角标是「段首」语义：合并会把它挪到别人的起点上，所以带角标的段一律独占。
+      && last.badge === null
+      && segment.badge === null
     ) {
       last.text += segment.text
       for (const owner of segment.owners) if (!last.owners.includes(owner)) last.owners.push(owner)
@@ -142,10 +155,15 @@ export function buildSegments(content: string, annotations: ZoteroAnnotation[]):
 
     let background: string | null = null
     let underline: string | null = null
+    let badge: string | null = null
     const owners: string[] = []
     for (const span of spans) {
       if (span.start > start || span.end < end) continue
       owners.push(span.key)
+      // 段的第一个字符正好是某条带评论标注的起点 → 这里要画便签角标。
+      // 与上面 bounds 用同一套 clamp，免得标注越过正文边界时对不上切点。
+      const clampedStart = Math.min(content.length, Math.max(0, span.start))
+      if (badge === null && span.commented && clampedStart === start) badge = span.color
       if (span.type === 'underline') {
         if (underline === null) underline = span.color.trim() === '' ? DEFAULT_ANNOTATION_COLOR : span.color.trim()
       } else if (background === null) {
@@ -154,9 +172,9 @@ export function buildSegments(content: string, annotations: ZoteroAnnotation[]):
     }
 
     if (background === null && underline === null) {
-      push({ kind: 'text', text, owners: [], background: null, underline: null })
+      push({ kind: 'text', text, owners: [], background: null, underline: null, badge })
     } else {
-      push({ kind: 'marked', text, owners, background, underline })
+      push({ kind: 'marked', text, owners, background, underline, badge })
     }
   }
 

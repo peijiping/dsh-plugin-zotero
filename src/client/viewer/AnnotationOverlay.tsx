@@ -6,13 +6,18 @@
  * 整层 `pointer-events: none`，点击命中由页面容器按坐标判断，避免抢走文本选区。
  */
 
-import type { ReactElement } from 'react'
+import { Fragment, type ReactElement } from 'react'
 
 import type { PageViewport } from 'pdfjs-dist'
 
 import type { ZoteroAnnotation } from '../../zotero/types'
+import { hasComment } from '../annotationComment'
 import { annotationColor, tint } from '../annotationRuns'
+import { AnnotationCommentIcon } from './AnnotationCommentIcon'
 import { viewportBox, type ViewportBox } from './geometry'
+
+/** 便签角标边长，与 12.5px 正文相称；压在首段高亮的左上角。 */
+const BADGE_SIZE = 13
 
 interface Props {
   annotations: ZoteroAnnotation[]
@@ -30,12 +35,16 @@ export function AnnotationOverlay({ annotations, viewport, flashKey }: Props): R
       {annotations.map((annotation) => {
         const color = annotationColor(annotation)
         const flash = annotation.key === flashKey ? ' dsh-zotero-ann-flash' : ''
-        return boxesOf(annotation, viewport).map((box, index) => {
+        const boxes = boxesOf(annotation, viewport)
+        // 与 Zotero 一致：高亮 / 划线带评论时，在首段矩形左上角叠一个便签角标。
+        const badge = hasComment(annotation.comment)
+          && (annotation.type === 'highlight' || annotation.type === 'underline')
+        return boxes.map((box, index) => {
           const key = `${annotation.key}-${index}`
+          let mark: ReactElement
           if (annotation.type === 'underline') {
-            return (
+            mark = (
               <div
-                key={key}
                 className={`dsh-zotero-ann${flash}`}
                 style={{
                   position: 'absolute',
@@ -48,11 +57,9 @@ export function AnnotationOverlay({ annotations, viewport, flashKey }: Props): R
                 }}
               />
             )
-          }
-          if (annotation.type === 'highlight') {
-            return (
+          } else if (annotation.type === 'highlight') {
+            mark = (
               <div
-                key={key}
                 className={`dsh-zotero-ann${flash}`}
                 style={{
                   position: 'absolute',
@@ -66,11 +73,9 @@ export function AnnotationOverlay({ annotations, viewport, flashKey }: Props): R
                 }}
               />
             )
-          }
-          if (annotation.type === 'image') {
-            return (
+          } else if (annotation.type === 'image') {
+            mark = (
               <div
-                key={key}
                 className={`dsh-zotero-ann${flash}`}
                 style={{
                   position: 'absolute',
@@ -83,32 +88,50 @@ export function AnnotationOverlay({ annotations, viewport, flashKey }: Props): R
                 }}
               />
             )
-          }
-          // note / text：rect 往往只有一个字符宽，画一个小圆点作为可点击标记。
-          return (
-            <div
-              key={key}
-              className={`dsh-zotero-ann${flash}`}
-              style={{
-                position: 'absolute',
-                left: box.left,
-                top: box.top,
-                width: Math.max(box.width, 12),
-                height: Math.max(box.height, 12),
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <span
+          } else {
+            // note / text：rect 往往只有一个字符宽，画一个小圆点作为可点击标记。
+            mark = (
+              <div
+                className={`dsh-zotero-ann${flash}`}
                 style={{
-                  width: 9,
-                  height: 9,
-                  borderRadius: '50%',
-                  background: color,
-                  boxShadow: '0 0 0 1px rgba(0,0,0,0.35)',
+                  position: 'absolute',
+                  left: box.left,
+                  top: box.top,
+                  width: Math.max(box.width, 12),
+                  height: Math.max(box.height, 12),
+                  display: 'flex',
+                  alignItems: 'center',
                 }}
-              />
-            </div>
+              >
+                <span
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: '50%',
+                    background: color,
+                    boxShadow: '0 0 0 1px rgba(0,0,0,0.35)',
+                  }}
+                />
+              </div>
+            )
+          }
+          return (
+            <Fragment key={key}>
+              {mark}
+              {badge && index === 0 && (
+                <div
+                  className="dsh-zotero-ann-badge"
+                  style={{
+                    position: 'absolute',
+                    left: box.left - 3,
+                    top: box.top - 9,
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <AnnotationCommentIcon color={color} size={BADGE_SIZE} />
+                </div>
+              )}
+            </Fragment>
           )
         })
       })}
