@@ -280,6 +280,8 @@ const zh: Record<string, string> = {
   'help.ex.reading.3.prompt': '把上面这段摘录逐句翻译为中文，保留术语原文并附在括号里。',
   'help.ex.reading.4.label': '多篇对比',
   'help.ex.reading.4.prompt': '对比上面三篇文献的研究方法和结论，做成一张表，并指出它们的分歧点。',
+  'help.ex.reading.5.label': '列出参考文献及摘要',
+  'help.ex.reading.5.prompt': '列出该文献正文引用的参考文献及其摘要，分两部分：被引用文献本身、原文每条参考文献及摘要。',
   // ③ 笔记整理
   'help.ex.notes.1.label': '结构化笔记',
   'help.ex.notes.1.prompt': '把上面这几段摘录和笔记整理成一份结构化中文笔记，按主题分节，每节给出要点和出处。',
@@ -814,6 +816,8 @@ const en: Record<string, string> = {
   'help.ex.reading.3.prompt': 'Translate the excerpt above into English sentence by sentence, keeping technical terms in parentheses.',
   'help.ex.reading.4.label': 'Compare papers',
   'help.ex.reading.4.prompt': 'Compare the methods and findings of the three papers above in a table and point out where they disagree.',
+  'help.ex.reading.5.label': 'List references & abstracts',
+  'help.ex.reading.5.prompt': 'List the references cited in the body of the paper above along with their abstracts, in two parts: the cited work itself, and each reference from the original text with its abstract.',
   // ③ Notes
   'help.ex.notes.1.label': 'Structured notes',
   'help.ex.notes.1.prompt': 'Turn the excerpts and notes above into structured notes in Chinese, grouped by topic with key points and sources for each section.',

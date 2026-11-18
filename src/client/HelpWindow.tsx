@@ -59,7 +59,7 @@ interface TabSpec {
 
 const TABS: TabSpec[] = [
   { id: 'start', count: 7, withHint: true, footnoteKey: 'help.start.footnote' },
-  { id: 'reading', count: 4, withHint: false },
+  { id: 'reading', count: 5, withHint: false },
   { id: 'notes', count: 3, withHint: false },
   { id: 'library', count: 4, withHint: false },
   { id: 'shots', count: 3, withHint: false },
