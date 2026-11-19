@@ -1,30 +1,40 @@
 /**
  * 划词翻译结果浮层。
  *
- * 形态上照 `AnnotationCard`（绝对定位、`Canvas` 底色、z-index 9），多出来的只有一条
- * 可拖动的标题栏：译文往往比选区宽，压住正文时能拖开才谈得上「边看边译」。
+ * 形态上照 `AnnotationCard`（`Canvas` 底色、可拖动的标题栏），但定位用 `fixed`：
+ * 译文往往比选区宽，压住正文时得能拖开，**而且要和目录浮层一样能拖出右栏、压到聊天区上**。
+ * 早先按渲染器容器 `absolute` 定位，拖到右栏边界就被夹住，窄栏里长译文根本摆不开。
+ * `fixed` 天然不受渲染器滚动 / 裁剪影响：继续读正文时浮层也不会跟着滚走。
  *
  * 正文是**左右双栏**：左原文、右译文，各自独立滚动，中间一条明显可见的竖分割线。
  * 早先的「上摘要 + 下译文」用一条几乎看不见的细线分隔，长段落对照时很难分界。
  *
  * 关闭有三个入口：标题栏右侧的 ×、Esc、点击框外 —— 后两个都由 `useDismiss` 统一处理，
- * 不要另外挂 pointerdown（拖动发生在框内，天然不算「点外」）。
+ * 不要另外挂 pointerdown（拖动发生在框内，天然不算「点外」）。钉住后「点击框外」这一路
+ * 被关掉（Esc 与 × 仍可用）：浮层挪到右栏外就是为了边读边对照，点正文不该顺手收走它。
  */
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement,
+} from 'react'
 
 import { writeClipboard } from '../clipboard'
 import { useDismiss } from '../dismiss'
 import { WINDOW_DRAG_EXCLUDE } from '../floatingBox'
 import { type Translate } from '../locales'
 import { showToast } from '../paneStore'
-import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from '../styles'
+import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE, ACCENT } from '../styles'
 import type { EngineChoice, TranslationView } from './useTranslation'
 
 interface Props {
   t: Translate
   view: TranslationView
-  /** 渲染器内容区的尺寸，用来把浮层夹在可视范围内。 */
+  /** 渲染器内容区的尺寸：只用来定初始大小（默认宽度别撑出右栏）。 */
   bounds: { width: number; height: number }
   /** 当前选择的引擎（`default` = 跟随设置页的默认引擎）。 */
   engine: EngineChoice
@@ -70,17 +80,38 @@ export function TranslationCard(
   const dragRef = useRef<{ px: number; py: number; left: number; top: number } | null>(null)
   const resizeRef = useRef<{ px: number; py: number; width: number; height: number } | null>(null)
   const [size, setSize] = useState(() => defaultSize(bounds))
-  const [pos, setPos] = useState(() => anchor(view, bounds, size))
+  // 首帧拿不到父节点，先按「选区坐标当视口坐标」摆一个，紧接着的 layout effect
+  // 在绘制前换算成真正的视口坐标，不会闪。
+  const [pos, setPos] = useState(() => anchor({ x: view.x, y: view.y }, defaultSize(bounds)))
   /** 新选区进来时按当前尺寸重新摆位，但别把用户拖出来的尺寸重置回默认。 */
   const sizeRef = useRef(size)
   sizeRef.current = size
+  /** 事件回调 / 监听器里读当前几何，避免闭包拿到旧值。 */
+  const posRef = useRef(pos)
+  posRef.current = pos
 
   // 换了一段选区（同一浮层复用）时回到新锚点；状态变化（loading → done）不动它。
-  useEffect(() => {
-    setPos(anchor(view, bounds, sizeRef.current))
+  // 选区坐标是「渲染器内容坐标」（文本渲染器还带滚动偏移），这里换算成视口坐标 ——
+  // 浮层是 fixed 的，只有视口坐标才拖得出右栏。
+  useLayoutEffect(() => {
+    setPos(anchor(anchorPoint(cardRef.current, view), sizeRef.current))
   }, [view.text, view.x, view.y]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useDismiss(true, cardRef, onClose)
+  // 窗口尺寸变了就把浮层收回可视区：拖到窗口边缘的卡片不该半截留在外面。
+  useEffect(() => {
+    const onResize = (): void => {
+      const nextSize = clampSize(sizeRef.current.width, sizeRef.current.height, posRef.current)
+      setSize(nextSize)
+      setPos(clampPos(posRef.current, nextSize))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  /** 钉住后点正文 / 点别处都不收，方便边读边对照。 */
+  const [pinned, setPinned] = useState(false)
+
+  useDismiss(true, cardRef, onClose, { pinned })
 
   const [active, setActive] = useState(false)
 
@@ -95,10 +126,10 @@ export function TranslationCard(
   function onHandleMove(event: ReactPointerEvent<HTMLDivElement>): void {
     const drag = dragRef.current
     if (drag === null) return
-    setPos({
-      left: clamp(drag.left + event.clientX - drag.px, EDGE, bounds.width - size.width - EDGE),
-      top: clamp(drag.top + event.clientY - drag.py, EDGE, bounds.height - size.height - EDGE),
-    })
+    setPos(clampPos(
+      { left: drag.left + event.clientX - drag.px, top: drag.top + event.clientY - drag.py },
+      sizeRef.current,
+    ))
   }
 
   function onHandleUp(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -118,7 +149,11 @@ export function TranslationCard(
   function onResizeMove(event: ReactPointerEvent<HTMLDivElement>): void {
     const drag = resizeRef.current
     if (drag === null) return
-    setSize(clampSize(drag.width + event.clientX - drag.px, drag.height + event.clientY - drag.py, bounds, pos))
+    setSize(clampSize(
+      drag.width + event.clientX - drag.px,
+      drag.height + event.clientY - drag.py,
+      posRef.current,
+    ))
   }
 
   function onResizeUp(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -190,6 +225,22 @@ export function TranslationCard(
           <option value="bing">{t('translate.provider.bing')}</option>
           <option value="deepseek">{t('translate.provider.deepseek')}</option>
         </select>
+        <button
+          type="button"
+          aria-pressed={pinned}
+          aria-label={pinned ? t('translate.unpin') : t('translate.pin')}
+          title={pinned ? t('translate.unpin') : t('translate.pin')}
+          // 别让图钉顺手把标题栏的拖动也点起来。
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setPinned((value) => !value)}
+          style={{
+            ...pinStyle,
+            color: pinned ? ACCENT : 'inherit',
+            opacity: pinned ? 1 : 0.55,
+          }}
+        >
+          <PinIcon filled={pinned} />
+        </button>
         <button
           type="button"
           // 别让 × 顺手把标题栏的拖动也点起来。
@@ -278,29 +329,53 @@ export function TranslationCard(
 /**
  * 初始落点：优先贴在选区下方 14px，其次上方，两边都放不下就贴底（别跑出视口）。
  *
- * 高矮用**当前实际尺寸**判断，不再用估值 —— 卡片可能已经被拉大，估值会让它一半
- * 露在视口外。
+ * `point` 已经是**视口坐标**，`size` 用当前实际尺寸 —— 卡片可能已经被拉大，
+ * 估值会让它一半露在视口外。
  */
 function anchor(
-  view: TranslationView,
-  bounds: { width: number; height: number },
+  point: { x: number; y: number },
   size: { width: number; height: number },
 ): { left: number; top: number } {
-  const below = view.y + 14
-  const above = view.y - size.height - 14
-  const maxTop = bounds.height - size.height - EDGE
+  const view = viewportSize()
+  const below = point.y + 14
+  const above = point.y - size.height - 14
+  const maxTop = view.height - size.height - EDGE
   let top: number
-  if (below + size.height <= bounds.height - EDGE) top = below
+  if (below + size.height <= view.height - EDGE) top = below
   else if (above >= EDGE) top = above
-  // 大卡片在矮面板里两边都塞不下：贴底，至少标题栏和翻页按钮都在视野里。
+  // 大卡片在矮窗口里两边都塞不下：贴底，至少标题栏和翻页按钮都在视野里。
   else top = Math.min(Math.max(below, EDGE), Math.max(EDGE, maxTop))
   return {
-    left: clamp(view.x - size.width / 2, EDGE, bounds.width - size.width - EDGE),
+    left: clamp(point.x - size.width / 2, EDGE, view.width - size.width - EDGE),
     top: clamp(top, EDGE, maxTop),
   }
 }
 
-/** 默认尺寸：比单栏版更宽，够两栏各铺开一段长摘录 / 整段译文。 */
+/**
+ * 选区锚点换算：渲染器给的 `x` / `y` 是**内容坐标**（文本渲染器还叠加了滚动偏移），
+ * 而浮层是 `fixed` 的，得加上渲染器根节点的视口位置、再减掉它的滚动量。
+ *
+ * 根节点就是浮层的父元素：三种渲染器都把浮层直接挂在各自的根容器里。
+ */
+function anchorPoint(
+  node: HTMLElement | null,
+  view: TranslationView,
+): { x: number; y: number } {
+  const parent = node?.parentElement
+  if (parent === null || parent === undefined) return { x: view.x, y: view.y }
+  const rect = parent.getBoundingClientRect()
+  return {
+    x: rect.left + view.x - parent.scrollLeft,
+    y: rect.top + view.y - parent.scrollTop,
+  }
+}
+
+/** 可用范围 = 整个窗口：浮层允许拖出右栏，压到聊天区上（与目录浮层一致）。 */
+function viewportSize(): { width: number; height: number } {
+  return { width: window.innerWidth, height: window.innerHeight }
+}
+
+/** 默认尺寸：比单栏版更宽，够两栏各铺开一段长摘录 / 整段译文；仍以右栏宽度为上限。 */
 function defaultSize(bounds: { width: number; height: number }): { width: number; height: number } {
   return {
     width: Math.max(MIN_WIDTH, Math.min(DEFAULT_WIDTH, bounds.width - EDGE * 2)),
@@ -308,15 +383,27 @@ function defaultSize(bounds: { width: number; height: number }): { width: number
   }
 }
 
-/** 缩放时同时受下限与「别越出容器」约束（右下角只往外拉，左上角不动）。 */
+/** 位置夹在窗口内，别把浮层拖到看不见的地方。 */
+function clampPos(
+  pos: { left: number; top: number },
+  size: { width: number; height: number },
+): { left: number; top: number } {
+  const view = viewportSize()
+  return {
+    left: clamp(pos.left, EDGE, view.width - size.width - EDGE),
+    top: clamp(pos.top, EDGE, view.height - size.height - EDGE),
+  }
+}
+
+/** 缩放时同时受下限与「别越出窗口」约束（右下角只往外拉，左上角不动）。 */
 function clampSize(
   width: number,
   height: number,
-  bounds: { width: number; height: number },
   pos: { left: number; top: number },
 ): { width: number; height: number } {
-  const maxWidth = Math.max(MIN_WIDTH, bounds.width - pos.left - EDGE)
-  const maxHeight = Math.max(MIN_HEIGHT, bounds.height - pos.top - EDGE)
+  const view = viewportSize()
+  const maxWidth = Math.max(MIN_WIDTH, view.width - pos.left - EDGE)
+  const maxHeight = Math.max(MIN_HEIGHT, view.height - pos.top - EDGE)
   return {
     width: Math.min(Math.max(width, MIN_WIDTH), maxWidth),
     height: Math.min(Math.max(height, MIN_HEIGHT), maxHeight),
@@ -337,7 +424,8 @@ function targetName(t: Translate, target: string): string {
 }
 
 const cardStyle = {
-  position: 'absolute',
+  // 视口定位（不是渲染器容器）：能和目录浮层一样拖出右栏、压到聊天区上。
+  position: 'fixed',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -347,7 +435,8 @@ const cardStyle = {
   color: 'CanvasText',
   border: '1px solid rgba(127,127,127,0.32)',
   boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
-  zIndex: 9,
+  // 与目录浮层同一层级：要压过聊天消息与粘性输入区，又不高过宿主对话框（≥1000）。
+  zIndex: 300,
   fontSize: 12,
   lineHeight: 1.6,
   textAlign: 'left',
@@ -395,6 +484,37 @@ const engineSelectStyle = {
   fontSize: 11,
   background: 'Canvas',
   color: 'CanvasText',
+  cursor: 'pointer',
+} as const
+
+/** 图钉：帽 + 针；钉住时实心（`ACCENT`），未钉住只描边。与目录浮层同形。 */
+function PinIcon({ filled }: { filled: boolean }): ReactElement {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <path
+        d="M4.5 1.6h3l-.55 3.05L8.5 6.2v1.15h-5V6.2L5.05 4.65z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.05"
+        strokeLinejoin="round"
+      />
+      <path d="M6 7.55v2.9" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** 标题栏里的图钉按钮：与 × 同尺寸，别把标题挤窄。 */
+const pinStyle = {
+  flex: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 18,
+  height: 18,
+  padding: 0,
+  border: 'none',
+  borderRadius: 4,
+  background: 'transparent',
   cursor: 'pointer',
 } as const
 

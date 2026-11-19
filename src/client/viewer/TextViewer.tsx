@@ -453,7 +453,7 @@ export function TextViewer({
         <TranslationCard
           t={t}
           view={translation.view}
-          // 浮层挂在滚动容器里，可放范围要按内容高度算，否则贴底的选区会被夹回去。
+          // 浮层按窗口定位，这份尺寸只用来定初始大小：默认宽度别撑出右栏。
           bounds={{
             width: boxRef.current?.clientWidth ?? 320,
             height: Math.max(boxRef.current?.clientHeight ?? 400, boxRef.current?.scrollHeight ?? 400),

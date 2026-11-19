@@ -23,7 +23,8 @@ export function Toast(): ReactElement | null {
         background: 'rgba(40,40,40,0.92)',
         color: '#fff',
         fontSize: 12,
-        zIndex: 10,
+        // 压过目录 / 译文浮层（300）：「已复制」这类即时反馈不能被浮层盖住。
+        zIndex: 400,
         pointerEvents: 'none',
         whiteSpace: 'nowrap',
       }}
