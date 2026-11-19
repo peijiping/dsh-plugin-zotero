@@ -40,7 +40,7 @@ export const AUTHORIZE_TIMEOUT_MS = 5 * 60_000
 /** 全文单条最大返回字节数，超出则以 truncated 标记。 */
 export const FULLTEXT_MAX_BYTES = 200 * 1024
 
-/** Client 默认取条目数上限。 */
+/** 条目列表每批拉取的条数（面板会把当前范围全部条目分批拉完，上限见 Host 的 MAX_LIMIT）。 */
 export const DEFAULT_LIMIT = 50
 
 /** Host 路由前缀（Client 的 fetch 路径与 handler 的剥离基准）。 */

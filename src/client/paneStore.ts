@@ -27,8 +27,14 @@ import { fetchHealth, fetchItems, fetchTagUsage, fetchTags, fetchTree } from './
 /** 搜索防抖时长。 */
 const SEARCH_DEBOUNCE_MS = 250
 
-/** 条目列表每页条数。 */
-const ITEMS_PAGE_SIZE = 50
+/**
+ * 条目列表的分批上限。
+ *
+ * 列表本身不分页（一次加载当前范围的全部条目，与 Zotero 一致）：每批条数由 Host
+ * 的「默认条目数」决定（上限 200），这里只兜一个总批数上限，防止 total 异常时
+ * 无限翻页。
+ */
+const ITEMS_MAX_BATCHES = 1000
 
 /** 提示条停留时长。 */
 const TOAST_MS = 3000
@@ -399,7 +405,7 @@ export function loadTree(force = false): Promise<void> {
       loadVirtualCounts()
       // 选中的分类若已被删掉（回落到文库根），把回落结果写回存档。
       saveTreeState()
-      reloadItems({ reset: true })
+      reloadItems()
       loadTagUsage()
     } catch (error) {
       patch({ treeError: errorMessage(error) })
@@ -452,7 +458,7 @@ export function selectCollection(collection: ZoteroCollection): void {
     tagQuery: '',
   })
   saveTreeState()
-  reloadItems({ reset: true })
+  reloadItems()
   loadTagUsage()
 }
 
@@ -464,13 +470,13 @@ export function setQuery(next: string): void {
   if (searchTimer !== null) window.clearTimeout(searchTimer)
   if (next.trim() === '') {
     searchTimer = null
-    reloadItems({ reset: true })
+    reloadItems()
     loadTagUsage()
     return
   }
   searchTimer = window.setTimeout(() => {
     searchTimer = null
-    reloadItems({ reset: true })
+    reloadItems()
     loadTagUsage()
   }, SEARCH_DEBOUNCE_MS)
 }
@@ -503,19 +509,19 @@ export function toggleTag(name: string): void {
   if (selected.has(name)) selected.delete(name)
   else selected.add(name)
   patch({ selectedTags: selected })
-  reloadItems({ reset: true })
+  reloadItems()
 }
 
 export function clearTags(): void {
   if (state.selectedTags.size === 0) return
   patch({ selectedTags: new Set() })
-  reloadItems({ reset: true })
+  reloadItems()
 }
 
 export function setTagMode(mode: 'all' | 'any'): void {
   if (state.tagMode === mode) return
   patch({ tagMode: mode })
-  if (state.selectedTags.size > 0) reloadItems({ reset: true })
+  if (state.selectedTags.size > 0) reloadItems()
 }
 
 /** 标签面板的名称过滤（纯客户端）。 */
@@ -531,23 +537,28 @@ export function retryTags(): void {
 // ---- 条目列表 ---------------------------------------------------------------
 
 /**
- * 重拉条目列表。
+ * 重拉条目列表（把当前范围的全部条目一次加载完，与 Zotero 一致）。
  *
  * 重置（切分类 / 改筛选）时连带清空选中项：列表都换了，留着旧选中会让
  * 「引用已选」插进不在眼前的条目。
  *
- * @param options.reset 清空当前列表与选中项
- * @param options.append 追加下一页（加载更多）
+ * 实现上是「连续取批」而不是一次要全量：Host 单次响应有条数上限，客户端就不传
+ * `limit`、按设置页的「每批条目数」（Host 侧 `defaultLimit`，上限 200）一批一批
+ * 地取，取到多少先画多少，取满 total 自然停。大口库因此能先出首屏，也不会再出现
+ * 「加载更多」按钮。
  */
-export function reloadItems(options: { reset: boolean; append?: boolean }): void {
+export function reloadItems(): void {
   if (itemsAbort !== null) itemsAbort.abort()
   const controller = new AbortController()
   itemsAbort = controller
   const current = ++itemsSeq
-  const append = options.append === true && !options.reset
-  const offset = append ? state.items.length : 0
-  if (!append) patch({ items: [], itemsTotal: 0, itemsError: null, selectedItemKeys: new Set() })
-  patch({ itemsLoading: true })
+  patch({
+    items: [],
+    itemsTotal: 0,
+    itemsError: null,
+    itemsLoading: true,
+    selectedItemKeys: new Set(),
+  })
 
   // 「最近阅读」固定按最后打开时间倒序（Host 拼名单的顺序），标题排序与标签筛选都不参与。
   const recent = isRecentSelection(state.selectedCollection)
@@ -556,45 +567,41 @@ export function reloadItems(options: { reset: boolean; append?: boolean }): void
   const selectedScope = state.selectedCollection?.scope
   // 选中特殊目录且没有搜索/标签筛选时，列表返回的 total 就是树里要显示的数量；
   // 带筛选的 total 只能代表筛选结果，不能覆盖树上的目录总数。
-  const countScope = !append && query === '' && tags.length === 0 && isVirtualCountScope(selectedScope)
+  const countScope = query === '' && tags.length === 0 && isVirtualCountScope(selectedScope)
     ? selectedScope
     : null
-  fetchItems({
-    ...selectionQuery(),
-    q: query,
-    tags: tags.length === 0 ? undefined : tags,
-    tagMode: tags.length === 0 ? undefined : state.tagMode,
-    sort: recent || state.sort === 'none' ? undefined : 'title',
-    direction: recent || state.sort === 'none' ? undefined : state.sort,
-    limit: ITEMS_PAGE_SIZE,
-    offset,
-  }, controller.signal)
-    .then((data) => {
-      if (current !== itemsSeq) return
-      const virtualCounts: Partial<Record<VirtualCountScope, number>> = { ...state.virtualCounts }
-      if (countScope !== null) virtualCounts[countScope] = data.total
-      patch({
-        items: append ? [...state.items, ...data.items] : data.items,
-        itemsTotal: data.total,
-        itemsError: null,
-        virtualCounts,
-      })
-    })
-    .catch((error: unknown) => {
+
+  void (async (): Promise<void> => {
+    let loaded: ZoteroItemSummary[] = []
+    try {
+      for (let batch = 0; batch < ITEMS_MAX_BATCHES; batch += 1) {
+        const data = await fetchItems({
+          ...selectionQuery(),
+          q: query,
+          tags: tags.length === 0 ? undefined : tags,
+          tagMode: tags.length === 0 ? undefined : state.tagMode,
+          sort: recent || state.sort === 'none' ? undefined : 'title',
+          direction: recent || state.sort === 'none' ? undefined : state.sort,
+          offset: loaded.length,
+        }, controller.signal)
+        if (current !== itemsSeq) return
+        const virtualCounts: Partial<Record<VirtualCountScope, number>> = { ...state.virtualCounts }
+        if (countScope !== null && batch === 0) virtualCounts[countScope] = data.total
+        loaded = loaded.length === 0 ? data.items : [...loaded, ...data.items]
+        patch({ items: loaded, itemsTotal: data.total, itemsError: null, virtualCounts })
+        // 空批（条目被删掉之类）或已取满就收工；total 变小也在这里自然退出。
+        if (data.items.length === 0 || loaded.length >= data.total) return
+      }
+    } catch (error) {
       if (current !== itemsSeq || controller.signal.aborted) return
       patch({ itemsError: errorMessage(error) })
-    })
-    .finally(() => {
-      if (current !== itemsSeq) return
-      patch({ itemsLoading: false })
-      if (itemsAbort === controller) itemsAbort = null
-    })
-}
-
-/** 加载下一页；到底或正在加载时不触发。 */
-export function loadMoreItems(): void {
-  if (state.itemsLoading || state.items.length >= state.itemsTotal) return
-  reloadItems({ reset: false, append: true })
+    } finally {
+      if (current === itemsSeq) {
+        patch({ itemsLoading: false })
+        if (itemsAbort === controller) itemsAbort = null
+      }
+    }
+  })()
 }
 
 /**
@@ -612,11 +619,11 @@ export function cycleItemSort(): void {
   } catch {
     // 隐私模式等禁用 localStorage 时忽略，本次会话内仍然生效。
   }
-  reloadItems({ reset: true })
+  reloadItems()
 }
 
 export function retryItems(): void {
-  reloadItems({ reset: true })
+  reloadItems()
 }
 
 /**

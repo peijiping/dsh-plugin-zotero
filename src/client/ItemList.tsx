@@ -3,7 +3,8 @@
  *
  * 头部含范围名、条数与搜索框；条目行单击选中、双击才开独立 tab，ctrl / cmd 点选
  * 多选，右上角「引用 N」把选中的每条各插一个胶囊。右键单行仍能直接插该条引用。
- * 列表分页（加载更多），筛选后为空与本来为空分开提示。
+ * 列表不分页：当前范围的条目一次加载完（与 Zotero 一致），大口库分批追加，
+ * 底部只显示加载进度。筛选后为空与本来为空分开提示。
  *
  * 标题排序按钮只在真实分类 / 虚拟分类下出现：「最近阅读」恒按最后打开时间倒序，
  * 那一栏不给排序入口（见 {@link isRecentSelection}）。
@@ -44,7 +45,6 @@ interface Props {
   onSearch(text: string): void
   onRemoveTag(name: string): void
   onRetry(): void
-  onLoadMore(): void
   /** 点排序图标：原始 → 正序 → 倒序 循环。 */
   onCycleSort(): void
   onOpenItem(key: string, title: string): void
@@ -65,6 +65,24 @@ function selectionName(t: Translate, libraryName: string, collection: ZoteroColl
 }
 
 const hintStyle: React.CSSProperties = { padding: '14px 12px', opacity: 0.6, fontSize: 12.5 }
+
+/** 底部分批进度：列表仍在追加后面几批时露一行，取满即消失。 */
+const progressStyle: React.CSSProperties = {
+  padding: '6px 8px 2px',
+  opacity: 0.5,
+  fontSize: 11.5,
+  textAlign: 'center',
+}
+
+/** 分批加载中途失败时贴在末尾的提示行。 */
+const partialStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 4px 2px',
+  fontSize: 11.5,
+  color: '#d29922',
+}
 
 const headerStyle: React.CSSProperties = {
   display: 'flex',
@@ -497,7 +515,6 @@ export function ItemList(props: Props): ReactElement {
     onSearch,
     onRemoveTag,
     onRetry,
-    onLoadMore,
     onCycleSort,
     onOpenItem,
     onSelectItem,
@@ -623,11 +640,16 @@ export function ItemList(props: Props): ReactElement {
                 onInsert={onInsertItem}
               />
             ))}
-            {items.length < itemsTotal && (
-              <div style={{ padding: '6px 4px' }}>
-                <Button variant="ghost" size="sm" disabled={itemsLoading} onClick={onLoadMore}>
-                  {t('list.loadMore')}
-                </Button>
+            {itemsLoading && items.length > 0 && items.length < itemsTotal && (
+              <div style={progressStyle} role="status">
+                {tpl(t('list.loadingProgress'), { loaded: items.length, total: itemsTotal })}
+              </div>
+            )}
+            {/* 分批加载中途失败：已到的行照旧显示，这里补一条可点重试的提示，别静默截断。 */}
+            {!itemsLoading && itemsError !== null && items.length < itemsTotal && (
+              <div style={partialStyle}>
+                <span style={{ minWidth: 0 }}>{tpl(t('list.loadIncomplete'), { message: itemsError })}</span>
+                <Button variant="outline" size="sm" onClick={onRetry}>{t('action.retry')}</Button>
               </div>
             )}
           </>

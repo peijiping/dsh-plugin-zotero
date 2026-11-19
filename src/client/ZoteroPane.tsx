@@ -27,7 +27,6 @@ import {
   clearTags,
   cycleItemSort,
   isRecentSelection,
-  loadMoreItems,
   loadTree,
   retryItems,
   retryTags,
@@ -343,7 +342,6 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             onSearch={setQuery}
             onRemoveTag={toggleTag}
             onRetry={retryItems}
-            onLoadMore={loadMoreItems}
             onCycleSort={cycleItemSort}
             onOpenItem={onOpenItem}
             onSelectItem={selectItem}
