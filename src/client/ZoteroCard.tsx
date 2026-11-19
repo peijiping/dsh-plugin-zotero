@@ -39,7 +39,7 @@ import {
 import type { ZoteroWriteStatus } from '../zotero/types'
 import { authorizeWrites, fetchWriteStatus } from './api'
 import { tpl, type Translate } from './locales'
-import { Button } from './ui'
+import { Button, SectionTitle } from './ui'
 
 /** 设置命名空间 id（= cordis.patch.yml 的 insert 行 id）。 */
 export const ROW_ID = 'dsh-plugin-zotero'
@@ -349,9 +349,9 @@ const SECTION_HINT_STYLE = { fontSize: 12, opacity: 0.72, marginBottom: 10 }
 /**
  * 表单容器：等价于框架 `SettingsForm` 的 `._form_*`（`display:flex;
  * flex-direction:column`），只是不带那个写死的「保存」页脚。
- * 页脚没了就等于少了 16px 的底部留白，这里补一点，免得最后一行贴着对话框边缘。
+ * 底部留白由每张卡片自己的 `marginBottom` 提供，这里不再补。
  */
-const FORM_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', paddingBottom: 8 }
+const FORM_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', paddingBottom: 0 }
 /** 不可用 / 只读提示，对齐框架 `._readOnly_*` 的字号与颜色。 */
 const NOTICE_STYLE: CSSProperties = {
   margin: '0 0 12px',
@@ -366,8 +366,24 @@ const SAVE_FAILED_STYLE: CSSProperties = {
   opacity: 1,
   color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, #b3261e))',
 }
-const GROUP_STYLE = { marginTop: 4 }
-const GROUP_HEAD_STYLE = { fontSize: 12, fontWeight: 600, opacity: 0.72, margin: '0 0 6px' }
+/**
+ * 四块配置共用的分组卡片：1px 中性描边 + 10px 圆角 + 浅底。
+ *
+ * 之前只有「写权限」内部有框，其余三组只有一个 12px、72% 透明度的小标题，
+ * 视觉上连成一篇长文；现在每组都自成一块，标题升为带蓝紫竖条的一级标题。
+ * 颜色走宿主主题变量，light/dark 都成立。
+ */
+const SETTINGS_CARD_STYLE: CSSProperties = {
+  border: '1px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.35))',
+  borderRadius: 10,
+  padding: '14px 16px',
+  marginBottom: 12,
+  background: 'var(--dsw-alias-bg-layer-1, transparent)',
+}
+/** 卡片内的一级标题：复用右栏分区标题的蓝紫竖条 + 加粗蓝字，字号比字段大一档。 */
+const CARD_TITLE_STYLE: CSSProperties = { fontSize: 14, marginBottom: 10 }
+/** 卡片内的二级标题（MCP 工具区）：比一级淡一档，避免和组标题抢层级。 */
+const SUBHEAD_STYLE: CSSProperties = { fontSize: 12, fontWeight: 600, opacity: 0.72, margin: '4px 0 6px' }
 const HINT_STYLE = { fontSize: 12, opacity: 0.72, display: 'flex', alignItems: 'center', gap: 8 }
 const TOOL_LIST_STYLE = { listStyle: 'none', margin: '6px 0 0', padding: 0 }
 const TOOL_ROW_STYLE = {
@@ -397,19 +413,10 @@ const SELECT_STYLE: CSSProperties = {
 const PROVIDER_SELECT_STYLE: CSSProperties = { ...SELECT_STYLE, maxWidth: '52%' }
 
 /**
- * 写权限操作卡：整块描边 + 浅底，把「必须点按钮」这件事从一片灰字里拎出来。
- * 颜色走主题变量，light/dark 都成立。
+ * 写权限卡内部布局：纵向排列，**不再描边**——外层 `SETTINGS_CARD_STYLE`
+ * 已经是卡片了，框中框只会让这一组比其它组更臃肿。
  */
-const WRITE_PANEL_STYLE: CSSProperties = {
-  border: '1px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, 0.35))',
-  borderRadius: 10,
-  padding: '12px 14px 14px',
-  background: 'var(--dsw-alias-bg-layer-1, transparent)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-  marginTop: 4,
-}
+const WRITE_BODY_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 /** 卡片内的步骤标题（「步骤 ①」那种小标签）。 */
 const WRITE_STEP_STYLE: CSSProperties = { fontSize: 11, fontWeight: 600, opacity: 0.6, margin: 0 }
 /** 状态徽标行：加粗显示「未授权 / 已授权」。 */
@@ -684,7 +691,7 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
   }
 
   const renderWrite = (): ReactElement => (
-    <div style={WRITE_PANEL_STYLE}>
+    <div style={WRITE_BODY_STYLE}>
       <div style={TOOL_ROW_STYLE}>
         <div style={TOOL_INFO_STYLE}>
           <span style={{ ...TOOL_NAME_STYLE, fontSize: 13, fontWeight: 600 }}>{t('write.toggle')}</span>
@@ -768,24 +775,24 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
       {state.writable ? null : <p style={NOTICE_STYLE} role="status">{t('form.readOnly')}</p>}
       <div style={SECTION_HINT_STYLE}>{t('settings.hint')}</div>
       {renderStatus()}
-      <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.write')}</h4>
+      <section style={SETTINGS_CARD_STYLE}>
+        <SectionTitle style={CARD_TITLE_STYLE}>{t('group.write')}</SectionTitle>
         {renderWrite()}
       </section>
-      <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.api')}</h4>
+      <section style={SETTINGS_CARD_STYLE}>
+        <SectionTitle style={CARD_TITLE_STYLE}>{t('group.api')}</SectionTitle>
         {API_FIELDS.map(renderField)}
       </section>
-      <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.mcp')}</h4>
+      <section style={SETTINGS_CARD_STYLE}>
+        <SectionTitle style={CARD_TITLE_STYLE}>{t('group.mcp')}</SectionTitle>
         {MCP_FIELDS.map(renderField)}
         <div style={{ marginTop: 8 }}>
-          <h4 style={GROUP_HEAD_STYLE}>{t('tools.title')}</h4>
+          <h4 style={SUBHEAD_STYLE}>{t('tools.title')}</h4>
           {renderTools()}
         </div>
       </section>
-      <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.translate')}</h4>
+      <section style={SETTINGS_CARD_STYLE}>
+        <SectionTitle style={CARD_TITLE_STYLE}>{t('group.translate')}</SectionTitle>
         {renderTranslate()}
       </section>
     </div>
