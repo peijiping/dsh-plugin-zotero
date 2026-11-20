@@ -43,6 +43,8 @@ interface Props {
   onInsertItem(): void
   /** 插入全文选区摘录。 */
   onInsertExcerpt(quote: string): void
+  /** 插入全文（range 表达式 + 人读范围标注由选择器产出）。 */
+  onInsertFulltext(range: string, scope: string): void
   /** 插入一段划词翻译（原文 + 译文）。 */
   onInsertTranslation(quote: string, translated: string): void
   /** 插一条标注的引用 chip（chip 里是原文摘要，提交时展开为完整引用文本）。 */
@@ -113,7 +115,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   return source
 }
 
-export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh, onInsertShot }: Props): ReactElement {
+export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh, onInsertShot }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
@@ -386,6 +388,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertT
         }}
         onClose={closeInfo}
         onCite={onInsertItem}
+        outline={outlineItems}
+        onInsertFulltext={onInsertFulltext}
         onSelectAttachment={selectAttachment}
         onLocateAnnotation={locateAnnotation}
         onInsertAnnotation={onInsertAnnotation}

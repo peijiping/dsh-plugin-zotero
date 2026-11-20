@@ -145,6 +145,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
   const {
     insertItem,
     insertExcerpt,
+    insertFulltext,
     insertTranslation,
     insertAnnotation,
     insertNote,
@@ -170,6 +171,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
           detail={detail}
           onInsertItem={() => insertItem(detail.key, detail.title, detail.itemType)}
           onInsertExcerpt={(quote) => insertExcerpt(detail, quote)}
+          onInsertFulltext={(range, scope) => insertFulltext(detail, range, scope)}
           onInsertTranslation={(quote, translated) => insertTranslation(detail, quote, translated)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
           onInsertNote={(note) => insertNote(detail, note)}

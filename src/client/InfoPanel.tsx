@@ -26,6 +26,8 @@ import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/t
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
 import { useDismiss } from './dismiss'
+import { FulltextScope } from './fulltextScope'
+import type { DocumentOutlineItem } from './viewer/types'
 import { useFloatingBox } from './floatingBox'
 import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
@@ -47,6 +49,10 @@ interface Props {
   onToggle(): void
   onClose(): void
   onCite(): void
+  /** 目录浮层那份章节列表：全文选择器复用它做「按章节」范围。 */
+  outline: DocumentOutlineItem[] | null
+  /** 确认插入全文（range 表达式 + 人读范围标注由选择器产出）。 */
+  onInsertFulltext(range: string, scope: string): void
   onSelectAttachment(key: string): void
   onLocateAnnotation(annotation: ZoteroAnnotation): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
@@ -107,6 +113,8 @@ export function InfoPanel({
   onToggle,
   onClose,
   onCite,
+  outline,
+  onInsertFulltext,
   onSelectAttachment,
   onLocateAnnotation,
   onInsertAnnotation,
@@ -120,6 +128,12 @@ export function InfoPanel({
   onRowWidth,
 }: Props): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
+  /** 「全文」按钮：全文选择器的 triggerRef，点它不被判成点浮层外面。 */
+  const fulltextTriggerRef = useRef<HTMLButtonElement | null>(null)
+  /** 全文范围选择器浮层是否打开（与信息浮层互斥，避免两块叠在一起）。 */
+  const [fulltextOpen, setFulltextOpen] = useState(false)
+  /** 无全文索引时按钮置灰，hover 给出原因。 */
+  const hasFulltext = detail.fulltext !== null
   /** 悬浮按钮行：宽度随语言与「加入对话」文案变化，量出来给工具条让位。 */
   const rowRef = useRef<HTMLDivElement | null>(null)
   /** 各区块开合来自持久状态，不放在组件里：换条目/重开/重启都是同一份。 */
@@ -141,9 +155,10 @@ export function InfoPanel({
     minHeight: PANEL_MIN_HEIGHT,
   })
 
-  // 换条目 / 收起浮层时丢掉半截的新建草稿，免得带到下一条文献上。
+  // 换条目 / 收起浮层时丢掉半截的新建草稿，免得带到下一条文献上；全文选择器一并收起。
   useEffect(() => {
     setComposingNote(false)
+    setFulltextOpen(false)
   }, [detail.key, open])
 
   // 点浮层外 / 按 Esc 收起。根节点同时包着触发按钮与浮层，点它不会被判成
@@ -189,7 +204,10 @@ export function InfoPanel({
       <div ref={rowRef} style={rowStyle}>
         <button
           type="button"
-          onClick={onToggle}
+          onClick={() => {
+            setFulltextOpen(false)
+            onToggle()
+          }}
           aria-expanded={open}
           aria-label={t('detail.info')}
           title={t('detail.info')}
@@ -208,6 +226,28 @@ export function InfoPanel({
         >
           {t('action.insertItemShort')}
         </button>
+
+        {/* 全文：插 `full:` chip，点开的是范围选择器（默认按章节）。独立笔记走 note:，隐藏本按钮。 */}
+        {!selfNote && (
+          <button
+            ref={fulltextTriggerRef}
+            type="button"
+            className={SOFT_BUTTON_CLASS}
+            onClick={() => {
+              onClose()
+              setFulltextOpen((v) => !v)
+            }}
+            disabled={!hasFulltext}
+            aria-label={t('action.insertFulltext')}
+            title={hasFulltext ? t('action.insertFulltext') : t('detail.noFulltext')}
+            style={{
+              ...fulltextTriggerStyle,
+              ...(!hasFulltext ? { opacity: 0.45, cursor: 'not-allowed' as const } : {}),
+            }}
+          >
+            {t('action.insertFulltextShort')}
+          </button>
+        )}
 
         <button
           type="button"
@@ -383,6 +423,20 @@ export function InfoPanel({
           </span>
         </div>
       )}
+
+      <FulltextScope
+        t={t}
+        open={fulltextOpen}
+        detail={detail}
+        outline={outline}
+        anchorRef={rootRef}
+        triggerRef={fulltextTriggerRef}
+        onClose={() => setFulltextOpen(false)}
+        onConfirm={(range, scope) => {
+          onInsertFulltext(range, scope)
+          setFulltextOpen(false)
+        }}
+      />
     </div>
   )
 }
@@ -576,6 +630,11 @@ const citeTriggerStyle = {
  * 行宽由 `rowRef` 的 ResizeObserver 量出来给工具条让位，不用写死宽度。
  */
 const shotTriggerStyle = {
+  ...citeTriggerStyle,
+} as const
+
+/** 「全文」按钮：与「加入对话」「截图加入对话」同高同描边。 */
+const fulltextTriggerStyle = {
   ...citeTriggerStyle,
 } as const
 

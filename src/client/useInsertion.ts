@@ -9,7 +9,13 @@
 import { useCallback } from 'react'
 
 import type { ZoteroAnnotation, ZoteroCollection, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
-import { annotationChipLabel, excerptChipLabel, tagSetChipLabel, translationChipLabel } from './compose'
+import {
+  annotationChipLabel,
+  excerptChipLabel,
+  fulltextChipLabel,
+  tagSetChipLabel,
+  translationChipLabel,
+} from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import type { Translate } from './locales'
 import { tpl } from './locales'
@@ -19,6 +25,7 @@ import {
   annotationReference,
   collectionReference,
   excerptReference,
+  fulltextReference,
   insertChip,
   MAX_EXCERPT_CHARS,
   MAX_TAG_REFERENCE,
@@ -38,6 +45,13 @@ export interface InsertionActions {
   insertItem(key: string, title: string, itemType?: string): void
   /** 一段划选摘录：插一枚自带原文的 chip，不再是灌进草稿的一大段纯文本。 */
   insertExcerpt(target: ZoteroItemDetail, quote: string): void
+  /**
+   * 一段全文：插一枚 `full:` chip，ref 只存 key + 范围表达式，正文提交时现取。
+   *
+   * `range` 由范围选择器产出（`all` / `c:` / `o:` / `h:` / `p:` 之一），
+   * `scope` 是人读的范围标注，用作胶囊标签。
+   */
+  insertFulltext(target: ZoteroItemDetail, range: string, scope: string): void
   /** 一段划词翻译：原文与译文一起定格进 chip，提交时展开成对照文本。 */
   insertTranslation(target: ZoteroItemDetail, quote: string, translated: string): void
   insertAnnotation(target: ZoteroItemDetail, annotation: ZoteroAnnotation): void
@@ -151,6 +165,10 @@ export function useInsertion(
     ))
   }, [insertReference, t])
 
+  const insertFulltext = useCallback((target: ZoteroItemDetail, range: string, scope: string): void => {
+    insertReference(fulltextReference(target.key, target.title, range, fulltextChipLabel(t, scope)))
+  }, [insertReference, t])
+
   /**
    * 插入一段「原文 + 译文」。
    *
@@ -228,6 +246,7 @@ export function useInsertion(
     insertReference,
     insertItem,
     insertExcerpt,
+    insertFulltext,
     insertTranslation,
     insertAnnotation,
     insertNote,

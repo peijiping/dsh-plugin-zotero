@@ -22,6 +22,7 @@ import {
   annotationCitation,
   collectionCitation,
   excerptCitation,
+  fulltextCitation,
   itemCitation,
   noteCitation,
   shotCitation,
@@ -56,6 +57,18 @@ const ITEM_PREFIX = 'item:'
 const COLLECTION_PREFIX = 'col:'
 const NOTE_PREFIX = 'note:'
 const ANNOTATION_PREFIX = 'ann:'
+/**
+ * 全文引用：`full:<编码后的 itemKey>:<范围表达式>`。
+ *
+ * 与条目 chip 同属「现取类」：ref 只存 key + 范围，正文在提交时由 codec 现取
+ * 并按范围切片，不把 20 万字正文编码进草稿。范围表达式有两种形态：
+ * `all`（整篇）、`c:start:end` / `o:start:end`（字符或偏移）、`h:起:止`（标题）、
+ * `p:起页:止页:总页:标题列表`（PDF 书签章节，标题用 `+` 分隔）。
+ *
+ * 解析不能按 `:` 全拆——范围表达式自身含 `:`。约定第一段是 key、其余整体是
+ * 表达式，交给 `fulltextCitation` 拆；key 是 Zotero key，天然不含 `:`。
+ */
+const FULLTEXT_PREFIX = 'full:'
 /**
  * 划选摘录：`exc:<编码后的 itemKey>:<编码后的标题>:<编码后的原文>`。
  *
@@ -139,6 +152,7 @@ export interface ZoteroTriggerSource {
 /** 按 ref 前缀分派到对应的引用文本构建。 */
 export function citationForRef(t: Translate, ref: string, signal: AbortSignal): Promise<string> {
   if (ref.startsWith(ITEM_PREFIX)) return itemCitation(t, ref.slice(ITEM_PREFIX.length), signal)
+  if (ref.startsWith(FULLTEXT_PREFIX)) return fulltextCitation(t, ref.slice(FULLTEXT_PREFIX.length), signal)
   if (ref.startsWith(COLLECTION_PREFIX)) return collectionCitation(t, ref.slice(COLLECTION_PREFIX.length), signal)
   if (ref.startsWith(NOTE_PREFIX)) return noteCitation(t, ref.slice(NOTE_PREFIX.length), signal)
   if (ref.startsWith(ANNOTATION_PREFIX)) {
@@ -184,6 +198,24 @@ function reference(prefix: string, key: string, title: string, appearance: 'file
 /** 一条文献的 chip。 */
 export function itemReference(key: string, title: string): ReferenceInsert {
   return reference(ITEM_PREFIX, key, title, 'file')
+}
+
+/**
+ * 一段全文的 chip。
+ *
+ * `range` 是范围表达式（见 {@link FULLTEXT_PREFIX}），连同 key 一起存进 ref；
+ * key 先 `encodeURIComponent`（Zotero key 本身安全，但保持与其余 chip 一致）。
+ * `label` 是胶囊上显示的短标签，由调用方给出（如「全文」或「3 Method」）。
+ */
+export function fulltextReference(key: string, title: string, range: string, label: string): ReferenceInsert {
+  const ref = `${FULLTEXT_PREFIX}${encodeURIComponent(key)}:${range}`
+  return {
+    source: REF_SOURCE,
+    ref,
+    label,
+    appearance: 'file',
+    clipboardText: `@${ref}`,
+  }
 }
 
 /** 一个目录的 chip。 */

@@ -18,6 +18,7 @@ import {
   annotationText,
   collectionText,
   excerptText,
+  fulltextText,
   itemText,
   noteText,
   shotText,
@@ -26,6 +27,7 @@ import {
   translationText,
 } from './compose'
 import type { ShotMeta } from './viewer/shot/types'
+import { sliceFulltext } from './fulltextRange'
 
 /** 文库里已经没有这个对象（与「连不上 Zotero」区分开）。 */
 function isMissing(error: unknown): boolean {
@@ -43,6 +45,36 @@ export async function itemCitation(
     if (isMissing(error)) return tpl(t('cmp.missing.item'), { key })
     throw error
   }
+}
+
+/**
+ * 一段全文的引用：ref body 是 `<编码后的 key>:<范围表达式>`。
+ *
+ * 正文走面板自己的 `fetchItem()` 现取（与条目 chip 同一条 HTTP 通道，不依赖 MCP），
+ * 再按范围切片。key 是父条目 key——Host 已把首选附件的全文挂在父条目 detail 上，
+ * 直接 `fetchItem(key)` 即可拿到 `detail.fulltext`。
+ */
+export async function fulltextCitation(
+  t: Translate,
+  body: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const at = body.indexOf(':')
+  if (at < 0) throw new Error(`无法识别的全文引用：${body}`)
+  const key = decodeRefPart('全文', body.slice(0, at))
+  const expr = body.slice(at + 1)
+
+  let detail
+  try {
+    detail = await fetchItem(key, 'apa', signal)
+  } catch (error) {
+    if (isMissing(error)) return tpl(t('cmp.missing.item'), { key })
+    throw error
+  }
+  if (detail.fulltext === null) return tpl(t('cmp.fulltext.noFulltext'), { key })
+
+  const slice = sliceFulltext(detail.fulltext.content, expr)
+  return fulltextText(t, detail, slice, detail.fulltext.truncated)
 }
 
 export async function collectionCitation(
@@ -191,7 +223,7 @@ export async function shotCitation(t: Translate, body: string): Promise<string> 
 }
 
 /** 解码 ref 里的一段；坏转义会抛 URIError，换成带来源的可辨认错误。 */
-function decodeRefPart(kind: '摘录' | '标签' | '翻译' | '截图', encoded: string): string {
+function decodeRefPart(kind: '摘录' | '标签' | '翻译' | '截图' | '全文', encoded: string): string {
   try {
     return decodeURIComponent(encoded)
   } catch {

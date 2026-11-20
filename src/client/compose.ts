@@ -8,6 +8,7 @@
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ShotMeta } from './viewer/shot/types'
+import type { FulltextSlice } from './fulltextRange'
 import { commentPlain } from './annotationComment'
 import type {
   ZoteroAnnotation,
@@ -39,6 +40,40 @@ export function itemText(t: Translate, detail: ZoteroItemDetail): string {
   if (detail.doi !== '') lines.push(line(t, 'cmp.item.doi', detail.doi))
   if (detail.url !== '') lines.push(line(t, 'cmp.item.url', detail.url))
   return lines.join('\n')
+}
+
+/**
+ * 全文提交时展开给模型的文本：出处头 + 范围标注 + 声明 + 正文切片。
+ *
+ * `FulltextSlice` 自带 `scopeLabel` / `estimated` / `fallbackAll`，这里只负责
+ * 拼装与翻译——定位的对错全在 `fulltextRange`，不在本函数重写一套判断。
+ * 头部带稳定 key（模型可继续用 MCP 交叉引用），并显式声明不含图片与截断/估算，
+ * 消除"模型不知道自己读到残篇 / 错位切片"的隐患（见设计文档 §3.3、§8）。
+ */
+export function fulltextText(
+  t: Translate,
+  detail: Pick<ZoteroItemDetail, 'key' | 'title'>,
+  slice: FulltextSlice,
+  truncated: boolean,
+): string {
+  const lines = [
+    tpl(t('cmp.fulltext.header'), { title: detail.title, key: detail.key, scope: slice.scopeLabel }),
+  ]
+  if (truncated) lines.push(t('cmp.fulltext.truncated'))
+  if (slice.estimated) lines.push(t('cmp.fulltext.estimated'))
+  if (slice.fallbackAll) lines.push(t('cmp.fulltext.headingFallback'))
+  lines.push(t('cmp.fulltext.noImages'))
+  lines.push(slice.text)
+  return lines.join('\n')
+}
+
+/** 全文 chip 的标签：范围标注，过长截断。 */
+export function fulltextChipLabel(t: Translate, scope: string): string {
+  const label = tpl(t('cmp.fulltext.chipLabel'), { value: scope })
+  const chars = Array.from(label)
+  return chars.length > CHIP_LABEL_LIMIT
+    ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…`
+    : label
 }
 
 /**
