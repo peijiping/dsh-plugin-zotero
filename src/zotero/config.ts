@@ -37,8 +37,17 @@ export const WRITE_TIMEOUT_MS = 15_000
  */
 export const AUTHORIZE_TIMEOUT_MS = 5 * 60_000
 
-/** 全文单条最大返回字节数，超出则以 truncated 标记。 */
-export const FULLTEXT_MAX_BYTES = 200 * 1024
+/**
+ * 全文单条最大返回**字符**数，超出则以 truncated 标记。
+ *
+ * 量纲是字符（JS 的 UTF-16 码元），不是字节 —— 一个中文字符在 UTF-8 里占 3 字节，
+ * 按字节卡等于惩罚中文。200 × 1024 字符大致是 5–6 万英文 token、12–13 万中文
+ * token，够读完一整篇论文，也还在 128k 窗口的安全线内。
+ *
+ * 配置键名仍叫 `fulltextMaxBytes`（历史包袱）：改名会让已保存的用户配置静默
+ * 失效回落默认值，代价比一个不准的名字大。对外文案一律写「字符」。
+ */
+export const FULLTEXT_MAX_CHARS = 200 * 1024
 
 /** 条目列表每批拉取的条数（面板会把当前范围全部条目分批拉完，上限见 Host 的 MAX_LIMIT）。 */
 export const DEFAULT_LIMIT = 50
@@ -140,6 +149,7 @@ export interface ZoteroSettings {
   mcpUrl: string
   requestTimeoutMs: number
   mcpProbeTimeoutMs: number
+  /** 单条附件全文最多返回多少**字符**（键名沿用旧名 `fulltextMaxBytes`）。 */
   fulltextMaxBytes: number
   defaultLimit: number
   /** 被用户关闭的集成 MCP 工具**原始名**（模型侧据此过滤）。 */
@@ -163,7 +173,7 @@ let readSettings = (): ZoteroSettings => ({
   mcpUrl: MCP_URL,
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
   mcpProbeTimeoutMs: MCP_PROBE_TIMEOUT_MS,
-  fulltextMaxBytes: FULLTEXT_MAX_BYTES,
+  fulltextMaxBytes: FULLTEXT_MAX_CHARS,
   defaultLimit: DEFAULT_LIMIT,
   disabledMcpTools: [],
   writeEnabled: false,

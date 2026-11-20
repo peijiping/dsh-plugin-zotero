@@ -13,6 +13,7 @@ import { commentPlain } from './annotationComment'
 import type {
   ZoteroAnnotation,
   ZoteroCollection,
+  ZoteroFulltext,
   ZoteroItemDetail,
   ZoteroItemSummary,
   ZoteroNote,
@@ -43,26 +44,41 @@ export function itemText(t: Translate, detail: ZoteroItemDetail): string {
 }
 
 /**
- * 全文提交时展开给模型的文本：出处头 + 范围标注 + 声明 + 正文切片。
+ * 全文提交时展开给模型的文本：出处头 + 截断警告 + 范围标注 + 声明 + 正文。
  *
  * `FulltextSlice` 自带 `scopeLabel` / `estimated` / `fallbackAll`，这里只负责
  * 拼装与翻译——定位的对错全在 `fulltextRange`，不在本函数重写一套判断。
  * 头部带稳定 key（模型可继续用 MCP 交叉引用），并显式声明不含图片与截断/估算，
  * 消除"模型不知道自己读到残篇 / 错位切片"的隐患（见设计文档 §3.3、§8）。
+ *
+ * 截断声明刻意**不是**一行轻描淡写的括号：早期版本写成「（全文已按长度截断…）」，
+ * 模型会当成噪音跳过，然后对着半篇内容下结论。现在改成 ⚠️ 起头的独立行，并写清
+ * 具体缺了多少字（`totalChars` 是截断前的真实长度），最后用「以下为正文」把元信息
+ * 与正文隔开。
  */
 export function fulltextText(
   t: Translate,
   detail: Pick<ZoteroItemDetail, 'key' | 'title'>,
   slice: FulltextSlice,
-  truncated: boolean,
+  fulltext: Pick<ZoteroFulltext, 'content' | 'truncated' | 'totalChars'>,
 ): string {
   const lines = [
     tpl(t('cmp.fulltext.header'), { title: detail.title, key: detail.key, scope: slice.scopeLabel }),
   ]
-  if (truncated) lines.push(t('cmp.fulltext.truncated'))
+  if (fulltext.truncated) {
+    const have = fulltext.content.length
+    // 只重建 client 未重启 Host 时没有 totalChars：退化成「至少不比手上少」，不报 NaN。
+    const total = Math.max(fulltext.totalChars ?? have, have)
+    lines.push(tpl(t('cmp.fulltext.truncated'), {
+      have: have.toLocaleString(),
+      total: total.toLocaleString(),
+      missing: (total - have).toLocaleString(),
+    }))
+  }
   if (slice.estimated) lines.push(t('cmp.fulltext.estimated'))
   if (slice.fallbackAll) lines.push(t('cmp.fulltext.headingFallback'))
   lines.push(t('cmp.fulltext.noImages'))
+  lines.push(t('cmp.fulltext.bodyLabel'))
   lines.push(slice.text)
   return lines.join('\n')
 }

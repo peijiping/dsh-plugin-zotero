@@ -26,7 +26,7 @@ import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
 import {
   DEFAULT_LIMIT,
-  FULLTEXT_MAX_BYTES,
+  FULLTEXT_MAX_CHARS,
   MCP_PROBE_TIMEOUT_MS,
   MCP_URL,
   REQUEST_TIMEOUT_MS,
@@ -56,7 +56,8 @@ export const Config = Schema.object({
   mcpUrl: Schema.string().default(MCP_URL).volatile(),
   requestTimeoutMs: Schema.number().default(REQUEST_TIMEOUT_MS).volatile(),
   mcpProbeTimeoutMs: Schema.number().default(MCP_PROBE_TIMEOUT_MS).volatile(),
-  fulltextMaxBytes: Schema.number().default(FULLTEXT_MAX_BYTES).volatile(),
+  /** 键名保留旧名，语义已改为「字符」：改名会让用户已保存的值静默回落默认。 */
+  fulltextMaxBytes: Schema.number().default(FULLTEXT_MAX_CHARS).volatile(),
   defaultLimit: Schema.number().default(DEFAULT_LIMIT).volatile(),
   /** 被关掉的集成 MCP 工具原始名；模型侧据此过滤注册。 */
   disabledMcpTools: Schema.array(Schema.string()).default([]).volatile(),

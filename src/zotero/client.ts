@@ -1263,12 +1263,15 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
   }
   const content = body?.content ?? ''
   if (content === '') return null
-  const maxBytes = getSettings().fulltextMaxBytes
-  const truncated = content.length > maxBytes
+  // 量纲是字符不是字节（见 `FULLTEXT_MAX_CHARS` 的注释）。
+  const maxChars = getSettings().fulltextMaxBytes
+  const truncated = content.length > maxChars
   return {
     attachmentKey,
-    content: truncated ? content.slice(0, maxBytes) : content,
+    content: truncated ? content.slice(0, maxChars) : content,
     truncated,
+    // 截断前长度：展开文本与面板据此说明「缺了多少」，而不是只丢一句「已截断」。
+    totalChars: content.length,
     fallback: false,
   }
 }

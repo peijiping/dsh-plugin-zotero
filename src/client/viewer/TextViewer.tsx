@@ -24,7 +24,7 @@ import {
 
 import type { ZoteroAnnotation } from '../../zotero/types'
 import { buildSegments, type Segment } from '../annotationRuns'
-import type { Translate } from '../locales'
+import { tpl, type Translate } from '../locales'
 import { NOTE_CSS } from '../NoteList'
 import { AnnotationCommentIcon } from './AnnotationCommentIcon'
 import { OUTLINE_ANCHOR_ATTR, offsetIndexAt, parseHtmlHeadings, parseMarkdownHeadings } from './outline'
@@ -434,7 +434,12 @@ export function TextViewer({
             <AnnotatedText segments={segments} />
           </div>
           {fulltext?.truncated === true && (
-            <div style={truncatedStyle}>{t('detail.fulltextTruncated')}</div>
+            <div style={truncatedStyle}>
+              {tpl(t('detail.fulltextTruncated'), {
+                have: fulltext.content.length.toLocaleString(),
+                total: Math.max(fulltext.totalChars ?? fulltext.content.length, fulltext.content.length).toLocaleString(),
+              })}
+            </div>
           )}
         </div>
       )}

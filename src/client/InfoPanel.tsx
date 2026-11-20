@@ -20,19 +20,21 @@
  * 它同时影响页面上的标注，浮层收着的时候也应该能点。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
 import { useDismiss } from './dismiss'
-import { FulltextScope } from './fulltextScope'
+import { FulltextScope, type FulltextMode } from './fulltextScope'
+import { InsertMenu } from './InsertMenu'
 import type { DocumentOutlineItem } from './viewer/types'
 import { useFloatingBox } from './floatingBox'
 import { itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { NoteList } from './NoteList'
-import { ACCENT, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
+import { ACCENT } from './styles'
+import { estimateTokens } from './tokens'
 import {
   setInfoSection,
   toggleInfoSection,
@@ -128,10 +130,12 @@ export function InfoPanel({
   onRowWidth,
 }: Props): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
-  /** 「全文」按钮：全文选择器的 triggerRef，点它不被判成点浮层外面。 */
-  const fulltextTriggerRef = useRef<HTMLButtonElement | null>(null)
+  /** 分裂按钮外壳：全文选择器的 triggerRef，点它不被判成点浮层外面。 */
+  const insertTriggerRef = useRef<HTMLSpanElement | null>(null)
   /** 全文范围选择器浮层是否打开（与信息浮层互斥，避免两块叠在一起）。 */
   const [fulltextOpen, setFulltextOpen] = useState(false)
+  /** 从菜单哪一项进来：决定浮层打开时 select 预选哪种方式。 */
+  const [fulltextMode, setFulltextMode] = useState<FulltextMode>('chapter')
   /** 无全文索引时按钮置灰，hover 给出原因。 */
   const hasFulltext = detail.fulltext !== null
   /** 悬浮按钮行：宽度随语言与「加入对话」文案变化，量出来给工具条让位。 */
@@ -182,6 +186,39 @@ export function InfoPanel({
     toggleInfoSection(id)
   }
 
+  /** 打开全文浮层：先收起信息浮层，两块浮层不同时占住屏幕。 */
+  function openFulltext(mode: FulltextMode): void {
+    onClose()
+    setFulltextMode(mode)
+    setFulltextOpen(true)
+  }
+
+  /**
+   * 整篇全文直插：菜单项点下去就完成，不弹浮层。
+   *
+   * range 表达式与浮层确认走同一套（`all|<scope>`），codec 一行都不用改。
+   */
+  function insertWholeFulltext(): void {
+    const scope = t('fulltext.scope.all')
+    onInsertFulltext(`all|${encodeURIComponent(scope)}`, scope)
+  }
+
+  /** 菜单展开时收起信息浮层：下拉要压在浮层上面，两者同开必然互相挡。 */
+  function handleMenuOpenChange(next: boolean): void {
+    if (next) onClose()
+  }
+
+  /**
+   * 整篇大概要占多少 token —— 显示在插入菜单「整篇全文」那一行的第二行小字里。
+   *
+   * 只能从正文算，所以放在详情侧算一次并按正文串身份缓存：20 万字符跑一遍
+   * `estimateTokens` 是几毫秒级，没必要每次重绘都跑。
+   */
+  const fulltextTokens = useMemo(
+    () => estimateTokens(detail.fulltext?.content ?? ''),
+    [detail.fulltext?.content],
+  )
+
   const metaRows: { label: string; value: string }[] = []
   const typeLabel = itemTypeLabel(t, detail.itemType)
   if (typeLabel !== '') metaRows.push({ label: t('detail.type'), value: typeLabel })
@@ -216,50 +253,31 @@ export function InfoPanel({
           i
         </button>
 
-        {/* 独立笔记也走这枚主按钮：插 `note:` 引用展开正文，别再把入口藏进「笔记」区块。 */}
-        <button
-          type="button"
-          className={SOFT_BUTTON_CLASS}
-          onClick={onCite}
-          title={selfNote ? t('action.insertNote') : t('action.insertItem')}
-          style={citeTriggerStyle}
-        >
-          {t('action.insertItemShort')}
-        </button>
-
-        {/* 全文：插 `full:` chip，点开的是范围选择器（默认按章节）。独立笔记走 note:，隐藏本按钮。 */}
-        {!selfNote && (
-          <button
-            ref={fulltextTriggerRef}
-            type="button"
-            className={SOFT_BUTTON_CLASS}
-            onClick={() => {
-              onClose()
-              setFulltextOpen((v) => !v)
-            }}
-            disabled={!hasFulltext}
-            aria-label={t('action.insertFulltext')}
-            title={hasFulltext ? t('action.insertFulltext') : t('detail.noFulltext')}
-            style={{
-              ...fulltextTriggerStyle,
-              ...(!hasFulltext ? { opacity: 0.45, cursor: 'not-allowed' as const } : {}),
-            }}
-          >
-            {t('action.insertFulltextShort')}
-          </button>
-        )}
-
-        <button
-          type="button"
-          className={SOFT_BUTTON_CLASS}
-          onClick={onScreenshot}
-          disabled={!screenshotAvailable}
-          aria-label={t('action.screenshot')}
-          title={screenshotAvailable ? t('action.screenshot') : screenshotReason}
-          style={shotTriggerStyle}
-        >
-          {t('action.screenshot')}
-        </button>
+        {/*
+          三个并列按钮（加入对话 / 全文 / 截图加入对话）收成一枚分裂按钮：
+          左半仍是「加入对话」= 插文献信息，右半下拉列出全部插入方式。
+          独立笔记也走这里：主按钮插 `note:` 引用展开正文，且没有其它方式可列。
+          `chapterCount` 传 `null` 而不是 0：目录还没解析出来时按「未知」处理，
+          别让「按章节选择」在刚切文献那一瞬闪成置灰。
+        */}
+        <InsertMenu
+          t={t}
+          selfNote={selfNote}
+          hasFulltext={hasFulltext}
+          fulltextChars={detail.fulltext?.content.length ?? 0}
+          fulltextTruncated={detail.fulltext?.truncated === true}
+          fulltextTokens={fulltextTokens}
+          chapterCount={outline === null ? null : outline.length}
+          onCite={onCite}
+          onInsertWhole={insertWholeFulltext}
+          onPickChapters={() => openFulltext('chapter')}
+          onPickRanges={() => openFulltext('chars')}
+          onScreenshot={onScreenshot}
+          screenshotAvailable={screenshotAvailable}
+          screenshotReason={screenshotReason}
+          onMenuOpenChange={handleMenuOpenChange}
+          triggerRef={insertTriggerRef}
+        />
       </div>
 
       {open && box.style !== null && (
@@ -430,7 +448,8 @@ export function InfoPanel({
         detail={detail}
         outline={outline}
         anchorRef={rootRef}
-        triggerRef={fulltextTriggerRef}
+        triggerRef={insertTriggerRef}
+        initialMode={fulltextMode}
         onClose={() => setFulltextOpen(false)}
         onConfirm={(range, scope) => {
           onInsertFulltext(range, scope)
@@ -604,39 +623,10 @@ const panelTitleStyle = {
   wordBreak: 'break-word',
 } as const
 
-/** 收在 `i` 右边、跟它同一行：是每次读文献都要点的主操作，不藏进浮层。 */
-const citeTriggerStyle = {
-  ...SOFT_BUTTON_STYLE,
-  position: 'relative',
-  flexShrink: 0,
-  pointerEvents: 'auto',
-  display: 'inline-flex',
-  alignItems: 'center',
-  height: 22,
-  padding: '0 9px',
-  fontSize: 11.5,
-  fontWeight: 500,
-  lineHeight: 1,
-  whiteSpace: 'nowrap',
-  borderRadius: 11,
-  cursor: 'pointer',
-  boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-  zIndex: 21,
-} as const
-
 /**
- * 「加入对话」右边的「截图加入对话」：文字胶囊，与「加入对话」同高同描边。
- * 文案在 zh / en 下长度不同，宽度只按内容撑（`whiteSpace: nowrap`），
- * 行宽由 `rowRef` 的 ResizeObserver 量出来给工具条让位，不用写死宽度。
+ * 分裂按钮（加入对话 ▾）在 `InsertMenu` 里自带样式：这一行只剩 `i` 与它两个控件，
+ * 宽度交给 `rowRef` 的 ResizeObserver 量出来给工具条让位，不用在这里写死。
  */
-const shotTriggerStyle = {
-  ...citeTriggerStyle,
-} as const
-
-/** 「全文」按钮：与「加入对话」「截图加入对话」同高同描边。 */
-const fulltextTriggerStyle = {
-  ...citeTriggerStyle,
-} as const
 
 const blockStyle = {
   borderBottom: '1px solid rgba(127,127,127,0.18)',

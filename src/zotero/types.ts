@@ -305,6 +305,17 @@ export interface ZoteroFulltext {
   attachmentKey: string
   content: string
   truncated: boolean
+  /**
+   * 截断**之前**全文的字符数。
+   *
+   * `content.length` 被上限削过之后，就没法再说「缺了多少」——面板与展开文本都
+   * 需要真实总量才能报出「原文共 X 字，本次只含前 Y 字」。未截断时等于
+   * `content.length`。
+   *
+   * 可选：只重建了 client 还没重启 Host 时，这条字段还不存在（旧 Host 只会给
+   * 上面三个字段）。读取方一律写 `?? content.length`，别拿 undefined 去做算术。
+   */
+  totalChars?: number
   /** 首选附件没有全文索引，正文取自同条目的其他附件。 */
   fallback: boolean
 }

@@ -28,9 +28,16 @@ export interface FulltextSlice {
   fallbackAll: boolean
 }
 
-/** 把字符串规整成便于比较标题的形式（去空白差异与汉字间空格）。 */
-function tidyHeading(value: string): string {
+/**
+ * 把字符串规整成便于比较标题的形式（去空白差异与汉字间空格）。
+ *
+ * 零宽字符（网页标题里常见的 `\u200b`）不是 `\s`，必须先单独剥掉：
+ * Zotero 抽取的正文标题行没有它、iframe 扫出来的 h1–h6 文本却有，
+ * 不剥就永远对不上，只能整篇兜底。
+ */
+export function tidyHeading(value: string): string {
   return value
+    .replace(/[\u200b-\u200d\ufeff]/gu, '')
     .replace(/\s+/gu, ' ')
     .replace(/(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/gu, '')
     .trim()

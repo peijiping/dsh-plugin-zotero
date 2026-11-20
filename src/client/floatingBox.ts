@@ -44,6 +44,14 @@ export interface FloatingBoxOptions {
   /** 拖出来的高度下限。 */
   minHeight: number
   /**
+   * 高度上限占视口高度的比例（默认 `1`，即「顶到窗口底部留 16px」）。
+   *
+   * 只给内容长度不可控、又不需要一次看全的浮层用（「加入全文」的章节列表：
+   * 七十五节时按原规则会从顶栏一路铺到窗口底，把正文全遮住）。内容少时仍然
+   * 随内容收缩，这里只是封顶，不设固定高度。
+   */
+  maxHeightRatio?: number
+  /**
    * 是否把几何持久化到 view-state（默认 `true`，供按条目记位置的目录 / 信息浮层用）。
    *
    * `false` 给面板级浮层（如「使用帮助」）：没有真实 itemKey，拖 / 缩只在本会话内存里
@@ -155,7 +163,10 @@ function measureLayout(
   blockedOutside: boolean,
 ): PanelLayout {
   const top = Math.round(rect.top + TOP_OFFSET)
-  const maxHeight = Math.max(180, Math.round(window.innerHeight - top - 16))
+  // 默认顶到窗口底部留 16px；按比例封顶的浮层再取「视口比例」这个上限，谁小听谁的。
+  const spaceBelow = Math.round(window.innerHeight - top - 16)
+  const capped = Math.round(window.innerHeight * (options.maxHeightRatio ?? 1))
+  const maxHeight = Math.max(180, Math.min(spaceBelow, capped))
   const available = Math.round(rect.left - GAP * 2)
   if (!blockedOutside && available >= options.minWidth) {
     const width = Math.min(options.width, available)
@@ -181,7 +192,14 @@ function clampSize(size: PanelSize, left: number, top: number, options: Floating
     options.minWidth,
     Math.min(RESIZE_MAX_WIDTH, window.innerWidth - left - 8),
   )
-  const maxHeight = Math.max(options.minHeight, window.innerHeight - top - 8)
+  // 与 {@link measureLayout} 同一套封顶规则：按比例封顶的浮层，拖大也超不过那条线。
+  const maxHeight = Math.max(
+    options.minHeight,
+    Math.min(
+      window.innerHeight - top - 8,
+      Math.round(window.innerHeight * (options.maxHeightRatio ?? 1)),
+    ),
+  )
   return {
     width: Math.round(Math.min(Math.max(options.minWidth, size.width), maxWidth)),
     height: Math.round(Math.min(Math.max(options.minHeight, size.height), maxHeight)),

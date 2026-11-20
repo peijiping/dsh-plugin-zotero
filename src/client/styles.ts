@@ -72,6 +72,9 @@ export const HELP_BUTTON_CLASS = 'dsh-zp-help-btn'
 /** 标题外壳 class；文字色与渐变竖条写在 CSS 里（要做 light/dark 渐进增强）。 */
 export const SECTION_TITLE_CLASS = 'dsh-zp-title'
 
+/** 插入方式菜单的菜单项 class：hover / 键盘聚焦态写在 {@link THEME_CSS}（内联 style 写不了伪类）。 */
+export const MENU_ITEM_CLASS = 'dsh-zp-menu-item'
+
 /** 按钮 class：选中 / 激活态多挂 `is-active`，hover 时底色加深得更多。 */
 export function softButtonClass(active = false): string {
   return active ? `${SOFT_BUTTON_CLASS} is-active` : SOFT_BUTTON_CLASS
@@ -167,6 +170,16 @@ export const THEME_CSS = `
 .dsh-zp-soft-btn:disabled {
   opacity: 0.55 !important;
   cursor: default;
+}
+/* 插入方式菜单项：默认透明底，hover 与键盘聚焦同一套底色，pointer 与 Tab 走哪个都看得见。
+   底色必须写在 class 里而不是内联 style —— 内联会盖掉下面这两条伪类规则。 */
+.dsh-zp-menu-item {
+  background-color: transparent;
+}
+.dsh-zp-menu-item:hover:not(:disabled),
+.dsh-zp-menu-item:focus-visible {
+  background-color: rgba(127, 127, 127, 0.16);
+  outline: none;
 }
 .dsh-zp-tag {
   transition: background-color 120ms ease, border-color 120ms ease;

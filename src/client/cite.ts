@@ -74,7 +74,7 @@ export async function fulltextCitation(
   if (detail.fulltext === null) return tpl(t('cmp.fulltext.noFulltext'), { key })
 
   const slice = sliceFulltext(detail.fulltext.content, expr)
-  return fulltextText(t, detail, slice, detail.fulltext.truncated)
+  return fulltextText(t, detail, slice, detail.fulltext)
 }
 
 export async function collectionCitation(
