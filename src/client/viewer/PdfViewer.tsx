@@ -34,7 +34,7 @@ import { useDismiss } from '../dismiss'
 import { SOFT_BUTTON_STYLE } from '../styles'
 import { tpl, type Translate } from '../locales'
 import { showToast } from '../paneStore'
-import { AnnotationCard } from './AnnotationCard'
+import { AnnotationCard, ANNOTATION_CARD_OUTER_WIDTH } from './AnnotationCard'
 import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
@@ -998,7 +998,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
 
   const rootWidth = rootRef.current?.clientWidth ?? 320
   const rootHeight = rootRef.current?.clientHeight ?? 400
-  const cardLeft = card === null ? 0 : Math.max(8, Math.min(card.x, rootWidth - 268))
+  const cardLeft = card === null ? 0 : Math.max(8, Math.min(card.x, rootWidth - ANNOTATION_CARD_OUTER_WIDTH - 8))
   const cardAbove = card !== null && card.y > rootHeight * 0.55
 
   /**

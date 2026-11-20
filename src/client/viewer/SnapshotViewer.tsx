@@ -25,7 +25,7 @@ import { notifyDocumentPress, useDismiss } from '../dismiss'
 import { tpl } from '../locales'
 import { showToast } from '../paneStore'
 import { SOFT_BUTTON_STYLE } from '../styles'
-import { AnnotationCard } from './AnnotationCard'
+import { AnnotationCard, ANNOTATION_CARD_OUTER_WIDTH } from './AnnotationCard'
 import { anchorTarget, OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS } from './outline'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import { createIframeAdapter } from './shot/adapters/iframe'
@@ -446,7 +446,9 @@ export function SnapshotViewer({
     : annotations.find((item) => item.key === card.key) ?? null
   const rootWidth = rootRef.current?.clientWidth ?? 320
   const rootHeight = rootRef.current?.clientHeight ?? 400
-  const cardLeft = card === null ? 0 : Math.max(8, Math.min(card.x - 130, rootWidth - 268))
+  const cardLeft = card === null
+    ? 0
+    : Math.max(8, Math.min(card.x - ANNOTATION_CARD_OUTER_WIDTH / 2, rootWidth - ANNOTATION_CARD_OUTER_WIDTH - 8))
   // 点在下半屏就往上摆，免得卡片顶到容器底部被裁掉。
   const cardAbove = card !== null && card.y > rootHeight * 0.55
 

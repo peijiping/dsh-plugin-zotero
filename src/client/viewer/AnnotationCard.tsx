@@ -9,7 +9,8 @@
  * - 卡片只记标注 key，内容每次从父级的 `annotations` 里现取：写成功后父级重取，
  *   新版本号、最终颜色与类型都从库里回填，本地不拼结果。
  * - 每次只发改动的那一个字段；删除是硬删（不进 Zotero 回收站），因此要点两次。
- * - 定位与宽度由父级给：PDF 按页面坐标摆，快照按 iframe 偏移摆。
+ * - 定位由父级给：PDF 按页面坐标摆，快照按 iframe 偏移摆；宽度是卡片自己的常量
+ *   （{@link ANNOTATION_CARD_OUTER_WIDTH}），父级夹取左右位置时必须引用它。
  */
 
 import { useEffect, useState, type CSSProperties, type ReactElement, type RefObject } from 'react'
@@ -267,12 +268,24 @@ export function AnnotationCard({
   )
 }
 
+/**
+ * 卡片内容区宽度。正文（引文 / 评论）一长就会顶得很高，260 太窄，放宽 30% 后
+ * 同样字数的行数明显下降。父级按 {@link ANNOTATION_CARD_OUTER_WIDTH} 夹左右位置，
+ * 两边必须用同一个数，否则卡片会从容器右缘溢出去。
+ */
+const CARD_WIDTH = 340
+const CARD_PADDING_X = 10
+/** 卡片实际外框宽度：内容宽 + 左右内边距 + 左右边框。 */
+export const ANNOTATION_CARD_OUTER_WIDTH = CARD_WIDTH + CARD_PADDING_X * 2 + 2
+
 const cardStyle = {
   position: 'absolute',
-  width: 260,
+  width: CARD_WIDTH,
+  // 右栏窄于卡片时收一收，别让卡片被容器裁掉（夹取位置也按同一上限算）。
+  maxWidth: 'calc(100% - 16px)',
   maxHeight: '55%',
   overflow: 'auto',
-  padding: '8px 10px',
+  padding: `8px ${CARD_PADDING_X}px`,
   borderRadius: 8,
   background: 'Canvas',
   color: 'CanvasText',
