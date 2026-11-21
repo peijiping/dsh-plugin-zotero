@@ -33,6 +33,7 @@ import {
   selectCollection,
   selectItem,
   setQuery,
+  setSearchMode,
   setTagMode,
   setTagQuery,
   setTreeQuery,
@@ -123,6 +124,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     tagUsage,
     tagUsageLoading,
     sort,
+    searchMode,
     selectedItemKeys,
   } = usePaneState()
 
@@ -338,8 +340,10 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             selectedTags={selectedTags}
             tagMode={tagMode}
             sort={sort}
+            searchMode={searchMode}
             selectedItemKeys={selectedItemKeys}
             onSearch={setQuery}
+            onSearchModeChange={setSearchMode}
             onRemoveTag={toggleTag}
             onRetry={retryItems}
             onCycleSort={cycleItemSort}

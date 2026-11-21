@@ -35,6 +35,7 @@ import type {
   ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItems,
+  ZoteroSearchMode,
   ZoteroNoteRaw,
   ZoteroPanelPos,
   ZoteroPanelSize,
@@ -239,6 +240,15 @@ function isScope(value: string): value is ZoteroItemScope {
   return (SCOPES as readonly string[]).includes(value)
 }
 
+/** 搜索框左侧三档；不认识的值退回 Zotero 默认的标题 / 作者 / 年份。 */
+const SEARCH_MODES = ['titleCreatorYear', 'fields', 'everything'] as const
+
+function parseSearchMode(value: string | null): ZoteroSearchMode {
+  return (SEARCH_MODES as readonly string[]).includes(value ?? '')
+    ? value as ZoteroSearchMode
+    : 'titleCreatorYear'
+}
+
 async function handleItems(res: ServerResponse, params: URLSearchParams): Promise<void> {
   const scopeParam = params.get('scope')
   if (scopeParam !== null && !isScope(scopeParam)) {
@@ -247,6 +257,7 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
   }
   const collectionKey = params.get('collectionKey') ?? undefined
   const q = params.get('q') ?? undefined
+  const qmode = parseSearchMode(params.get('qmode'))
   const tags = params.getAll('tag').map((tag) => tag.trim()).filter((tag) => tag !== '')
   const tagMode = params.get('tagMode') === 'any' ? 'any' : 'all'
   // 排序：只认按标题，方向缺省正序；不认识的取值一律退回原始顺序。
@@ -258,6 +269,7 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
     // Zotero 本地 API 不含「最近阅读」；这份名单完全来自本插件的阅读进度记录。
     const result = await zotero.listRecentItems(await listRecent(RECENT_LIMIT), {
       q,
+      qmode,
       tags,
       tagMode,
       sort,
@@ -272,6 +284,7 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
     scope: scopeParam === null ? undefined : scopeParam,
     collectionKey,
     q,
+    qmode,
     tags,
     tagMode,
     sort,
@@ -302,6 +315,7 @@ async function handleTagUsage(res: ServerResponse, params: URLSearchParams): Pro
     scope: scopeParam === null ? undefined : scopeParam,
     collectionKeys: collectionKeys.length === 0 ? undefined : collectionKeys,
     q: params.get('q') ?? undefined,
+    qmode: parseSearchMode(params.get('qmode')),
   })
   ok(res, data)
 }

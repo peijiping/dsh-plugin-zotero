@@ -13,6 +13,15 @@
  */
 export type ZoteroItemScope = 'library' | 'publications' | 'unfiled' | 'trash' | 'recent'
 
+/**
+ * 快速搜索口径，对应 Zotero 搜索框左侧的三档（本地 API 的 `qmode`）。
+ *
+ * - `titleCreatorYear`：标题 / 出版物 / 年份 / 作者等元数据
+ * - `fields`：所有字段与标签（含笔记、标注），**不含**全文
+ * - `everything`：在 `fields` 基础上再加附件全文索引
+ */
+export type ZoteroSearchMode = 'titleCreatorYear' | 'fields' | 'everything'
+
 /** 分类节点（扁平，Client 依 parentKey 建树）。 */
 export interface ZoteroCollection {
   key: string

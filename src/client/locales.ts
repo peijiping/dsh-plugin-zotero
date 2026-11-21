@@ -119,6 +119,10 @@ const zh: Record<string, string> = {
   'tree.emptyFiltered': '没有匹配的分类',
 
   'list.searchPlaceholder': '搜索当前范围的标题 / 摘要',
+  'search.modeLabel': '搜索范围',
+  'search.mode.titleCreatorYear': '标题、创建者、年份',
+  'search.mode.fields': '所有字段和标签',
+  'search.mode.everything': '所有内容',
   'search.clear': '清除筛选',
   'list.count': '共 {n} 条',
   'list.empty': '这里没有条目',
@@ -715,6 +719,10 @@ const en: Record<string, string> = {
   'tree.emptyFiltered': 'No collections match',
 
   'list.searchPlaceholder': 'Search title / abstract in the current selection',
+  'search.modeLabel': 'Search scope',
+  'search.mode.titleCreatorYear': 'Title, Creator, Year',
+  'search.mode.fields': 'All Fields & Tags',
+  'search.mode.everything': 'Everything',
   'search.clear': 'Clear filter',
   'list.count': '{n} items',
   'list.empty': 'No items here',

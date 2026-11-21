@@ -17,14 +17,14 @@ import { useState, type ReactElement } from 'react'
 
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary } from '../zotero/types'
+import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary, ZoteroSearchMode } from '../zotero/types'
 import { ChildKindIcon, childKindLabel, ItemTypeIcon, itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ItemSort } from './paneStore'
 import { isRecentSelection, TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
-import { SearchField } from './SearchField'
+import { SearchField, type SearchModeItem } from './SearchField'
 import { Button, SectionTitle } from './ui'
 
 interface Props {
@@ -40,9 +40,12 @@ interface Props {
   tagMode: 'all' | 'any'
   /** 当前标题排序状态（原始 / 正序 / 倒序）。 */
   sort: ItemSort
+  /** 搜索口径：与 Zotero 搜索框左侧的三档一致。 */
+  searchMode: ZoteroSearchMode
   /** 列表里被点选的条目 key；引用按钮按这批插 chip。 */
   selectedItemKeys: ReadonlySet<string>
   onSearch(text: string): void
+  onSearchModeChange(mode: ZoteroSearchMode): void
   onRemoveTag(name: string): void
   onRetry(): void
   /** 点排序图标：原始 → 正序 → 倒序 循环。 */
@@ -511,8 +514,10 @@ export function ItemList(props: Props): ReactElement {
     selectedTags,
     tagMode,
     sort,
+    searchMode,
     selectedItemKeys,
     onSearch,
+    onSearchModeChange,
     onRemoveTag,
     onRetry,
     onCycleSort,
@@ -532,6 +537,14 @@ export function ItemList(props: Props): ReactElement {
   const recent = isRecentSelection(selectedCollection)
   const tags = [...selectedTags]
   const filtered = tags.length > 0 || query.trim() !== ''
+  /** 三档口径与 Zotero 搜索框左侧一致，当前档位同时充当占位提示。 */
+  const modeItems: SearchModeItem[] = [
+    { value: 'titleCreatorYear', label: t('search.mode.titleCreatorYear') },
+    { value: 'fields', label: t('search.mode.fields') },
+    { value: 'everything', label: t('search.mode.everything') },
+  ]
+  const modePlaceholder = modeItems.find((item) => item.value === searchMode)?.label
+    ?? t('list.searchPlaceholder')
   /** 按列表顺序取选中项，插进草稿的 chip 顺序才与眼前一致。 */
   const chosen = items.filter((item) => selectedItemKeys.has(item.key))
 
@@ -582,9 +595,13 @@ export function ItemList(props: Props): ReactElement {
         </div>
         <SearchField
           value={query}
-          placeholder={t('list.searchPlaceholder')}
+          placeholder={modePlaceholder}
           clearLabel={t('search.clear')}
           onChange={onSearch}
+          modeItems={modeItems}
+          mode={searchMode}
+          modeLabel={t('search.modeLabel')}
+          onModeChange={onSearchModeChange}
         />
         {tags.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, fontSize: 11.5 }}>

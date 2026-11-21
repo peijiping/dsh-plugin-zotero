@@ -19,6 +19,7 @@ import type {
   ZoteroPanelPos,
   ZoteroPanelSize,
   ZoteroReadPosition,
+  ZoteroSearchMode,
   ZoteroTags,
   ZoteroTree,
   ZoteroViewState,
@@ -120,6 +121,8 @@ export function fetchItems(
     scope?: ZoteroItemScope
     collectionKey?: string
     q?: string
+    /** 搜索框左侧三档：标题 / 所有字段与标签 / 所有内容。 */
+    qmode?: ZoteroSearchMode
     tags?: readonly string[]
     tagMode?: 'all' | 'any'
     /** 排序字段；目前只支持按标题。 */
@@ -145,6 +148,7 @@ export function fetchTagUsage(
     scope?: ZoteroItemScope
     collectionKeys?: readonly string[]
     q?: string
+    qmode?: ZoteroSearchMode
   } = {},
   signal?: AbortSignal,
 ): Promise<ZoteroTags> {

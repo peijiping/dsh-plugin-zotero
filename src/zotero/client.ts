@@ -45,6 +45,7 @@ import type {
   ZoteroNote,
   ZoteroNoteRaw,
   ZoteroReadPosition,
+  ZoteroSearchMode,
   ZoteroTag,
   ZoteroTagRef,
   ZoteroTags,
@@ -764,6 +765,8 @@ export interface ListTagUsageOptions {
   collectionKeys?: readonly string[]
   /** 与条目列表同一个搜索词，标签可用性才跟列表口径一致。 */
   q?: string
+  /** 搜索口径；缺省按 Zotero 默认的标题 / 作者 / 年份。 */
+  qmode?: ZoteroSearchMode
 }
 
 /**
@@ -797,7 +800,10 @@ export async function listTagUsage(options: ListTagUsageOptions): Promise<Zotero
   for (const base of bases) {
     for (let start = 0; scanned < USAGE_SCAN_MAX; start += USAGE_PAGE_SIZE) {
       const params = new URLSearchParams({ limit: String(USAGE_PAGE_SIZE), start: String(start) })
-      if (search !== '') params.set('q', search)
+      if (search !== '') {
+        params.set('q', search)
+        params.set('qmode', options.qmode ?? 'titleCreatorYear')
+      }
       const { body } = await requestJson<RawItem[]>(`${base}?${params.toString()}`)
       const page = Array.isArray(body) ? body : []
       if (page.length === 0) break
@@ -831,6 +837,8 @@ export interface ListItemsOptions {
   scope?: ZoteroItemScope
   collectionKey?: string
   q?: string
+  /** 搜索口径，与列表搜索框左侧的选择保持一致。 */
+  qmode?: ZoteroSearchMode
   /** 标签过滤：AND（默认）逐个 `tag=`，OR 合并成 `tag=A || B`。 */
   tags?: readonly string[]
   tagMode?: 'all' | 'any'
@@ -899,9 +907,16 @@ async function itemChildState(key: string): Promise<ChildState> {
   }
 }
 
-/** 把 `q` 与标签过滤写进查询参数（列表与未分类扫描共用）。 */
-function appendItemFilters(params: URLSearchParams, options: ListItemsOptions): void {
-  if (options.q && options.q.trim() !== '') params.set('q', options.q.trim())
+/** 把 `q` 与搜索口径写进查询参数。 */
+function appendSearchFilter(params: URLSearchParams, options: ListItemsOptions): void {
+  const search = options.q?.trim() ?? ''
+  if (search === '') return
+  params.set('q', search)
+  params.set('qmode', options.qmode ?? 'titleCreatorYear')
+}
+
+/** 把标签过滤写进查询参数（AND 逐个 `tag=`，OR 合并成 `tag=A || B`）。 */
+function appendTagFilter(params: URLSearchParams, options: ListItemsOptions): void {
   const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
   if (tags.length === 0) return
   if (options.tagMode === 'any') {
@@ -909,6 +924,12 @@ function appendItemFilters(params: URLSearchParams, options: ListItemsOptions): 
   } else {
     for (const tag of tags) params.append('tag', tag)
   }
+}
+
+/** 把 `q` 与标签过滤写进查询参数（列表与未分类扫描共用）。 */
+function appendItemFilters(params: URLSearchParams, options: ListItemsOptions): void {
+  appendSearchFilter(params, options)
+  appendTagFilter(params, options)
 }
 
 /** 把排序写进查询参数（本地 API 支持 `sort=title` + `direction=asc|desc`）。 */
@@ -947,6 +968,97 @@ function itemListQuery(options: ListItemsOptions): { base: string; params: URLSe
 }
 
 /**
+ * 混合层级端点基址（不带 `/top`）：全文命中落在子附件 / 子笔记上，
+ * 必须把子条目一起取回来，才能归并到父条目展示。
+ */
+function multiLevelListBase(options: ListItemsOptions): string {
+  return options.scope === 'publications'
+    ? `${libraryBase()}/publications/items`
+    : options.scope === 'trash'
+      ? `${libraryBase()}/items/trash`
+      : options.collectionKey
+        ? `${libraryBase()}/collections/${encode(options.collectionKey)}/items`
+        : `${libraryBase()}/items`
+}
+
+/** 全文搜索最多扫描的命中条目数；超出后按已扫到的结果展示。 */
+const ROLLUP_SCAN_MAX = 2000
+
+/** 条目是否命中所选标签（与列表的 AND / OR 口径一致）。 */
+function itemHasTags(
+  raw: RawItem,
+  tags: readonly string[],
+  tagMode: 'all' | 'any' | undefined,
+): boolean {
+  if (tags.length === 0) return true
+  const names = new Set((raw.data?.tags ?? []).map((tag) => tag.tag?.trim() ?? ''))
+  return tagMode === 'any'
+    ? tags.some((tag) => names.has(tag))
+    : tags.every((tag) => names.has(tag))
+}
+
+/**
+ * 「所有内容」搜索：本地 API 的 `/items/top?q=…&qmode=everything` 只看顶层
+ * 条目，PDF 全文命中落在子附件上时会被漏掉。这里改扫混合层级端点，把每条命中
+ * 的 `data.parentItem` 归并到父条目，再在插件侧做标签过滤、排序与分页。
+ *
+ * 标签过滤不交给服务端：`includeChildren` 会按「命中条目的子条目」展开，
+ * 子附件本身没有父条目的标签，交给服务端会把全文命中全部筛掉。
+ */
+async function searchItemsWithRollup(
+  options: ListItemsOptions,
+): Promise<{ total: number; items: ZoteroItemSummary[] }> {
+  const base = multiLevelListBase(options)
+  const rawByKey = new Map<string, RawItem>()
+  const wantedKeys = new Set<string>()
+
+  for (let start = 0; start < ROLLUP_SCAN_MAX; start += PAGE_SIZE) {
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      start: String(start),
+      itemType: '-annotation',
+    })
+    appendSearchFilter(params, options)
+    const { body } = await requestJson<RawItem[]>(`${base}?${params.toString()}`)
+    const raws = Array.isArray(body) ? body : []
+    if (raws.length === 0) break
+    for (const raw of raws) {
+      rawByKey.set(raw.key, raw)
+      const parent = raw.data?.parentItem
+      wantedKeys.add(typeof parent === 'string' && parent !== '' ? parent : raw.key)
+    }
+    if (raws.length < PAGE_SIZE) break
+  }
+
+  // 命中的是子附件 / 子笔记时，父条目本身不在结果里，要单独补取元数据。
+  const missing = [...wantedKeys].filter((key) => !rawByKey.has(key))
+  for (const raw of await fetchItemsByKeys(missing)) rawByKey.set(raw.key, raw)
+
+  const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
+  const rows: ZoteroItemSummary[] = []
+  for (const key of wantedKeys) {
+    const raw = rawByKey.get(key)
+    if (raw === undefined) continue
+    const parent = raw.data?.parentItem
+    if (typeof parent === 'string' && parent !== '') continue
+    if (options.scope === 'unfiled' && (raw.data?.collections ?? []).length > 0) continue
+    if (!itemHasTags(raw, tags, options.tagMode)) continue
+    rows.push(toSummary(raw, { lastRead: null, children: [] }))
+  }
+  if (options.sort === 'title') {
+    const sign = options.direction === 'desc' ? -1 : 1
+    rows.sort((a, b) => sign * a.title.localeCompare(b.title, 'zh'))
+  }
+  const page = rows.slice(options.offset, options.offset + options.limit)
+  const items = await Promise.all(page.map(async (row) => {
+    const raw = rawByKey.get(row.key)
+    if (raw === undefined) return row
+    return toSummary(raw, await childStateOf(raw))
+  }))
+  return { total: rows.length, items }
+}
+
+/**
  * 「未分类条目」：本地 API 没有专用端点，改为取顶层条目后筛掉已归类的
  * （`data.collections` 非空即已归类），分页在筛完后作用于结果集。
  */
@@ -976,6 +1088,10 @@ async function listUnfiled(
 export async function listItems(
   options: ListItemsOptions,
 ): Promise<{ total: number; items: ZoteroItemSummary[] }> {
+  const search = options.q?.trim() ?? ''
+  if (search !== '' && options.qmode === 'everything') {
+    return searchItemsWithRollup(options)
+  }
   if (options.scope === 'unfiled') return listUnfiled(options)
 
   const { base, params } = itemListQuery(options)
@@ -995,6 +1111,8 @@ export async function getItemChildren(key: string): Promise<RawItem[]> {
 /** 「最近阅读」列表的筛选 / 排序参数（口径与普通条目列表一致）。 */
 export interface RecentItemsOptions {
   q?: string
+  /** 搜索口径；默认与 Zotero 一致。 */
+  qmode?: ZoteroSearchMode
   tags?: readonly string[]
   tagMode?: 'all' | 'any'
   sort?: 'title'
@@ -1054,6 +1172,60 @@ async function fetchItemsByKeys(keys: readonly string[]): Promise<RawItem[]> {
 }
 
 /**
+ * 用 Zotero 自己的搜索口径过滤一组条目 key（「最近阅读」用）。
+ *
+ * 这份名单来自本插件的阅读记录，不能直接套 `/items/top?q=` 的范围；把候选 key
+ * 作为 `itemKey` 作用域交给本地 API，`q` / `qmode` 就与列表搜索完全同口径。
+ * `itemKey` 会把命中条目的子条目一起带出来，批次可能被页大小挤掉，漏掉的 key
+ * 再单独补查一次。
+ */
+async function searchItemKeys(
+  keys: readonly string[],
+  q: string,
+  qmode: ZoteroSearchMode,
+): Promise<Set<string>> {
+  const wanted = new Set(keys)
+  const matched = new Set<string>()
+  const seen = new Set<string>()
+  /** 全文命中会以子附件 / 子笔记的形态返回，按 `parentItem` 记到父条目上。 */
+  const collect = (raws: unknown): void => {
+    if (!Array.isArray(raws)) return
+    for (const raw of raws as RawItem[]) {
+      const parent = raw.data?.parentItem
+      const key = typeof parent === 'string' && parent !== '' ? parent : raw.key
+      if (!wanted.has(key)) continue
+      seen.add(key)
+      matched.add(key)
+    }
+  }
+  for (let index = 0; index < keys.length; index += RECENT_BATCH) {
+    const batch = keys.slice(index, index + RECENT_BATCH)
+    const params = new URLSearchParams({
+      itemKey: batch.map(encode).join(','),
+      q,
+      qmode,
+      limit: String(RECENT_PAGE),
+      itemType: '-annotation',
+    })
+    const { body } = await requestJson<RawItem[]>(`${libraryBase()}/items?${params.toString()}`)
+    collect(body)
+  }
+  for (const key of keys) {
+    if (seen.has(key)) continue
+    const params = new URLSearchParams({
+      itemKey: encode(key),
+      q,
+      qmode,
+      limit: String(RECENT_PAGE),
+      itemType: '-annotation',
+    })
+    const { body } = await requestJson<RawItem[]>(`${libraryBase()}/items?${params.toString()}`)
+    collect(body)
+  }
+  return matched
+}
+
+/**
  * 「最近阅读」：把本插件的阅读进度记录解析成条目摘要。
  *
  * 记录按**附件** key 存，所以先按附件找到父条目（同一篇文献被多份附件读到过时
@@ -1094,19 +1266,18 @@ export async function listRecentItems(
   const parentKeys = itemKeys.filter((key) => !itemByKey.has(key))
   for (const raw of await fetchItemsByKeys(parentKeys)) itemByKey.set(raw.key, raw)
 
-  const search = (options.q ?? '').trim().toLowerCase()
+  const search = (options.q ?? '').trim()
+  const matched = search === ''
+    ? null
+    : await searchItemKeys(itemKeys, search, options.qmode ?? 'titleCreatorYear')
   const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
   // 附件清单只给当前页取：筛选 / 排序都只用到标题与作者，没必要为整份名单打请求。
   const rows: ZoteroItemSummary[] = []
   for (const key of itemKeys) {
     const raw = itemByKey.get(key)
     if (raw === undefined) continue
+    if (matched !== null && !matched.has(key)) continue
     const row = toSummary(raw, { lastRead: readAtByKey.get(key) ?? null, children: [] })
-    if (
-      search !== ''
-      && !row.title.toLowerCase().includes(search)
-      && !row.creators.toLowerCase().includes(search)
-    ) continue
     if (tags.length > 0) {
       const names = new Set((raw.data?.tags ?? []).map((tag) => tag.tag?.trim() ?? ''))
       const hit = options.tagMode === 'any'

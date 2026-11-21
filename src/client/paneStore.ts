@@ -20,6 +20,7 @@ import type {
   ZoteroHealth,
   ZoteroItemScope,
   ZoteroItemSummary,
+  ZoteroSearchMode,
   ZoteroTag,
 } from '../zotero/types'
 import { fetchHealth, fetchItems, fetchTagUsage, fetchTags, fetchTree } from './api'
@@ -41,6 +42,11 @@ const TOAST_MS = 3000
 
 /** 列表排序的存储键（localStorage，跨会话与重启都记住）。 */
 const SORT_KEY = 'dsh-plugin-zotero.itemSort'
+
+/** 搜索口径的存储键；默认与 Zotero 一样是「所有字段和标签」。 */
+const SEARCH_MODE_KEY = 'dsh-plugin-zotero.searchMode'
+
+const SEARCH_MODES: readonly ZoteroSearchMode[] = ['titleCreatorYear', 'fields', 'everything']
 
 /** 目录树状态的存储键：刷新页面 / 重开面板后回到上次选中的目录。 */
 const TREE_STATE_KEY = 'dsh-plugin-zotero.treeState'
@@ -85,6 +91,15 @@ function readSort(): ItemSort {
     return value === 'asc' || value === 'desc' ? value : 'none'
   } catch {
     return 'none'
+  }
+}
+
+function readSearchMode(): ZoteroSearchMode {
+  try {
+    const value = window.localStorage.getItem(SEARCH_MODE_KEY)
+    return SEARCH_MODES.find((mode) => mode === value) ?? 'fields'
+  } catch {
+    return 'fields'
   }
 }
 
@@ -217,6 +232,8 @@ export interface PaneState {
   /** 范围标签用量是否在途；切换分类时清空旧集合前先置 true。 */
   tagUsageLoading: boolean
 
+  /** 搜索口径（列表搜索框左侧三档，存 localStorage）。 */
+  searchMode: ZoteroSearchMode
   query: string
   toast: string | null
 }
@@ -257,6 +274,7 @@ function initialState(): PaneState {
     tagMode: 'all',
     tagUsage: null,
     tagUsageLoading: false,
+    searchMode: readSearchMode(),
     query: '',
     toast: null,
   }
@@ -481,6 +499,25 @@ export function setQuery(next: string): void {
   }, SEARCH_DEBOUNCE_MS)
 }
 
+/** 切换搜索口径：立即按新口径重拉（不等防抖），并记住选择。 */
+export function setSearchMode(mode: ZoteroSearchMode): void {
+  if (state.searchMode === mode) return
+  patch({ searchMode: mode })
+  try {
+    window.localStorage.setItem(SEARCH_MODE_KEY, mode)
+  } catch {
+    // 隐私模式等禁用 localStorage 时忽略，本次会话内仍然生效。
+  }
+  // 没有搜索词时切口径不改变结果，没必要多打一轮请求。
+  if (state.query.trim() === '') return
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer)
+    searchTimer = null
+  }
+  reloadItems()
+  loadTagUsage()
+}
+
 // ---- 标签 -------------------------------------------------------------------
 
 /** 拉取全库标签；失败只记错误，不影响树与列表。 */
@@ -578,6 +615,7 @@ export function reloadItems(): void {
         const data = await fetchItems({
           ...selectionQuery(),
           q: query,
+          qmode: state.searchMode,
           tags: tags.length === 0 ? undefined : tags,
           tagMode: tags.length === 0 ? undefined : state.tagMode,
           sort: recent || state.sort === 'none' ? undefined : 'title',
@@ -680,6 +718,7 @@ function loadTagUsage(): void {
         ? { scope }
         : { collectionKeys: [collection.key] }),
       ...(query === '' ? {} : { q: query }),
+      qmode: state.searchMode,
     },
     controller.signal,
   )
