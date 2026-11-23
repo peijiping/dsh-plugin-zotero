@@ -24,6 +24,7 @@ export interface ChapterPlan {
   estimated: boolean
   fallbackAll: boolean
   target?: OutlineTarget
+  chapters?: { index: number; start: number; end: number }[]
 }
 
 /** 章节下标按 outline 顺序排序去重。 */
@@ -110,12 +111,15 @@ export function planChapters(
     return offset
   })
   const groups: { first: number; last: number }[] = []
+  // Adjacent chapters can share a slice and still need separate evidence links.
+  const chapters: { first: number; last: number }[] = []
   for (const index of indices) {
     // A parent chapter includes its descendants. Merge overlapping selections so
     // selecting both a parent and a child never duplicates their text.
     let last = index
     while (last + 1 < items.length && items[last + 1].depth > items[index].depth) last += 1
     const group = groups.at(-1)
+    if (group === undefined || group.last < index) chapters.push({ first: index, last })
     if (group !== undefined && group.last + 1 >= index) group.last = Math.max(group.last, last)
     else groups.push({ first: index, last })
   }
@@ -136,6 +140,11 @@ export function planChapters(
       estimated: false,
       fallbackAll: false,
       target: items[indices[0]]?.target ?? undefined,
+      chapters: chapters.flatMap(({ first, last }) => {
+        const start = offsets[first]
+        const end = last === items.length - 1 ? content.length : offsets[last + 1]
+        return start === null || end === null ? [] : [{ index: first, start, end }]
+      }),
     }
   }
 

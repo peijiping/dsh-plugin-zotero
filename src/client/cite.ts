@@ -89,6 +89,7 @@ export interface AttachmentCitation {
   revision: string
   range: string
   evidence?: EvidenceTarget
+  chapters?: { start: number; end: number; evidence: EvidenceTarget }[]
 }
 
 export async function attachmentCitation(
@@ -106,6 +107,11 @@ export async function attachmentCitation(
 export function attachmentCitationText(t: Translate, source: AttachmentCitation, fulltext: ZoteroFulltext): string {
   if (parseFulltextRange(source.range).mode === 'pages') throw new Error(t('review.chapterReselect'))
   const slice = sliceFulltext(fulltext.content, source.range)
+  if (source.chapters?.length) {
+    slice.text = source.chapters.map(({ start, end, evidence }) =>
+      `${evidenceLine(t, evidence)}\n${fulltext.content.slice(start, end)}`,
+    ).join('\n\n')
+  }
   const text = fulltextText(t, source, slice, fulltext, source.attachmentTitle)
   return source.evidence === undefined ? text : withEvidence(t, text, source.evidence)
 }
@@ -123,6 +129,7 @@ export interface ReviewSource {
   year: string
   attachmentTitle?: string
   coverage: 'text' | 'metadata' | 'missing' | 'error'
+  missingIndex?: boolean
   text?: AttachmentCitation
 }
 
@@ -133,7 +140,8 @@ export function reviewSourceText(t: Translate, source: ReviewSource, body?: stri
   const attachment = source.attachmentTitle
     ? tpl(t('fulltext.attachment'), { name: source.attachmentTitle })
     : ''
-  return [header, attachment, t(`review.coverage.${source.coverage}`)].filter(Boolean).join('\n')
+  const indexStatus = source.missingIndex ? t('review.indexMissing') : ''
+  return [header, attachment, t(`review.coverage.${source.coverage}`), indexStatus].filter(Boolean).join('\n')
 }
 
 export function reviewText(t: Translate, sections: readonly string[]): string {

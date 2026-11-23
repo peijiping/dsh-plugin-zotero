@@ -16,6 +16,8 @@ import { estimateTokens } from './tokens'
 import { Button } from './ui'
 
 const INITIAL_CHARS = 6000
+// Review answers repeat these URLs in table cells. Keep the locator short.
+const EVIDENCE_QUOTE_CHARS = 96
 
 interface ReviewRow {
   item: ZoteroItemSummary
@@ -25,7 +27,7 @@ interface ReviewRow {
   error?: 'load' | 'host'
   evidence: EvidenceTarget
   mode: 'metadata' | 'range' | 'all' | 'chapter'
-  outline?: DocumentOutlineItem[]
+  outline?: (DocumentOutlineItem & { evidence: EvidenceTarget })[]
   outlineError?: boolean
   chapters: ReadonlySet<number>
   start: string
@@ -71,6 +73,17 @@ function getSelection(row: ReviewRow, t: Translate, plan: ChapterPlan | null): R
     range: `c:${start}:${end}`,
     scope: tpl(t('fulltext.scope.chars'), { value: `${start}–${end}` }),
     text: index.content.slice(start, end),
+  }
+}
+
+function attachmentEvidence(base: EvidenceTarget, attachmentKey: string, text: string, target?: OutlineTarget): EvidenceTarget {
+  return {
+    ...base,
+    attachmentKey,
+    page: target?.kind === 'page' ? target.page : undefined,
+    chapterStart: target?.kind === 'page' || undefined,
+    anchor: target?.kind === 'anchor' ? target.id : undefined,
+    quote: target?.kind === 'page' ? undefined : text.trimStart().slice(0, EVIDENCE_QUOTE_CHARS) || undefined,
   }
 }
 
@@ -122,10 +135,14 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
     const coverage: ReviewSource['coverage'] = row.mode === 'metadata' ? 'metadata'
       : row.error ? 'error'
       : selected !== null ? 'text' : 'missing'
+    const missingIndex = row.attachmentKey !== '' && row.fulltext === null
     let status = t(`review.coverage.${coverage}`)
-    if (row.mode !== 'metadata') {
+    if (row.mode === 'metadata') {
+      if (missingIndex) status += ` · ${t('review.indexMissing')}`
+    } else {
       if (row.error === 'host') status = t('review.hostOutdated')
       else if (pending) status = t('status.loading')
+      else if (row.attachmentKey === '' && row.fulltext === null) status = t('review.noAttachment')
       else if (row.fulltext?.revision !== undefined) {
         if (row.mode === 'chapter') {
           if (row.outlineError) status = t('review.chaptersError')
@@ -137,32 +154,34 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
         }
       }
     }
-    return { row, selected, status, pending, coverage, tokens: estimateTokens(selected?.text ?? '') }
+    return { row, selected, plan, status, pending, coverage, missingIndex, tokens: estimateTokens(selected?.text ?? '') }
   })
 
   const canConfirm = prepared.every(({ row, selected }) => row.mode === 'metadata' || selected !== null)
-  const sources = prepared.map(({ row, selected, coverage }) => {
+  const sources = prepared.map(({ row, selected, plan, coverage, missingIndex }) => {
     const { key, title, creators, year } = row.item
     const attachment = row.detail?.attachments.find((candidate) => candidate.key === row.attachmentKey)
     const attachmentTitle = attachment?.title || attachment?.filename
-    const revision = row.fulltext?.revision
-    const text = selected !== null && revision !== undefined ? {
+    const fulltext = row.fulltext
+    const outline = row.outline
+    const chapterRanges = plan?.chapters
+    const chapters = fulltext && outline && chapterRanges && chapterRanges.length > 1
+      ? chapterRanges.map(({ index, start, end }) => {
+        const chapter = outline[index]
+        const quote = fulltext.content.slice(start, Math.min(start + EVIDENCE_QUOTE_CHARS, end))
+        return { start, end, evidence: attachmentEvidence(chapter.evidence, row.attachmentKey, quote, chapter.target ?? undefined) }
+      }) : undefined
+    const text = selected !== null && fulltext?.revision !== undefined ? {
       key,
       title,
       attachmentKey: row.attachmentKey,
       attachmentTitle: attachmentTitle || row.attachmentKey,
-      revision,
+      revision: fulltext.revision,
       range: `${selected.range}|${encodeURIComponent(selected.scope)}`,
-      evidence: {
-        ...row.evidence,
-        attachmentKey: row.attachmentKey,
-        page: selected.target?.kind === 'page' ? selected.target.page : undefined,
-        chapterStart: selected.target?.kind === 'page' || undefined,
-        anchor: selected.target?.kind === 'anchor' ? selected.target.id : undefined,
-        quote: selected.text.trimStart().slice(0, 240) || undefined,
-      },
+      evidence: chapters === undefined ? attachmentEvidence(row.evidence, row.attachmentKey, selected.text, selected.target) : undefined,
+      chapters,
     } : undefined
-    return { key, title, creators, year, attachmentTitle, text, coverage }
+    return { key, title, creators, year, attachmentTitle, text, coverage, missingIndex: missingIndex || undefined }
   })
   const sections = sources.map((source, index) => {
     const fulltext = rows[index].fulltext
@@ -278,12 +297,14 @@ function ReviewControls({ t, row, update }: {
     const controller = new AbortController()
     const attachment = detail?.attachments.find((item) => item.key === attachmentKey)
     readAttachmentOutline(attachment, row.fulltext.content, controller.signal).then((outline) => {
-      if (!controller.signal.aborted) update({ outline })
+      if (!controller.signal.aborted) {
+        update({ outline: outline.map((chapter) => ({ ...chapter, evidence: makeEvidence(row.item.key) })) })
+      }
     }).catch(() => {
       if (!controller.signal.aborted) update({ outlineError: true })
     })
     return () => controller.abort()
-  }, [row.mode, row.outline, row.outlineError, row.fulltext, detail, attachmentKey])
+  }, [row.item.key, row.mode, row.outline, row.outlineError, row.fulltext, detail, attachmentKey])
 
   return (
     <>
