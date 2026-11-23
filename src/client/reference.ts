@@ -17,14 +17,19 @@
  */
 
 import type { Translate } from './locales'
+import { makeEvidence, type EvidenceLocation } from './evidence'
 import type { InsertionSpan } from './inline'
 import {
   annotationCitation,
+  attachmentCitation,
+  type AttachmentCitation,
   collectionCitation,
   excerptCitation,
   fulltextCitation,
   itemCitation,
   noteCitation,
+  reviewCitation,
+  type ReviewSource,
   shotCitation,
   tagCitation,
   tagSetCitation,
@@ -69,6 +74,8 @@ const ANNOTATION_PREFIX = 'ann:'
  * 表达式，交给 `fulltextCitation` 拆；key 是 Zotero key，天然不含 `:`。
  */
 const FULLTEXT_PREFIX = 'full:'
+const ATTACHMENT_FULLTEXT_PREFIX = 'full2:'
+const REVIEW_PREFIX = 'review:'
 /**
  * 划选摘录：`exc:<编码后的 itemKey>:<编码后的标题>:<编码后的原文>`。
  *
@@ -152,6 +159,14 @@ export interface ZoteroTriggerSource {
 /** 按 ref 前缀分派到对应的引用文本构建。 */
 export function citationForRef(t: Translate, ref: string, signal: AbortSignal): Promise<string> {
   if (ref.startsWith(ITEM_PREFIX)) return itemCitation(t, ref.slice(ITEM_PREFIX.length), signal)
+  if (ref.startsWith(ATTACHMENT_FULLTEXT_PREFIX)) {
+    const source: AttachmentCitation = JSON.parse(decodeURIComponent(ref.slice(ATTACHMENT_FULLTEXT_PREFIX.length)))
+    return attachmentCitation(t, source, signal)
+  }
+  if (ref.startsWith(REVIEW_PREFIX)) {
+    const sources: ReviewSource[] = JSON.parse(decodeURIComponent(ref.slice(REVIEW_PREFIX.length)))
+    return reviewCitation(t, sources, signal)
+  }
   if (ref.startsWith(FULLTEXT_PREFIX)) return fulltextCitation(t, ref.slice(FULLTEXT_PREFIX.length), signal)
   if (ref.startsWith(COLLECTION_PREFIX)) return collectionCitation(t, ref.slice(COLLECTION_PREFIX.length), signal)
   if (ref.startsWith(NOTE_PREFIX)) return noteCitation(t, ref.slice(NOTE_PREFIX.length), signal)
@@ -218,6 +233,14 @@ export function fulltextReference(key: string, title: string, range: string, lab
   }
 }
 
+export function attachmentFulltextReference(source: AttachmentCitation, label: string): ReferenceInsert {
+  return reference(ATTACHMENT_FULLTEXT_PREFIX, encodeURIComponent(JSON.stringify(source)), label, 'file')
+}
+
+export function reviewReference(sources: readonly ReviewSource[], label: string): ReferenceInsert {
+  return reference(REVIEW_PREFIX, encodeURIComponent(JSON.stringify(sources)), label, 'folder')
+}
+
 /** 一个目录的 chip。 */
 export function collectionReference(key: string, name: string): ReferenceInsert {
   return reference(COLLECTION_PREFIX, key, name, 'folder')
@@ -239,8 +262,10 @@ export function noteReference(parentKey: string, noteKey: string, title: string)
 }
 
 /** 一条标注（高亮 / 划线）的 chip。 */
-export function annotationReference(parentKey: string, annotationKey: string, label: string): ReferenceInsert {
-  return reference(childPrefix(ANNOTATION_PREFIX, parentKey), annotationKey, label, 'file')
+export function annotationReference(parentKey: string, annotationKey: string, label: string, location: EvidenceLocation): ReferenceInsert {
+  const evidence = makeEvidence(parentKey, { ...location, annotationKey })
+  const id = `${annotationKey}:${encodeURIComponent(JSON.stringify(evidence))}`
+  return reference(childPrefix(ANNOTATION_PREFIX, parentKey), id, label, 'file')
 }
 
 /**
@@ -254,8 +279,10 @@ export function excerptReference(
   title: string,
   quote: string,
   label: string,
+  location?: EvidenceLocation,
 ): ReferenceInsert {
-  const ref = `${EXCERPT_PREFIX}${[key, title, quote].map((part) => encodeURIComponent(part)).join(':')}`
+  const evidence = makeEvidence(key, location)
+  const ref = `${EXCERPT_PREFIX}${[key, title, quote, JSON.stringify(evidence)].map((part) => encodeURIComponent(part)).join(':')}`
   return {
     source: REF_SOURCE,
     ref,
@@ -278,9 +305,11 @@ export function translationReference(
   quote: string,
   translated: string,
   label: string,
+  location?: EvidenceLocation,
 ): ReferenceInsert {
+  const evidence = makeEvidence(key, location)
   const ref = `${TRANSLATION_PREFIX}${
-    [key, title, quote, translated].map((part) => encodeURIComponent(part)).join(':')
+    [key, title, quote, translated, JSON.stringify(evidence)].map((part) => encodeURIComponent(part)).join(':')
   }`
   return {
     source: REF_SOURCE,
@@ -337,7 +366,7 @@ export function tagSetReference(
  */
 export function shotReference(meta: ShotMeta, label: string): ReferenceInsert {
   const ref = `${SHOT_PREFIX}${
-    [meta.key, meta.title, meta.byline, meta.pages, meta.section, meta.digest, meta.shotId]
+    [meta.key, meta.title, meta.byline, meta.pages, meta.section, meta.digest, meta.shotId, JSON.stringify(makeEvidence(meta.key, meta.location))]
       .map((part) => encodeURIComponent(part)).join(':')
   }`
   if (ref.length > MAX_SHOT_REF_CHARS) {

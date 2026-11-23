@@ -39,8 +39,11 @@ import { draftsFromSelection } from './annotationFactory'
 import { AnnotationOverlay } from './AnnotationOverlay'
 import { viewportBox } from './geometry'
 import { OpenInZoteroIcon } from './OpenInZoteroIcon'
-import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS, pageActiveIndex, pageTarget } from './outline'
+import { pageActiveIndex } from './outline'
+import { readPdfOutline } from './pdfOutline'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
+import type { EvidenceLocation, EvidenceTarget } from '../evidence'
+import { offsetsWithin, revealOffsets, revealQuote } from './evidenceSelection'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import { TranslationCard } from './TranslationCard'
 import { useTranslation } from './useTranslation'
@@ -134,69 +137,6 @@ async function explainLoadFailure(
       ...(fix === undefined ? {} : { fix }),
     }
   }
-}
-
-/**
- * 一条书签的 `dest` → 1 基页码。
- *
- * `dest` 有两种形态：命名目标（字符串，要去 catalog 里查）或显式数组
- * `[页引用, 视图, ...]`。数组首元素通常是页对象的引用 `{num, gen}`，
- * 但有的生成器直接写 0 基页号，两种都收；外链书签（只有 `url`）返回 `null`。
- */
-async function outlinePageOf(pdf: PDFDocumentProxy, dest: unknown): Promise<number | null> {
-  let resolved: unknown = dest
-  if (typeof dest === 'string') {
-    try {
-      resolved = await pdf.getDestination(dest)
-    } catch {
-      return null
-    }
-  }
-  if (!Array.isArray(resolved) || resolved.length === 0) return null
-  const first: unknown = resolved[0]
-  if (typeof first === 'number' && Number.isInteger(first)) return first + 1
-  if (typeof first !== 'object' || first === null) return null
-  try {
-    return (await pdf.getPageIndex(first as { num: number; gen: number })) + 1
-  } catch {
-    return null
-  }
-}
-
-/**
- * 把 PDF 的书签树拍平成带层级的列表。
- *
- * 解析失败按「没有目录」处理：目录是附加阅读入口，不能因为它把文档判成加载失败。
- * 返回数组而不是 `null` —— 「没有书签」是确定的结果，面板要显示的文案不一样。
- */
-async function readOutline(pdf: PDFDocumentProxy): Promise<DocumentOutlineItem[]> {
-  type Nodes = Awaited<ReturnType<PDFDocumentProxy['getOutline']>>
-  let tree: Nodes
-  try {
-    tree = await pdf.getOutline()
-  } catch {
-    return []
-  }
-  if (!Array.isArray(tree)) return []
-
-  const out: DocumentOutlineItem[] = []
-  const walk = async (nodes: Nodes, depth: number): Promise<void> => {
-    for (const node of nodes) {
-      if (out.length >= OUTLINE_MAX_ITEMS) return
-      const page = await outlinePageOf(pdf, node.dest)
-      out.push({
-        title: (node.title ?? '').trim() || '(无标题)',
-        target: page === null ? null : pageTarget(page),
-        depth,
-      })
-      const children = node.items as Nodes | undefined
-      if (depth + 1 < OUTLINE_MAX_DEPTH && Array.isArray(children) && children.length > 0) {
-        await walk(children, depth + 1)
-      }
-    }
-  }
-  await walk(tree, 0)
-  return out
 }
 
 /**
@@ -331,6 +271,8 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   const [marking, setMarking] = useState(false)
   /** 划词翻译浮层：选区变了就重开，正文滚动不影响它（相对 root 定位）。 */
   const translation = useTranslation(t)
+  const translationLocation = useRef<EvidenceLocation>()
+  const positionedEvidence = useRef<EvidenceTarget>()
 
   /**
    * 目录回调走 ref：加载 effect 只该随 url / 重试重跑，不该因为父级重渲染换了
@@ -443,7 +385,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
         setLoading(false)
         onReady()
         // 书签单独解析、不 await：目录晚一两帧没有关系，别拖住首屏。
-        void readOutline(proxy).then((items) => {
+        void readPdfOutline(proxy).then((items) => {
           if (disposed) return
           outlineItemsRef.current = items
           outlineRef.current?.(items)
@@ -630,7 +572,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     let frames = 0
     let cancelled = false
     const apply = (): void => {
-      if (cancelled) return
+      if (cancelled || resumedUrlRef.current === url) return
       if (!scrollToPage(target)) {
         if (frames++ < 120) window.requestAnimationFrame(apply)
         return
@@ -970,6 +912,37 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     return true
   }
 
+  function selectionLocation(text: string): EvidenceLocation {
+    const range = rangeRef.current
+    const start = range?.startContainer
+    const element = start instanceof Element ? start : start?.parentElement
+    const page = element?.closest<HTMLElement>('.page[data-page-number]')
+    const layer = element?.closest<HTMLElement>('.textLayer')
+    const pdfRange = range && layer ? offsetsWithin(layer, range) : undefined
+    const number = Number(page?.dataset.pageNumber)
+    return {
+      page: Number.isInteger(number) && number > 0 ? number : undefined,
+      pageLabel: page?.dataset.zpPageLabel || undefined,
+      quote: (pdfRange && range ? range.toString().trimStart() : text).slice(0, 240),
+      pdfRange,
+    }
+  }
+
+  function goToEvidence(target: EvidenceTarget): boolean {
+    const page = target.page
+    if (page === undefined || page > pageCount || !pagesSized) return false
+    if (positionedEvidence.current !== target) {
+      if (!scrollToPage(page)) return false
+      resumedUrlRef.current = url
+      positionedEvidence.current = target
+    }
+    if (!target.quote) return true
+    const layer = scrollRef.current?.querySelector<HTMLElement>(`.page[data-page-number="${page}"] .textLayer`)
+    return layer !== null && layer !== undefined
+      && ((target.pdfRange !== undefined && revealOffsets(layer, target.pdfRange, target.quote))
+        || revealQuote(layer, target.quote, true) || revealQuote(layer, target.quote))
+  }
+
   function goToPage(page: number): void {
     if (page < 1 || page > pageCount) return
     scrollToPage(page)
@@ -977,6 +950,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
 
   useImperativeHandle(viewerRef, () => ({
     locate,
+    goToEvidence,
     currentPage: () => currentPageRef.current,
     goToPage,
     goToOutline: (target) => {
@@ -1089,7 +1063,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
           text={selection.text}
           x={selection.x}
           y={selection.y}
-          onInsert={onInsertExcerpt}
+          onInsert={(text) => onInsertExcerpt(text, selectionLocation(text))}
           onDismiss={() => {
             rangeRef.current = null
             setSelection(null)
@@ -1099,7 +1073,10 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
               ? { busy: marking, onCreate: (type, color, comment) => void createMark(type, color, comment) }
               : undefined
           }
-          translate={{ onTranslate: translation.open }}
+          translate={{ onTranslate: (text, x, y) => {
+            translationLocation.current = selectionLocation(text)
+            translation.open(text, x, y)
+          } }}
         />
       )}
 
@@ -1112,7 +1089,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
           onEngineChange={translation.setEngine}
           onClose={translation.close}
           onRetry={translation.retry}
-          onInsert={onInsertTranslation}
+          onInsert={(text, translated) => onInsertTranslation(text, translated, translationLocation.current)}
         />
       )}
 

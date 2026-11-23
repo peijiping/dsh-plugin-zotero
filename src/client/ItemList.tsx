@@ -57,6 +57,7 @@ interface Props {
   onInsertItem(item: ZoteroItemSummary): void
   /** 选中几条插几个条目 chip。 */
   onInsertItems(items: readonly ZoteroItemSummary[]): void
+  onReviewItems?(items: readonly ZoteroItemSummary[]): void
   onInsertCollection(collection: ZoteroCollection): void
 }
 
@@ -526,6 +527,7 @@ export function ItemList(props: Props): ReactElement {
     onClearSelection,
     onInsertItem,
     onInsertItems,
+    onReviewItems,
     onInsertCollection,
   } = props
 
@@ -557,6 +559,16 @@ export function ItemList(props: Props): ReactElement {
             {tpl(t('list.count'), { n: itemsTotal })}
           </span>
           <div style={{ flex: 1 }} />
+          {chosen.length > 1 && onReviewItems !== undefined && (
+            <Button
+              variant="outline"
+              size="sm"
+              style={citeButtonStyle}
+              onClick={() => onReviewItems(chosen)}
+            >
+              {t('review.action')}
+            </Button>
+          )}
           {chosen.length > 0 ? (
             <Button
               variant="outline"

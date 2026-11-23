@@ -151,6 +151,28 @@ export function childKindIconClass(kind: ZoteroChildKind, read = false): string 
 
 /** 全局主题样式：只在入口注入一次，portal / 浮层里的按钮同样生效。 */
 export const THEME_CSS = `
+.dsh-zp-review-modal[role="dialog"] {
+  width: min(960px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+.dsh-zp-review-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .dsh-zp-review-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .dsh-zp-review-footer > button {
+    align-self: flex-end;
+  }
+}
+
 .dsh-zp-soft-btn {
   transition: background-color 120ms ease, border-color 120ms ease;
 }

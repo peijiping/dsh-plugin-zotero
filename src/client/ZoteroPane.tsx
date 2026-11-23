@@ -19,6 +19,7 @@ import { Button, SectionTitle } from './ui'
 import { openInZotero } from './api'
 import { CollectionTree } from './CollectionTree'
 import { HelpWindow } from './HelpWindow'
+import type { ZoteroItemSummary } from '../zotero/types'
 import type { InputActions } from './inline'
 import { ItemList } from './ItemList'
 import { tpl, type Translate } from './locales'
@@ -42,7 +43,8 @@ import {
   TREE_ROOT_ID,
   usePaneState,
 } from './paneStore'
-import type { SessionsFace } from './reference'
+import { reviewReference, type SessionsFace } from './reference'
+import { ReviewDialog } from './ReviewDialog'
 import { SearchField } from './SearchField'
 import { HELP_BUTTON_CLASS, HELP_PRIMARY_STYLE } from './styles'
 import { TagPanel } from './TagPanel'
@@ -139,6 +141,11 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
   const recent = isRecentSelection(selectedCollection)
 
   const insertion = useInsertion(t, sessions, sessionId, inputActions)
+  const [review, setReview] = useState<{ sessionId: string | undefined; items: readonly ZoteroItemSummary[] } | null>(null)
+
+  function startReview(items: readonly ZoteroItemSummary[]): void {
+    setReview({ sessionId, items })
+  }
 
   /**
    * 跳回 Zotero 主窗口：真实分类带 key 跳到该分类（目录树 + 列表），
@@ -352,6 +359,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             onClearSelection={clearItemSelection}
             onInsertItem={(item) => insertion.insertItem(item.key, item.title, item.itemType)}
             onInsertItems={insertion.insertItems}
+            onReviewItems={inputActions === undefined ? undefined : startReview}
             onInsertCollection={insertion.insertCollection}
           />
         </section>
@@ -364,6 +372,17 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
         triggerRef={helpTriggerRef}
         onClose={() => setHelpOpen(false)}
       />
+      {review !== null && review.sessionId === sessionId && (
+        <ReviewDialog
+          t={t}
+          items={review.items}
+          onClose={() => setReview(null)}
+          onConfirm={(sources) => {
+            const label = tpl(t('review.label'), { count: sources.length })
+            if (insertion.insertReference(reviewReference(sources, label))) setReview(null)
+          }}
+        />
+      )}
       <Toast />
     </div>
   )

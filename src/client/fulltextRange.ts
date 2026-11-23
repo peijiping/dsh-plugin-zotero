@@ -1,15 +1,14 @@
 /**
  * 全文范围的表达式与「范围 → 正文字符切片」定位。
  *
- * `full:` chip 的 ref 只存定位（itemKey + 范围表达式），正文在提交那一刻由
- * `fulltextCitation` 经 `fetchItem()` 现取，再交给这里切成用户选中的那一段。
- * 五种表达式对应 choice 的四种模式（章节按文档类型分 `p:` / `o:` 两种）：
+ * 引用提交时按范围表达式，从当前附件的索引正文切出用户确认的片段：
  *
  * - `all`：整篇；
  * - `c:<start>:<end>`：字符区间（start / end 为字符下标，非字节）；
  * - `h:<起标题>:<止标题>`：两个 Markdown 标题之间（正文无 `#` 时降级整篇）；
  * - `o:<start>:<end>`：文档标题锚点的字符偏移（快照/笔记/纯文本，由渲染器上报）；
- * - `p:<起页>:<止页>:<总页>:<标题列表>`：PDF 书签章节，标题用 `+` 分隔。
+ * - `m:<start>-<end>,…`：多个不相邻的选区；
+ * - `p:<起页>:<止页>:<总页>:<标题列表>`：旧版本的 PDF 书签估算，供已保存的草稿使用。
  *
  * 定位原则：能精确定位就精确（`c:` / `o:` 直取，`h:` / `p:` 标题匹配），
  * 匹配不到才按页码比例估算（`p:`）或降级整篇（`h:`），并且都返回 `estimated`
@@ -42,6 +41,7 @@ export function tidyHeading(value: string): string {
     .replace(/(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/gu, '')
     .trim()
     .replace(/^#+[ \t]*/u, '')
+    .replace(/^(\d+(?:\.\d+)*)(?=[^\d.\s])/u, '$1 ')
 }
 
 /**
@@ -103,6 +103,7 @@ function splitLabel(expr: string): LabeledRange {
 export type ParsedFulltextRange =
   | { mode: 'all'; label: string | null }
   | { mode: 'chars' | 'offsets'; start: number; end: number; label: string | null }
+  | { mode: 'segments'; offsets: [number, number][]; label: string | null }
   | { mode: 'headings'; from: string; to: string; label: string | null }
   | { mode: 'pages'; start: number; end: number; total: number; titles: string[]; label: string | null }
 
@@ -120,6 +121,17 @@ export function parseFulltextRange(expr: string): ParsedFulltextRange {
       throw new Error(`无法识别的全文范围：${expr}`)
     }
     return { mode: head === 'c' ? 'chars' : 'offsets', start, end, label }
+  }
+
+  if (head === 'm' && parts.length === 2 && /^\d+-\d+(,\d+-\d+)*$/u.test(parts[1] ?? '')) {
+    const offsets: [number, number][] = (parts[1] ?? '').split(',').map((part) => {
+      const [start, end] = part.split('-').map(Number)
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start) {
+        throw new Error(`无法识别的全文范围：${expr}`)
+      }
+      return [start, end]
+    })
+    return { mode: 'segments', offsets, label }
   }
 
   if (head === 'h' && parts.length === 3) {
@@ -167,6 +179,18 @@ export function sliceFulltext(content: string, expr: string): FulltextSlice {
         fallbackAll: false,
       }
     }
+
+    case 'segments':
+      if (range.offsets.some(([start, end], index) => end > length
+        || (index > 0 && start < range.offsets[index - 1][1]))) {
+        throw new Error('章节范围已失效，请重新选择章节')
+      }
+      return {
+        text: range.offsets.map(([start, end]) => content.slice(start, end)).join('\n\n'),
+        scopeLabel: labelOf('Selected sections'),
+        estimated: false,
+        fallbackAll: false,
+      }
 
     case 'headings': {
       const from = findHeadingOffset(content, range.from)

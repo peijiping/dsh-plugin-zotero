@@ -10,9 +10,10 @@
  *   后重发即可；静默降级成 `@item:KEY` 等于给模型发一个裸 key。
  */
 
+import type { ZoteroFulltext } from '../zotero/types'
 import type { Translate } from './locales'
 import { tpl } from './locales'
-import { ApiFailure, fetchItem, fetchItems, fetchTags, fetchTree } from './api'
+import { ApiFailure, fetchFulltext, fetchItem, fetchItems, fetchTags, fetchTree } from './api'
 import {
   COLLECTION_PREVIEW_LIMIT,
   annotationText,
@@ -27,7 +28,8 @@ import {
   translationText,
 } from './compose'
 import type { ShotMeta } from './viewer/shot/types'
-import { sliceFulltext } from './fulltextRange'
+import { evidenceLine, makeEvidence, type EvidenceTarget } from './evidence'
+import { parseFulltextRange, sliceFulltext } from './fulltextRange'
 
 /** 文库里已经没有这个对象（与「连不上 Zotero」区分开）。 */
 function isMissing(error: unknown): boolean {
@@ -71,10 +73,87 @@ export async function fulltextCitation(
     if (isMissing(error)) return tpl(t('cmp.missing.item'), { key })
     throw error
   }
+  if (detail.attachments.length > 1) throw new Error(tpl(t('fulltext.legacyAttachment'), { name: detail.title }))
   if (detail.fulltext === null) return tpl(t('cmp.fulltext.noFulltext'), { key })
 
+  if (parseFulltextRange(expr).mode === 'pages') throw new Error(t('review.chapterReselect'))
   const slice = sliceFulltext(detail.fulltext.content, expr)
   return fulltextText(t, detail, slice, detail.fulltext)
+}
+
+export interface AttachmentCitation {
+  key: string
+  title: string
+  attachmentKey: string
+  attachmentTitle: string
+  revision: string
+  range: string
+  evidence?: EvidenceTarget
+}
+
+export async function attachmentCitation(
+  t: Translate,
+  source: AttachmentCitation,
+  signal?: AbortSignal,
+): Promise<string> {
+  const fulltext = await fetchFulltext(source.attachmentKey, signal)
+  if (fulltext === null || fulltext.attachmentKey !== source.attachmentKey || fulltext.revision !== source.revision) {
+    throw new Error(tpl(t('fulltext.changed'), { name: source.attachmentTitle }))
+  }
+  return attachmentCitationText(t, source, fulltext)
+}
+
+export function attachmentCitationText(t: Translate, source: AttachmentCitation, fulltext: ZoteroFulltext): string {
+  if (parseFulltextRange(source.range).mode === 'pages') throw new Error(t('review.chapterReselect'))
+  const slice = sliceFulltext(fulltext.content, source.range)
+  const text = fulltextText(t, source, slice, fulltext, source.attachmentTitle)
+  return source.evidence === undefined ? text : withEvidence(t, text, source.evidence)
+}
+
+function withEvidence(t: Translate, text: string, target: EvidenceTarget): string {
+  const end = text.indexOf('\n')
+  return end < 0 ? `${text}\n${evidenceLine(t, target)}`
+    : `${text.slice(0, end)}\n${evidenceLine(t, target)}${text.slice(end)}`
+}
+
+export interface ReviewSource {
+  key: string
+  title: string
+  creators: string
+  year: string
+  attachmentTitle?: string
+  coverage: 'text' | 'metadata' | 'missing' | 'error'
+  text?: AttachmentCitation
+}
+
+export function reviewSourceText(t: Translate, source: ReviewSource, body?: string): string {
+  const name = [source.title, source.creators, source.year].filter(Boolean).join(' · ')
+  const header = tpl(t('review.source'), { name, key: source.key })
+  if (body !== undefined) return `${header}\n${body}`
+  const attachment = source.attachmentTitle
+    ? tpl(t('fulltext.attachment'), { name: source.attachmentTitle })
+    : ''
+  return [header, attachment, t(`review.coverage.${source.coverage}`)].filter(Boolean).join('\n')
+}
+
+export function reviewText(t: Translate, sections: readonly string[]): string {
+  return [t('review.title'), t('review.instructions'), ...sections].join('\n\n')
+}
+
+export async function reviewCitation(
+  t: Translate,
+  sources: readonly ReviewSource[],
+  signal: AbortSignal,
+): Promise<string> {
+  const sections: string[] = []
+  for (let start = 0; start < sources.length; start += 4) {
+    const group = await Promise.all(sources.slice(start, start + 4).map(async (source) => {
+      const body = source.text === undefined ? undefined : await attachmentCitation(t, source.text, signal)
+      return reviewSourceText(t, source, body)
+    }))
+    sections.push(...group)
+  }
+  return reviewText(t, sections)
 }
 
 export async function collectionCitation(
@@ -144,7 +223,8 @@ export async function annotationCitation(
   body: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const { parentKey, childKey } = parseChildRef(body)
+  const colon = body.indexOf(':')
+  const { parentKey, childKey } = parseChildRef(colon < 0 ? body : body.slice(0, colon))
   let detail
   try {
     detail = await fetchItem(parentKey, 'apa', signal)
@@ -154,7 +234,15 @@ export async function annotationCitation(
   }
   const annotation = detail.annotations.find((child) => child.key === childKey)
   if (annotation === undefined) return tpl(t('cmp.missing.annotation'), { key: childKey })
-  return annotationText(t, detail, annotation)
+  const text = annotationText(t, detail, annotation)
+  if (colon >= 0) return withEvidence(t, text, JSON.parse(decodeURIComponent(body.slice(colon + 1))))
+  return withEvidence(t, text, makeEvidence(parentKey, {
+    attachmentKey: annotation.attachmentKey,
+    annotationKey: annotation.key,
+    page: annotation.position === null ? undefined : annotation.position.pageIndex + 1,
+    pageLabel: annotation.pageLabel || undefined,
+    quote: annotation.text.slice(0, 240),
+  }))
 }
 
 /**
@@ -168,13 +256,14 @@ export async function annotationCitation(
 export async function excerptCitation(t: Translate, body: string): Promise<string> {
   const parts = body.split(':')
   const [rawKey, rawTitle, rawQuote] = parts
-  if (parts.length !== 3 || rawKey === undefined || rawTitle === undefined || rawQuote === undefined) {
+  if ((parts.length !== 3 && parts.length !== 4) || rawKey === undefined || rawTitle === undefined || rawQuote === undefined) {
     throw new Error(`无法识别的 Zotero 摘录引用：${body}`)
   }
-  return excerptText(t, {
+  const text = excerptText(t, {
     key: decodeRefPart('摘录', rawKey),
     title: decodeRefPart('摘录', rawTitle),
   }, decodeRefPart('摘录', rawQuote))
+  return parts[3] === undefined ? text : withEvidence(t, text, JSON.parse(decodeURIComponent(parts[3])))
 }
 
 /**
@@ -187,7 +276,7 @@ export async function translationCitation(t: Translate, body: string): Promise<s
   const parts = body.split(':')
   const [rawKey, rawTitle, rawQuote, rawTranslated] = parts
   if (
-    parts.length !== 4
+    (parts.length !== 4 && parts.length !== 5)
     || rawKey === undefined
     || rawTitle === undefined
     || rawQuote === undefined
@@ -195,10 +284,11 @@ export async function translationCitation(t: Translate, body: string): Promise<s
   ) {
     throw new Error(`无法识别的 Zotero 翻译引用：${body}`)
   }
-  return translationText(t, {
+  const text = translationText(t, {
     key: decodeRefPart('翻译', rawKey),
     title: decodeRefPart('翻译', rawTitle),
   }, decodeRefPart('翻译', rawQuote), decodeRefPart('翻译', rawTranslated))
+  return parts[4] === undefined ? text : withEvidence(t, text, JSON.parse(decodeURIComponent(parts[4])))
 }
 
 /**
@@ -209,17 +299,18 @@ export async function translationCitation(t: Translate, body: string): Promise<s
  */
 export async function shotCitation(t: Translate, body: string): Promise<string> {
   const parts = body.split(':')
-  if (parts.length !== 7 || parts.some((part) => part === undefined)) {
+  if ((parts.length !== 7 && parts.length !== 8) || parts.some((part) => part === undefined)) {
     throw new Error(`无法识别的 Zotero 截图引用：${body}`)
   }
-  const [key, title, byline, pages, section, digest, shotId] = parts.map(
+  const [key, title, byline, pages, section, digest, shotId, evidence] = parts.map(
     (part) => decodeRefPart('截图', part ?? ''),
   )
   const meta: ShotMeta = {
     key: key ?? '', title: title ?? '', byline: byline ?? '', pages: pages ?? '',
     section: section ?? '', digest: digest ?? '', shotId: shotId ?? '',
   }
-  return shotText(t, meta)
+  const text = shotText(t, meta)
+  return evidence === undefined ? text : withEvidence(t, text, JSON.parse(evidence))
 }
 
 /** 解码 ref 里的一段；坏转义会抛 URIError，换成带来源的可辨认错误。 */

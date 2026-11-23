@@ -26,6 +26,7 @@ import type { InputActions } from './inline'
 import { ensureItemTitle, rememberItemTitle, useItemTitle } from './itemTitles'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore } from './paneStore'
+import { EVIDENCE_LINK_PREFIX, evidenceFromHref, type EvidenceTarget } from './evidence'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { SettingsNavIcon } from './SettingsNavIcon'
 import { installTheme } from './styles'
@@ -192,6 +193,30 @@ export function apply(ctx: ClientContext): void {
     )
   }
 
+  function openEvidence(target: EvidenceTarget): void {
+    ctx.sidebarRight.openResource(`${ITEM_ADDRESS_PREFIX}${target.key}`, { params: { evidence: target } })
+  }
+
+  // The host Markdown renderer accepts absolute HTTP(S) links. Handle this reserved
+  // address before its normal browser or external-link delegate can run.
+  ctx.effect(() => {
+    function onEvidenceClick(event: MouseEvent): void {
+      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null
+      const href = anchor?.getAttribute('href') ?? ''
+      if (!href.startsWith(EVIDENCE_LINK_PREFIX)) return
+      event.preventDefault()
+      event.stopPropagation()
+      const target = evidenceFromHref(href)
+      if (target !== null) openEvidence(target)
+    }
+    document.addEventListener('click', onEvidenceClick, true)
+    document.addEventListener('auxclick', onEvidenceClick, true)
+    return () => {
+      document.removeEventListener('click', onEvidenceClick, true)
+      document.removeEventListener('auxclick', onEvidenceClick, true)
+    }
+  }, 'dsh-plugin-zotero: open evidence')
+
   // 引用 chip 的展开器：面板插的 chip 只带 key，提交时由这个 codec 现取文本。
   ctx.effect(
     () => ctx.inputTriggers.registerSource(createZoteroSource(t)),
@@ -206,7 +231,7 @@ export function apply(ctx: ClientContext): void {
       () => scope.uiConversation.userText.register(zoteroHistoryRule),
       'dsh-plugin-zotero: history rule',
     )
-    const RefBody = createHistoryRefNode(t, openItem)
+    const RefBody = createHistoryRefNode(t, openItem, openEvidence)
     scope.effect(
       () => scope.slots.inject('conversation.user.text.node', () =>
         scope.slots.register(

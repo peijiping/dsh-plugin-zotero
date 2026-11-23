@@ -8,6 +8,7 @@
 
 import type { ComponentType, MutableRefObject } from 'react'
 
+import type { EvidenceLocation, EvidenceTarget } from '../evidence'
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import type { Translate } from '../locales'
 import type { CaptureAdapter, CaptureKind } from './shot/types'
@@ -60,6 +61,7 @@ export type OutlineTarget =
 export interface ViewerHandle {
   /** 滚动到指定标注；未就绪或标注无位置时返回 false。 */
   locate(annotationKey: string): boolean
+  goToEvidence?(target: EvidenceTarget): boolean
   currentPage(): number
   /** 跳到指定页（1 基）。不支持分页的渲染器是空实现。 */
   goToPage(page: number): void
@@ -100,9 +102,9 @@ export interface DocumentRendererProps {
   onReady(): void
   onZoomChange(state: ZoomState): void
   onPageChange(page: number, total: number): void
-  onInsertExcerpt(quote: string): void
+  onInsertExcerpt(quote: string, location?: EvidenceLocation): void
   /** 划词翻译的「加入对话」：原文与译文一起成一条 chip。 */
-  onInsertTranslation(quote: string, translated: string): void
+  onInsertTranslation(quote: string, translated: string, location?: EvidenceLocation): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   /**

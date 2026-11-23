@@ -18,6 +18,8 @@ import { useState, type CSSProperties } from 'react'
 import { HoverCard, Modal, ReferenceChip } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { Translate } from './locales'
+import { evidenceDisplayText, evidenceIn, type EvidenceTarget } from './evidence'
+import { tpl } from './locales'
 import { itemKeyOf } from './historyRefKey'
 import { CITATION_CLOSE, CITATION_OPEN } from './reference'
 import { Button } from './ui'
@@ -121,14 +123,30 @@ const HOVER_BODY_STYLE: CSSProperties = {
 const OPEN_BUTTON_STYLE: CSSProperties = { marginTop: 8 }
 
 /** 生成历史节点渲染器：`t` 与 `openItem` 在 apply 时绑定，组件只拿席位下发的 prop。 */
-export function createHistoryRefNode(t: Translate, onOpenItem: (key: string) => void) {
+export function createHistoryRefNode(
+  t: Translate,
+  onOpenItem: (key: string) => void,
+  onOpenEvidence: (evidence: EvidenceTarget) => void,
+) {
   return function ZoteroHistoryRef({ node, raw, interactive }: HistoryRefNodeProps) {
     const [open, setOpen] = useState(false)
     const label = node.data.label ?? chipLabel(citationBody(raw))
     const body = citationBody(raw)
     const itemKey = itemKeyOf(body)
+    const evidence = evidenceIn(body)
+    const displayText = evidenceDisplayText(body)
     // 点击胶囊原有的「看完整引用」行为不抢；回溯入口放在悬停卡片与 Modal 里。
-    const openOriginal = itemKey === null ? null : (
+    const openOriginal = evidence.length > 0 ? evidence.map((target) => (
+      <Button
+        key={target.id}
+        variant="outline"
+        size="sm"
+        style={OPEN_BUTTON_STYLE}
+        onClick={() => { setOpen(false); onOpenEvidence(target) }}
+      >
+        {tpl(t('evidence.open'), { id: target.id })}
+      </Button>
+    )) : itemKey === null ? null : (
       <Button
         variant="outline"
         size="sm"
@@ -155,7 +173,7 @@ export function createHistoryRefNode(t: Translate, onOpenItem: (key: string) => 
           )}
           content={(
             <div style={HOVER_CARD_STYLE}>
-              <div style={HOVER_BODY_STYLE}>{body}</div>
+              <div style={HOVER_BODY_STYLE}>{displayText}</div>
               {openOriginal}
             </div>
           )}
@@ -167,7 +185,7 @@ export function createHistoryRefNode(t: Translate, onOpenItem: (key: string) => 
             title={t('history.title')}
             closeLabel={t('action.close')}
           >
-            <pre style={MODAL_BODY_STYLE}>{body}</pre>
+            <pre style={MODAL_BODY_STYLE}>{displayText}</pre>
             {openOriginal}
           </Modal>
         )}

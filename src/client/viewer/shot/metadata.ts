@@ -170,12 +170,23 @@ export function buildShotMeta({
     ? [bibliographic, extra].filter((part) => part !== '').join(' · ')
     : identityFallback(detail, source, typeLabel)
 
+  const firstPage = frame.pages.filter((page) => intersects(page.rect, rect))
+    .sort((a, b) => a.pageNumber - b.pageNumber)[0]
+  const section = nearestSection(frame, rect, outline)
+  const anchors = outline?.filter((item) => item.title.trim() === section) ?? []
+  const target = anchors.length === 1 ? anchors[0]?.target : null
   return {
     key: detail.key,
+    location: {
+      attachmentKey: source?.attachmentKey,
+      page: firstPage?.pageNumber,
+      pageLabel: firstPage?.label || undefined,
+      anchor: target?.kind === 'anchor' ? target.id : undefined,
+    },
     title: clipForRef(detail.title, SHOT_PART_LIMITS.title),
     byline: clipForRef(byline, SHOT_PART_LIMITS.byline),
     pages: clipForRef(pageRange(frame, rect), SHOT_PART_LIMITS.pages),
-    section: clipForRef(nearestSection(frame, rect, outline), SHOT_PART_LIMITS.section),
+    section: clipForRef(section, SHOT_PART_LIMITS.section),
     digest: clipForRef(regionDigest(frame, rect), SHOT_PART_LIMITS.digest),
     shotId: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
   }

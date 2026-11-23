@@ -7,6 +7,7 @@
 
 import { useCallback, useRef, useState, type MutableRefObject, type ReactElement } from 'react'
 
+import type { EvidenceLocation } from '../evidence'
 import type { ZoteroAnnotation, ZoteroItemDetail } from '../../zotero/types'
 import { tpl, type Translate } from '../locales'
 import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from '../styles'
@@ -24,8 +25,8 @@ interface Props {
   annotations: ZoteroAnnotation[]
   viewerRef: MutableRefObject<ViewerHandle | null>
   onReady(): void
-  onInsertExcerpt(quote: string): void
-  onInsertTranslation(quote: string, translated: string): void
+  onInsertExcerpt(quote: string, location?: EvidenceLocation): void
+  onInsertTranslation(quote: string, translated: string, location?: EvidenceLocation): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onOpenInZotero(page: number): void
   onChanged(): void

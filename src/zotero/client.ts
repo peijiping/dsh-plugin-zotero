@@ -13,6 +13,7 @@
  * - `?include=bib` 会让响应**丢掉 `data`**，因此条目详情与 bib 必须分两次请求。
  */
 
+import { createHash } from 'node:crypto'
 import { open, stat } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
@@ -1439,6 +1440,7 @@ export async function getItemFulltext(attachmentKey: string): Promise<ZoteroFull
   const truncated = content.length > maxChars
   return {
     attachmentKey,
+    revision: createHash('sha256').update(String(maxChars)).update(':').update(content).digest('hex'),
     content: truncated ? content.slice(0, maxChars) : content,
     truncated,
     // 截断前长度：展开文本与面板据此说明「缺了多少」，而不是只丢一句「已截断」。

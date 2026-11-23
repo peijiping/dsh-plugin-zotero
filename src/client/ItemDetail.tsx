@@ -9,11 +9,13 @@
  * 等渲染器就绪后再滚动并闪烁。
  */
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
-import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
-import { fileUrl, openInZotero, snapshotUrl } from './api'
+import type { ZoteroAnnotation, ZoteroFulltext, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
+import { fetchFulltext, fileUrl, openInZotero, snapshotUrl } from './api'
 import { isLocatable, type AnnotationFilter } from './annotationRuns'
+import type { EvidenceLocation, EvidenceTarget } from './evidence'
+import type { AttachmentCitation } from './cite'
 import { InfoPanel } from './InfoPanel'
 import { itemTypeLabel } from './itemType'
 import type { InsertOutcome } from './inline'
@@ -39,14 +41,15 @@ import {
 interface Props {
   t: Translate
   detail: ZoteroItemDetail
+  evidence?: EvidenceTarget
   /** 左上角「加入对话」：普通条目插元数据，独立笔记插笔记正文（见 `useInsertion`）。 */
   onInsertItem(): void
   /** 插入全文选区摘录。 */
-  onInsertExcerpt(quote: string): void
+  onInsertExcerpt(quote: string, location?: EvidenceLocation): void
   /** 插入全文（range 表达式 + 人读范围标注由选择器产出）。 */
-  onInsertFulltext(range: string, scope: string): void
+  onInsertFulltext(source: AttachmentCitation, scope: string): void
   /** 插入一段划词翻译（原文 + 译文）。 */
-  onInsertTranslation(quote: string, translated: string): void
+  onInsertTranslation(quote: string, translated: string, location?: EvidenceLocation): void
   /** 插一条标注的引用 chip（chip 里是原文摘要，提交时展开为完整引用文本）。 */
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   /** 插一条笔记的引用 chip（提交时展开为笔记正文）。 */
@@ -115,7 +118,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   return source
 }
 
-export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh, onInsertShot }: Props): ReactElement {
+export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh, onInsertShot }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
@@ -147,6 +150,8 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertF
   const handleRowWidth = useCallback((width: number): void => {
     setTopbarPad(Math.ceil(width) + 42)
   }, [])
+  const [readyDocumentKey, setReadyDocumentKey] = useState('')
+  const handledEvidence = useRef<EvidenceTarget>()
   const pendingLocate = useRef<string | null>(null)
   const locateTimer = useRef<number | null>(null)
 
@@ -192,6 +197,32 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertF
             url: '',
           }
         : null
+
+  const attachmentKey = source?.attachmentKey
+  const fromDetail = detail.fulltext?.attachmentKey === attachmentKey ? detail.fulltext : null
+  const [index, setIndex] = useState<{
+    key: string; owner: ZoteroItemDetail; data: ZoteroFulltext | null; failed: boolean
+  } | null>(null)
+  useEffect(() => {
+    if (attachmentKey === undefined || fromDetail?.revision !== undefined) return
+    const controller = new AbortController()
+    fetchFulltext(attachmentKey, controller.signal).then((data) => {
+      if (!controller.signal.aborted) setIndex({ key: attachmentKey, owner: detail, data, failed: false })
+    }).catch(() => {
+      if (!controller.signal.aborted) setIndex({ key: attachmentKey, owner: detail, data: null, failed: true })
+    })
+    return () => controller.abort()
+  }, [attachmentKey, fromDetail, detail])
+  const currentIndex = index !== null && index.key === attachmentKey && index.owner === detail ? index : null
+  const fulltext = fromDetail?.revision !== undefined ? fromDetail : currentIndex?.data ?? fromDetail
+  const readingDetail = useMemo(
+    () => detail.fulltext === fulltext ? detail : { ...detail, fulltext },
+    [detail, fulltext],
+  )
+  const fulltextUnavailable = fulltext?.revision !== undefined ? ''
+    : currentIndex?.failed ? t('fulltext.loadFailed')
+    : attachmentKey !== undefined && currentIndex === null ? t('status.loading')
+    : t('fulltext.noIndex')
 
   /** 收起信息浮层；`InfoPanel` 内部再用 `useDismiss` 接管「点浮层外 / Esc」。 */
   const closeInfo = useCallback((): void => setInfoOpen(false), [])
@@ -274,11 +305,54 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertF
   }, [])
 
   const onReady = useCallback((): void => {
+    setReadyDocumentKey(documentKey)
     const key = pendingLocate.current
     if (key === null) return
     pendingLocate.current = null
     flushPendingLocate(key, 0)
-  }, [flushPendingLocate])
+  }, [documentKey, flushPendingLocate])
+
+  useEffect(() => {
+    if (evidence === undefined || handledEvidence.current === evidence) return
+    const targetAttachment = evidence.attachmentKey
+    if (targetAttachment !== undefined && !attachments.some((item) => item.key === targetAttachment)) {
+      handledEvidence.current = evidence
+      showToast(t('evidence.fallback'))
+      return
+    }
+    if (targetAttachment !== undefined && attachmentKey !== targetAttachment) {
+      setReadyDocumentKey('')
+      setSelectedKey(targetAttachment)
+      return
+    }
+    const hasPosition = evidence.annotationKey !== undefined || evidence.page !== undefined
+      || evidence.anchor !== undefined || (evidence.quote !== undefined && renderer.id !== 'pdf')
+    if (!hasPosition) {
+      handledEvidence.current = evidence
+      return
+    }
+    if (readyDocumentKey !== documentKey) return
+    let timer: number | undefined
+    let attempts = 0
+    function locate(): void {
+      const viewer = viewerRef.current
+      if (viewer !== null && evidence !== undefined) {
+        const annotated = renderer.id !== 'snapshot' && evidence.annotationKey !== undefined
+          && viewer.locate(evidence.annotationKey)
+        if (annotated || viewer.goToEvidence?.(evidence) === true) {
+          handledEvidence.current = evidence
+          return
+        }
+      }
+      if (++attempts < 30) timer = window.setTimeout(locate, 100)
+      else {
+        handledEvidence.current = evidence
+        showToast(t('evidence.fallback'))
+      }
+    }
+    locate()
+    return () => window.clearTimeout(timer)
+  }, [evidence, attachmentKey, attachments, readyDocumentKey, documentKey, renderer.id, t])
 
   function locateAnnotation(annotation: ZoteroAnnotation): void {
     setInfoOpen(false)
@@ -334,13 +408,13 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertF
     <div style={{ ...rootStyle, '--dsh-zp-topbar-pad': `${topbarPad}px` } as CSSProperties}>
       <DocumentView
         t={t}
-        detail={detail}
+        detail={readingDetail}
         source={source}
         annotations={detail.annotations}
         viewerRef={viewerRef}
         onReady={onReady}
-        onInsertExcerpt={onInsertExcerpt}
-        onInsertTranslation={onInsertTranslation}
+        onInsertExcerpt={(quote, location) => onInsertExcerpt(quote, { attachmentKey, ...location })}
+        onInsertTranslation={(quote, translated, location) => onInsertTranslation(quote, translated, { attachmentKey, ...location })}
         onInsertAnnotation={onInsertAnnotation}
         onOpenInZotero={openInZoteroAt}
         onChanged={onChanged}
@@ -379,7 +453,9 @@ export function ItemDetail({ t, detail, onInsertItem, onInsertExcerpt, onInsertF
       )}
       <InfoPanel
         t={t}
-        detail={detail}
+        detail={readingDetail}
+        attachmentTitle={source?.title || attachment?.filename || attachmentKey || ''}
+        fulltextUnavailable={fulltextUnavailable}
         currentAttachmentKey={source?.attachmentKey ?? null}
         open={infoOpen}
         onToggle={() => {

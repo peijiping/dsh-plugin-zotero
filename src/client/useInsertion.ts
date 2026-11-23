@@ -18,6 +18,8 @@ import {
 } from './compose'
 import type { InputActions, InsertOutcome } from './inline'
 import type { Translate } from './locales'
+import type { EvidenceLocation } from './evidence'
+import type { AttachmentCitation } from './cite'
 import { tpl } from './locales'
 import { showToast } from './paneStore'
 import type { ReferenceInsert, SessionsFace } from './reference'
@@ -25,7 +27,7 @@ import {
   annotationReference,
   collectionReference,
   excerptReference,
-  fulltextReference,
+  attachmentFulltextReference,
   insertChip,
   MAX_EXCERPT_CHARS,
   MAX_TAG_REFERENCE,
@@ -40,20 +42,20 @@ import type { ShotMeta } from './viewer/shot/types'
 
 export interface InsertionActions {
   report(outcome: InsertOutcome): void
-  insertReference(reference: ReferenceInsert): void
+  insertReference(reference: ReferenceInsert): boolean
   /** 条目 / 独立笔记共用：按 `itemType` 决定插元数据引用还是笔记正文引用。 */
   insertItem(key: string, title: string, itemType?: string): void
   /** 一段划选摘录：插一枚自带原文的 chip，不再是灌进草稿的一大段纯文本。 */
-  insertExcerpt(target: ZoteroItemDetail, quote: string): void
+  insertExcerpt(target: ZoteroItemDetail, quote: string, location?: EvidenceLocation): void
   /**
    * 一段全文：插一枚 `full:` chip，ref 只存 key + 范围表达式，正文提交时现取。
    *
    * `range` 由范围选择器产出（`all` / `c:` / `o:` / `h:` / `p:` 之一），
    * `scope` 是人读的范围标注，用作胶囊标签。
    */
-  insertFulltext(target: ZoteroItemDetail, range: string, scope: string): void
+  insertFulltext(source: AttachmentCitation, scope: string): void
   /** 一段划词翻译：原文与译文一起定格进 chip，提交时展开成对照文本。 */
-  insertTranslation(target: ZoteroItemDetail, quote: string, translated: string): void
+  insertTranslation(target: ZoteroItemDetail, quote: string, translated: string, location?: EvidenceLocation): void
   insertAnnotation(target: ZoteroItemDetail, annotation: ZoteroAnnotation): void
   insertNote(target: ZoteroItemDetail, note: ZoteroNote): void
   insertCollection(collection: ZoteroCollection): void
@@ -106,12 +108,14 @@ export function useInsertion(
   }, [t])
 
   /** 插一个引用 chip：草稿里只留 key，完整文本在提交那一刻由引用源的 codec 现取。 */
-  const insertReference = useCallback((reference: ReferenceInsert): void => {
+  const insertReference = useCallback((reference: ReferenceInsert): boolean => {
     if (!inputActions) {
       report('no-editor')
-      return
+      return false
     }
-    report(insertChip(sessions, sessionId, reference, inputActions.captureInsertion()) ? 'inserted' : 'draft-changed')
+    const inserted = insertChip(sessions, sessionId, reference, inputActions.captureInsertion())
+    report(inserted ? 'inserted' : 'draft-changed')
+    return inserted
   }, [inputActions, report, sessionId, sessions])
 
   const insertItem = useCallback((key: string, title: string, itemType?: string): void => {
@@ -148,7 +152,7 @@ export function useInsertion(
       : tpl(t('error.partialInsert'), { n: inserted }))
   }, [inputActions, report, sessionId, sessions, t])
 
-  const insertExcerpt = useCallback((target: ZoteroItemDetail, quote: string): void => {
+  const insertExcerpt = useCallback((target: ZoteroItemDetail, quote: string, location?: EvidenceLocation): void => {
     if (quote.trim() === '') {
       showToast(t('error.empty'))
       return
@@ -162,11 +166,12 @@ export function useInsertion(
       target.title,
       quote,
       excerptChipLabel(t, quote),
+      location,
     ))
   }, [insertReference, t])
 
-  const insertFulltext = useCallback((target: ZoteroItemDetail, range: string, scope: string): void => {
-    insertReference(fulltextReference(target.key, target.title, range, fulltextChipLabel(t, scope)))
+  const insertFulltext = useCallback((source: AttachmentCitation, scope: string): void => {
+    insertReference(attachmentFulltextReference(source, fulltextChipLabel(t, `${scope} · ${source.attachmentTitle}`)))
   }, [insertReference, t])
 
   /**
@@ -178,6 +183,7 @@ export function useInsertion(
     target: ZoteroItemDetail,
     quote: string,
     translated: string,
+    location?: EvidenceLocation,
   ): void => {
     if (quote.trim() === '' || translated.trim() === '') {
       showToast(t('error.empty'))
@@ -193,6 +199,7 @@ export function useInsertion(
       quote,
       translated,
       translationChipLabel(t, translated),
+      location,
     ))
   }, [insertReference, t])
 
@@ -200,7 +207,13 @@ export function useInsertion(
     target: ZoteroItemDetail,
     annotation: ZoteroAnnotation,
   ): void => {
-    insertReference(annotationReference(target.key, annotation.key, annotationChipLabel(t, annotation)))
+    insertReference(annotationReference(target.key, annotation.key, annotationChipLabel(t, annotation), {
+      attachmentKey: annotation.attachmentKey,
+      page: annotation.position === null ? undefined : annotation.position.pageIndex + 1,
+      pageLabel: annotation.pageLabel || undefined,
+      quote: annotation.text.slice(0, 240) || undefined,
+      snapshot: annotation.webPosition ?? undefined,
+    }))
   }, [insertReference, t])
 
   const insertNote = useCallback((target: ZoteroItemDetail, note: ZoteroNote): void => {

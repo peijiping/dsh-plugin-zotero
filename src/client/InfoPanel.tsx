@@ -26,6 +26,8 @@ import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/t
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
 import { useDismiss } from './dismiss'
+import { makeEvidence } from './evidence'
+import type { AttachmentCitation } from './cite'
 import { FulltextScope, type FulltextMode } from './fulltextScope'
 import { InsertMenu } from './InsertMenu'
 import type { DocumentOutlineItem } from './viewer/types'
@@ -47,6 +49,8 @@ interface Props {
   detail: ZoteroItemDetail
   /** 当前正文展示的附件；附件块据此打勾。 */
   currentAttachmentKey: string | null
+  attachmentTitle: string
+  fulltextUnavailable: string
   open: boolean
   onToggle(): void
   onClose(): void
@@ -54,7 +58,7 @@ interface Props {
   /** 目录浮层那份章节列表：全文选择器复用它做「按章节」范围。 */
   outline: DocumentOutlineItem[] | null
   /** 确认插入全文（range 表达式 + 人读范围标注由选择器产出）。 */
-  onInsertFulltext(range: string, scope: string): void
+  onInsertFulltext(source: AttachmentCitation, scope: string): void
   onSelectAttachment(key: string): void
   onLocateAnnotation(annotation: ZoteroAnnotation): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
@@ -111,6 +115,8 @@ export function InfoPanel({
   t,
   detail,
   currentAttachmentKey,
+  attachmentTitle,
+  fulltextUnavailable,
   open,
   onToggle,
   onClose,
@@ -137,7 +143,7 @@ export function InfoPanel({
   /** 从菜单哪一项进来：决定浮层打开时 select 预选哪种方式。 */
   const [fulltextMode, setFulltextMode] = useState<FulltextMode>('chapter')
   /** 无全文索引时按钮置灰，hover 给出原因。 */
-  const hasFulltext = detail.fulltext !== null
+  const hasFulltext = detail.fulltext?.revision !== undefined
   /** 悬浮按钮行：宽度随语言与「加入对话」文案变化，量出来给工具条让位。 */
   const rowRef = useRef<HTMLDivElement | null>(null)
   /** 各区块开合来自持久状态，不放在组件里：换条目/重开/重启都是同一份。 */
@@ -163,7 +169,7 @@ export function InfoPanel({
   useEffect(() => {
     setComposingNote(false)
     setFulltextOpen(false)
-  }, [detail.key, open])
+  }, [detail.key, open, currentAttachmentKey])
 
   // 点浮层外 / 按 Esc 收起。根节点同时包着触发按钮与浮层，点它不会被判成
   // 「外面」，交给 `onToggle` 自己开合。
@@ -191,16 +197,6 @@ export function InfoPanel({
     onClose()
     setFulltextMode(mode)
     setFulltextOpen(true)
-  }
-
-  /**
-   * 整篇全文直插：菜单项点下去就完成，不弹浮层。
-   *
-   * range 表达式与浮层确认走同一套（`all|<scope>`），codec 一行都不用改。
-   */
-  function insertWholeFulltext(): void {
-    const scope = t('fulltext.scope.all')
-    onInsertFulltext(`all|${encodeURIComponent(scope)}`, scope)
   }
 
   /** 菜单展开时收起信息浮层：下拉要压在浮层上面，两者同开必然互相挡。 */
@@ -264,12 +260,13 @@ export function InfoPanel({
           t={t}
           selfNote={selfNote}
           hasFulltext={hasFulltext}
+          fulltextUnavailable={fulltextUnavailable}
           fulltextChars={detail.fulltext?.content.length ?? 0}
           fulltextTruncated={detail.fulltext?.truncated === true}
           fulltextTokens={fulltextTokens}
           chapterCount={outline === null ? null : outline.length}
           onCite={onCite}
-          onInsertWhole={insertWholeFulltext}
+          onInsertWhole={() => openFulltext('all')}
           onPickChapters={() => openFulltext('chapter')}
           onPickRanges={() => openFulltext('chars')}
           onScreenshot={onScreenshot}
@@ -444,15 +441,32 @@ export function InfoPanel({
 
       <FulltextScope
         t={t}
-        open={fulltextOpen}
+        open={fulltextOpen && hasFulltext}
+        attachmentTitle={attachmentTitle}
         detail={detail}
         outline={outline}
         anchorRef={rootRef}
         triggerRef={insertTriggerRef}
         initialMode={fulltextMode}
         onClose={() => setFulltextOpen(false)}
-        onConfirm={(range, scope) => {
-          onInsertFulltext(range, scope)
+        onConfirm={(range, scope, quote, target) => {
+          const fulltext = detail.fulltext
+          if (fulltext?.revision === undefined || fulltext.attachmentKey !== currentAttachmentKey) return
+          onInsertFulltext({
+            key: detail.key,
+            title: detail.title,
+            attachmentKey: fulltext.attachmentKey,
+            attachmentTitle,
+            revision: fulltext.revision,
+            evidence: makeEvidence(detail.key, {
+              attachmentKey: fulltext.attachmentKey,
+              page: target?.kind === 'page' ? target.page : undefined,
+              chapterStart: target?.kind === 'page' || undefined,
+              anchor: target?.kind === 'anchor' ? target.id : undefined,
+              quote: quote || undefined,
+            }),
+            range,
+          }, scope)
           setFulltextOpen(false)
         }}
       />

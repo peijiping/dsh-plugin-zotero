@@ -68,6 +68,7 @@ interface Props {
    */
   selfNote: boolean
   hasFulltext: boolean
+  fulltextUnavailable: string
   /** 实际能取到的正文字数（被截断时就是上限值），显示在「整篇全文」右边。 */
   fulltextChars: number
   /**
@@ -109,6 +110,7 @@ export function InsertMenu({
   t,
   selfNote,
   hasFulltext,
+  fulltextUnavailable,
   fulltextChars,
   fulltextTruncated,
   fulltextTokens,
@@ -316,7 +318,7 @@ export function InsertMenu({
                 label={t('insert.menu.whole')}
                 hint={wholeCharsHint}
                 hintNote={wholeTokensHint}
-                tip={fulltextDisabled ? t('detail.noFulltext') : t('insert.tip.whole')}
+                tip={fulltextDisabled ? fulltextUnavailable : t('insert.tip.whole')}
                 tipNote={fulltextDisabled ? undefined : t('fulltext.tokenHint')}
                 disabled={fulltextDisabled}
                 onTip={showTip}
@@ -327,7 +329,7 @@ export function InsertMenu({
                 label={t('insert.menu.chapters')}
                 hint={chapterCount !== null && chapterCount > 0 ? tpl(t('insert.menu.sections'), { n: chapterCount }) : undefined}
                 tip={fulltextDisabled
-                  ? t('detail.noFulltext')
+                  ? fulltextUnavailable
                   : chaptersUnavailable
                     ? t('insert.menu.noChapters')
                     : t('insert.tip.chapters')}
@@ -338,7 +340,7 @@ export function InsertMenu({
               <MenuItem
                 icon={<RangeIcon />}
                 label={t('insert.menu.ranges')}
-                tip={fulltextDisabled ? t('detail.noFulltext') : t('insert.tip.ranges')}
+                tip={fulltextDisabled ? fulltextUnavailable : t('insert.tip.ranges')}
                 disabled={fulltextDisabled}
                 onTip={showTip}
                 onSelect={run(onPickRanges)}

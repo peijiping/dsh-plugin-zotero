@@ -331,6 +331,11 @@ async function handleItem(res: ServerResponse, params: URLSearchParams): Promise
   ok(res, data)
 }
 
+async function handleFulltext(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const key = requireKey({ key: params.get('key') }, 'key')
+  ok(res, await zotero.getItemFulltext(key))
+}
+
 async function handleCollectionBib(res: ServerResponse, params: URLSearchParams): Promise<void> {
   const key = params.get('key')
   if (!key) {
@@ -885,6 +890,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['tag-usage', 'GET'],
   ['item', 'GET'],
   ['collection-bib', 'GET'],
+  ['fulltext', 'GET'],
   ['file', 'GET'],
   ['attachment-info', 'GET'],
   ['mcp-tools', 'GET'],
@@ -956,6 +962,9 @@ export function createHandler(
           return
         case 'item':
           await handleItem(res, url.searchParams)
+          return
+        case 'fulltext':
+          await handleFulltext(res, url.searchParams)
           return
         case 'collection-bib':
           await handleCollectionBib(res, url.searchParams)

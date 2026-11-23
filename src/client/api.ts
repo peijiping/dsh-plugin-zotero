@@ -10,6 +10,7 @@ import type {
   ZoteroAnnotationPatch,
   ZoteroAttachmentInfo,
   ZoteroAuthResult,
+  ZoteroFulltext,
   ZoteroHealth,
   ZoteroItemDetail,
   ZoteroItemScope,
@@ -163,6 +164,10 @@ export function fetchTagUsage(
 
 export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Promise<ZoteroItemDetail> {
   return get<ZoteroItemDetail>('item', { key, style }, signal)
+}
+
+export function fetchFulltext(key: string, signal?: AbortSignal): Promise<ZoteroFulltext | null> {
+  return get<ZoteroFulltext | null>('fulltext', { key }, signal)
 }
 
 /** 附件文件地址；直接交给 PDF.js / Word 渲染器按 Range 取流。 */

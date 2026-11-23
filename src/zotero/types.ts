@@ -312,6 +312,8 @@ export interface ZoteroItemDetail {
 /** 附件全文（仅附件条目可取）。 */
 export interface ZoteroFulltext {
   attachmentKey: string
+  /** Identity of the indexed text and the applied length limit. */
+  revision?: string
   content: string
   truncated: boolean
   /**

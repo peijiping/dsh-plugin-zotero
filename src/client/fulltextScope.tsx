@@ -1,31 +1,9 @@
-/**
- * 「加入全文」的范围选择器浮层。
- *
- * 三种方式收在一枚「方式」下拉里：章节（默认、置顶推荐）/ 字符区间 / 标题区间。
- * 曾经是「按章节 / 更多方式」两个胶囊 + 三个单选框——五个控件才定得下一个范围，
- * 其中「更多方式」还只是一层展开。现在选完方式，下方直接换对应的输入区。
- * 章节列表直接复用目录浮层的 `outlineItems`（PDF 书签 / 快照网页标题 / 笔记标题 /
- * 纯文本标题），用户在目录里看到什么这里就是什么——绝不自己用
- * `parseMarkdownHeadings()` 造一套对 PDF 无效的假章节。
- *
- * 「整篇」不在这里：插入菜单里点一下就直接插了，浮层再留一份只是同一件事的第二个
- * 入口，还会让人以为「整篇」也得走一遍范围确认。这里只处理需要细选的范围。
- *
- * 底部两行：第一行是「已选多少字 / 原文共多少字」，第二行是这段范围的 token 粗估。
- * 整篇的 token 仍在插入菜单那一行（整篇不进浮层，成本提示得在点之前看见）；这里报的
- * 是**当前所选范围**的成本——选区间时字数不足以判断要吃掉多少上下文。
- *
- * 章节 → 范围表达式的换算在 `fulltextPlan.ts`（纯函数，可单独按文档类型验），
- * 这里只负责选择与展示。
- *
- * 浮层复用 `useFloatingBox`（persist:false，面板级、不写 view-state）+ `useDismiss`，
- * 根节点挂 `WINDOW_DRAG_EXCLUDE`（box.panelProps），避免拖浮层变成拖整个窗口。
- */
+/** 当前附件的范围选择、实际发送正文预览与用量提示。 */
 
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import type { ZoteroItemDetail } from '../zotero/types'
-import type { DocumentOutlineItem } from './viewer/types'
+import type { DocumentOutlineItem, OutlineTarget } from './viewer/types'
 import { parseMarkdownHeadings } from './viewer/outline'
 import { useDismiss } from './dismiss'
 import { useFloatingBox } from './floatingBox'
@@ -42,19 +20,20 @@ interface Props {
   detail: ZoteroItemDetail
   /** 目录浮层那份章节列表（按当前文档归属；null = 还没解析出来）。 */
   outline: DocumentOutlineItem[] | null
+  attachmentTitle: string
   /** 几何测量基准：覆盖阅读区的透明容器（InfoPanel 的 rootRef）。 */
   anchorRef: { readonly current: HTMLElement | null }
   /** 触发按钮：算「浮层内部」，点它不被判成点外面而先关一次。 */
   triggerRef: { readonly current: HTMLElement | null }
   onClose(): void
   /** 确认：range 是范围表达式，scope 是人读范围标注（进 chip 标签与展开文本头部）。 */
-  onConfirm(range: string, scope: string): void
+  onConfirm(range: string, scope: string, quote: string, target?: OutlineTarget): void
   /** 从插入菜单哪一项进来：决定打开时方式下拉预选哪种（缺省按章节）。 */
   initialMode?: FulltextMode
 }
 
-/** 三种范围方式，与方式下拉的选项一一对应。整篇直插在插入菜单里，不经过本浮层。 */
-export type FulltextMode = 'chapter' | 'chars' | 'headings'
+/** 四种范围方式，与下拉选项及插入菜单一致。 */
+export type FulltextMode = 'all' | 'chapter' | 'chars' | 'headings'
 
 const PANEL_WIDTH = 380
 const PANEL_MIN_WIDTH = 300
@@ -70,7 +49,7 @@ const PANEL_MAX_HEIGHT_RATIO = 0.5
 const SCOPE_BOX_KEY = '__fulltext_scope__'
 
 export function FulltextScope({
-  t, open, detail, outline, anchorRef, triggerRef, onClose, onConfirm, initialMode,
+  t, open, detail, outline, attachmentTitle, anchorRef, triggerRef, onClose, onConfirm, initialMode,
 }: Props): ReactElement | null {
   const [mode, setMode] = useState<FulltextMode>(initialMode ?? 'chapter')
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
@@ -82,8 +61,7 @@ export function FulltextScope({
   const content = detail.fulltext?.content ?? ''
   /** 截断前的真实字数；未截断时就是正文长度。老 Host 没有该字段时退回正文长度。 */
   const totalAll = Math.max(detail.fulltext?.totalChars ?? content.length, content.length)
-  const items = outline ?? []
-  const isPdf = items.some((item) => item.target?.kind === 'page')
+  const items = useMemo(() => outline ?? [], [outline])
   /**
    * 这份文档有没有章节可挑。没有时下拉里的「按章节」置灰，且当前方式自动退到字符区间 ——
    * 否则会停在一个只剩一句「没有可解析的章节」的死路上（方式本身也选不回来）。
@@ -123,16 +101,18 @@ export function FulltextScope({
     setEnd(String(content.length))
     setFromTitle('')
     setToTitle('')
-  }, [open, detail.key, content.length, initialMode])
+  }, [open, detail.key, detail.fulltext?.revision, detail.fulltext?.attachmentKey, content.length, initialMode])
 
   // 当前模式下的范围方案与计数。
   const plan: ChapterPlan | null = useMemo(() => {
     switch (activeMode) {
+      case 'all':
+        return { range: 'all', scope: t('fulltext.scope.all'), chars: content.length, estimated: false, fallbackAll: false }
       case 'chapter':
-        return planChapters(content, items, selected, isPdf, t)
+        return planChapters(content, items, selected, t)
       case 'chars': {
-        const a = Math.max(0, Math.trunc(Number(start) || 0))
-        const b = Math.min(content.length, Math.trunc(Number(end) || 0))
+        const a = Math.min(content.length, Math.max(0, Math.trunc(Number(start) || 0)))
+        const b = Math.min(content.length, Math.max(0, Math.trunc(Number(end) || 0)))
         const lo = Math.min(a, b)
         const hi = Math.max(a, b)
         if (hi <= lo) return null
@@ -155,7 +135,7 @@ export function FulltextScope({
         }
       }
     }
-  }, [activeMode, content, items, selected, isPdf, t, start, end, fromTitle, toTitle])
+  }, [activeMode, content, items, selected, t, start, end, fromTitle, toTitle])
 
   /**
    * 真正会被插入的那段正文。
@@ -164,7 +144,7 @@ export function FulltextScope({
    * （规划阶段不知道两段标题之间多长），照那个数显示会变成「已选约 0 字」。
    */
   const slice = useMemo(() => {
-    if (plan === null) return null
+    if (plan === null || (activeMode === 'chapter' && plan.fallbackAll)) return null
     try {
       return sliceFulltext(content, plan.range)
     } catch {
@@ -172,8 +152,8 @@ export function FulltextScope({
       // 渲染崩掉——退回 plan 给的估算字数。
       return null
     }
-  }, [content, plan])
-  const chars = slice === null ? plan?.chars ?? 0 : slice.text.length
+  }, [activeMode, content, plan])
+  const chars = slice?.text.length ?? 0
 
   /**
    * 真正占上下文的是 token，不是字数：选了 7,000 字的中文正文，等于两三万 token。
@@ -193,23 +173,26 @@ export function FulltextScope({
   }
 
   function confirm(): void {
-    if (plan === null) return
-    onConfirm(`${plan.range}|${encodeURIComponent(plan.scope)}`, plan.scope)
+    if (plan === null || !slice?.text || detail.fulltext?.revision === undefined) return
+    onConfirm(
+      `${plan.range}|${encodeURIComponent(plan.scope)}`,
+      plan.scope,
+      slice.text.trimStart().slice(0, 240),
+      plan.target,
+    )
   }
 
   if (!open || box.style === null) return null
 
-  /**
-   * `fallbackAll` 优先：章节没定位到时，用户以为拿到的是某一节，下面必须先把
-   * 「其实是全文」讲在按钮左边，按钮也改叫「插入整篇」。
-   *
-   * 那句「全文共 N 字」里的 N 是截断前的真实长度：被 `fulltextMaxBytes` 截断时，
-   * 已选与原文两个数字并排，「插的是节选」一眼可见，不必另写一句。
-   */
+  const fallbackAll = plan?.fallbackAll === true || slice?.fallbackAll === true
+  const estimated = !fallbackAll && (plan?.estimated === true || slice?.estimated === true)
+  const canConfirm = Boolean(slice?.text && detail.fulltext?.revision)
   const countLabel = plan === null
     ? t('fulltext.invalidRange')
-    : plan.fallbackAll
-      ? tpl(t('fulltext.chapterFallback'), { n: content.length.toLocaleString() })
+    : fallbackAll && activeMode === 'chapter'
+      ? t('review.chaptersUnlocated')
+      : fallbackAll
+        ? tpl(t('fulltext.chapterFallback'), { n: content.length.toLocaleString() })
       : tpl(t('fulltext.charCount'), { n: chars.toLocaleString(), total: totalAll.toLocaleString() })
 
   return (
@@ -231,6 +214,12 @@ export function FulltextScope({
         方式：原来「按章节 / 更多方式」两个胶囊加三个单选框，五个控件才定得下一个范围；
         现在一枚原生下拉，选完下方直接换对应区域，确认仍是一步。
       */}
+      <p style={{ margin: '0 0 6px' }}>{tpl(t('fulltext.attachment'), { name: attachmentTitle })}</p>
+      {detail.fulltext?.truncated && (
+        <p style={{ margin: '0 0 6px', color: '#d29922' }}>
+          {tpl(t('fulltext.indexTruncated'), { shown: content.length.toLocaleString(), total: totalAll.toLocaleString() })}
+        </p>
+      )}
       <div style={modeRowStyle}>
         <span style={modeLabelStyle}>{t('fulltext.mode.label')}</span>
         <select
@@ -239,6 +228,7 @@ export function FulltextScope({
           aria-label={t('fulltext.mode.label')}
           style={selectStyle}
         >
+          <option value="all">{t('fulltext.scope.all')}</option>
           {/* 没有章节就把「按章节」置灰：原生 option 的 disabled 自带灰化，点不动也选不上。 */}
           <option value="chapter" disabled={!hasChapters}>
             {hasChapters
@@ -311,11 +301,20 @@ export function FulltextScope({
           </div>
         )}
 
+        {slice?.text && (
+          <details style={{ marginTop: 8 }}>
+            <summary>{t('fulltext.preview')}</summary>
+            <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 160, overflow: 'auto' }}>
+              {slice.text}
+            </pre>
+          </details>
+        )}
       </div>
 
       <div style={footerStyle}>
         <span style={footerTextStyle}>
           <span style={countStyle}>{countLabel}</span>
+          {estimated && !fallbackAll && <span style={countStyle}>{t('fulltext.estimateHint')}</span>}
           {tokens > 0 && (
             <span style={tokenStyle} title={t('fulltext.tokenHint')}>
               {tpl(t('fulltext.tokens'), { n: tokens.toLocaleString() })}
@@ -324,15 +323,15 @@ export function FulltextScope({
         </span>
         <button
           type="button"
-          disabled={plan === null}
+          disabled={!canConfirm}
           onClick={confirm}
           style={{
             ...SOFT_BUTTON_STYLE,
             ...confirmStyle,
-            ...(plan === null ? { opacity: 0.45, cursor: 'not-allowed' as const } : {}),
+            ...(!canConfirm ? { opacity: 0.45, cursor: 'not-allowed' as const } : {}),
           }}
         >
-          {plan?.fallbackAll === true ? t('fulltext.confirmAll') : t('fulltext.confirm')}
+          {fallbackAll && activeMode !== 'chapter' ? t('fulltext.confirmAll') : t(estimated ? 'fulltext.confirmEstimate' : 'fulltext.confirm')}
         </button>
       </div>
     </div>

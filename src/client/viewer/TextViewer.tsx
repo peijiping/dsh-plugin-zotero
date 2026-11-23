@@ -30,6 +30,7 @@ import { AnnotationCommentIcon } from './AnnotationCommentIcon'
 import { OUTLINE_ANCHOR_ATTR, offsetIndexAt, parseHtmlHeadings, parseMarkdownHeadings } from './outline'
 import { SelectionBar } from './SelectionBar'
 import { TranslationCard, isInsideTranslation } from './TranslationCard'
+import { revealQuote } from './evidenceSelection'
 import { useTranslation } from './useTranslation'
 import type { DocumentRendererProps, OutlineTarget } from './types'
 
@@ -145,8 +146,8 @@ export function TextViewer({
   const fulltext = detail.fulltext
 
   const marked = useMemo(
-    () => (selfNote === null ? annotations.filter((annotation) => TEXT_TYPES.has(annotation.type)) : []),
-    [annotations, selfNote],
+    () => (selfNote === null ? annotations.filter((annotation) => TEXT_TYPES.has(annotation.type) && annotation.attachmentKey === fulltext?.attachmentKey) : []),
+    [annotations, fulltext?.attachmentKey, selfNote],
   )
   const segments = useMemo(
     () => buildSegments(fulltext?.content ?? '', marked),
@@ -381,6 +382,16 @@ export function TextViewer({
 
   useImperativeHandle(viewerRef, () => ({
     locate,
+    goToEvidence: (target) => {
+      const root = contentRef.current
+      if (root !== null && target.quote && revealQuote(root, target.quote)) return true
+      if (target.anchor === undefined || root === null) return false
+      const found = noteParsed !== null
+        ? root.querySelector(`[${OUTLINE_ANCHOR_ATTR}="${target.anchor}"]`) !== null
+        : textNodeAtOffset(root, Number(target.anchor)) !== null
+      if (found) goToOutline({ kind: 'anchor', id: target.anchor })
+      return found
+    },
     currentPage: () => 1,
     goToPage: () => undefined,
     goToOutline,
@@ -449,7 +460,7 @@ export function TextViewer({
           text={selection.text}
           x={selection.x}
           y={selection.y}
-          onInsert={onInsertExcerpt}
+          onInsert={(text) => onInsertExcerpt(text, { quote: text.slice(0, 240) })}
           onDismiss={() => setSelection(null)}
           translate={{ onTranslate: translation.open }}
         />
@@ -467,7 +478,7 @@ export function TextViewer({
           onEngineChange={translation.setEngine}
           onClose={translation.close}
           onRetry={translation.retry}
-          onInsert={onInsertTranslation}
+          onInsert={(text, translated) => onInsertTranslation(text, translated, { quote: text.slice(0, 240) })}
         />
       )}
     </div>

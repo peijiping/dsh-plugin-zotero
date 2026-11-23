@@ -6,6 +6,8 @@
  * `CaptureAdapter` 里。这样微信式「先定格、再框选、再裁切」的交互对所有文档一致。
  */
 
+import type { EvidenceLocation } from '../../evidence'
+
 /** 相对正文容器可视区的 CSS 像素矩形（左上角为原点）。 */
 export interface ClientRect {
   left: number
@@ -105,6 +107,7 @@ export interface ShotMeta {
   digest: string
   /** 只用于文件名与日志关联，不进模型文本。 */
   shotId: string
+  location?: EvidenceLocation
 }
 
 export type ShotPhase = 'idle' | 'capturing' | 'frozen' | 'selected' | 'inserting'

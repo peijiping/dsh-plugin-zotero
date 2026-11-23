@@ -10,6 +10,8 @@
  * 点色块触发。这样快照里的脚本即使伪造消息，也最多伪造一个选区。
  */
 
+import type { EvidenceTarget } from '../evidence'
+
 export const SNAPSHOT_CHANNEL = 'dsh-zotero/snapshot'
 export const SNAPSHOT_VERSION = 1
 
@@ -27,6 +29,8 @@ export const SNAPSHOT_VERSION = 1
  * 6：`annotations` 条目带 `commented`，带评论的高亮 / 划线在起点画便签角标。
  */
 export const SNAPSHOT_BRIDGE_VERSION = 6
+/** 7：支持恢复证据选区及回报定位结果。 */
+export const SNAPSHOT_EVIDENCE_VERSION = 7
 
 /** 桥接脚本响应 `capture` 时回传的自包含页面快照。 */
 export interface SnapshotCapturePayload {
@@ -110,6 +114,7 @@ export interface SnapshotOutlineItem {
 export type SnapshotCommand =
   | { type: 'annotations'; items: SnapshotAnnotationItem[] }
   | { type: 'locate'; key: string }
+  | { type: 'locate-evidence'; target: EvidenceTarget }
   | { type: 'clear-selection' }
   | { type: 'scroll-to-outline'; id: string }
   /** 截图：把整页序列化回传（不传送位图，栅格化在父页面做）。 */
@@ -149,6 +154,7 @@ export type SnapshotEvent =
   | { type: 'outline-active'; id: string | null }
   | { type: 'applied'; total: number; resolved: number; rev: number; error?: string | null }
   | { type: 'selection'; selection: SnapshotSelection | null }
+  | { type: 'evidence-result'; id: string; ok: boolean }
   | { type: 'locate-result'; key: string; ok: boolean }
   /**
    * 点了网页里的一段高亮。`rect` 是被点元素相对 iframe 视口的矩形，父页面据此
@@ -178,6 +184,7 @@ const EVENT_TYPES = new Set([
   'applied',
   'selection',
   'locate-result',
+  'evidence-result',
   'annotation-click',
   'pointerdown',
   'open-external',

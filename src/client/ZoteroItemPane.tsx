@@ -11,6 +11,7 @@ import { Button } from './ui'
 
 import type { ZoteroItemDetail } from '../zotero/types'
 import { fetchItem } from './api'
+import type { EvidenceTarget } from './evidence'
 import type { InputActions } from './inline'
 import { rememberItemTitle } from './itemTitles'
 import { ItemDetail } from './ItemDetail'
@@ -80,6 +81,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
   const info = useTabInfo()
   const itemKey = parseItemKey(info)
   const signal = info.tab.signal
+  const evidence = (info.tab.navigation?.params as { evidence?: EvidenceTarget } | undefined)?.evidence
 
   const [detail, setDetail] = useState<ZoteroItemDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -169,10 +171,11 @@ export function ZoteroItemPane(props: Props): ReactElement {
         <ItemDetail
           t={t}
           detail={detail}
+          evidence={evidence?.key === detail.key ? evidence : undefined}
           onInsertItem={() => insertItem(detail.key, detail.title, detail.itemType)}
-          onInsertExcerpt={(quote) => insertExcerpt(detail, quote)}
-          onInsertFulltext={(range, scope) => insertFulltext(detail, range, scope)}
-          onInsertTranslation={(quote, translated) => insertTranslation(detail, quote, translated)}
+          onInsertExcerpt={(quote, location) => insertExcerpt(detail, quote, location)}
+          onInsertFulltext={insertFulltext}
+          onInsertTranslation={(quote, translated, location) => insertTranslation(detail, quote, translated, location)}
           onInsertAnnotation={(annotation) => insertAnnotation(detail, annotation)}
           onInsertNote={(note) => insertNote(detail, note)}
           onInsertShot={(png, meta) => insertShot(png, meta)}

@@ -64,10 +64,12 @@ export function fulltextText(
   detail: Pick<ZoteroItemDetail, 'key' | 'title'>,
   slice: FulltextSlice,
   fulltext: Pick<ZoteroFulltext, 'content' | 'truncated' | 'totalChars'>,
+  attachmentTitle?: string,
 ): string {
   const lines = [
     tpl(t('cmp.fulltext.header'), { title: detail.title, key: detail.key, scope: slice.scopeLabel }),
   ]
+  if (attachmentTitle) lines.push(tpl(t('fulltext.attachment'), { name: attachmentTitle }))
   if (fulltext.truncated) {
     const have = fulltext.content.length
     // 只重建 client 未重启 Host 时没有 totalChars：退化成「至少不比手上少」，不报 NaN。

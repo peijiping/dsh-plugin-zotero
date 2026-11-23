@@ -651,12 +651,12 @@
   /* Locate `text` by scanning the whole document. Used when the CSS selector
      no longer matches (snapshot JS rewrote the DOM after the annotation was
      created). Only the first hit is used; the caller flags it as uncertain. */
-  function partsByText(text) {
+  function partsByText(text, unique) {
     var query = foldText(text);
     if (query === '') return null;
     var folded = getFoldedIndex();
     var hit = folded.text.indexOf(query);
-    if (hit < 0) return null;
+    if (hit < 0 || (unique && folded.text.indexOf(query, hit + 1) >= 0)) return null;
     var index = getGlobalIndex();
     var firstNode = folded.mapNode[hit];
     var lastNode = folded.mapNode[hit + query.length - 1];
@@ -889,7 +889,7 @@
     }, FLASH_MS);
   }
 
-  function locate(key) {
+  function locate(key, quiet) {
     var selector = '[data-dsh-ann~="' + escapeIdent(key) + '"]';
     var holders;
     try {
@@ -898,8 +898,8 @@
       holders = [];
     }
     if (holders.length === 0) {
-      post({ type: 'locate-result', key: key, ok: false });
-      return;
+      if (!quiet) post({ type: 'locate-result', key: key, ok: false });
+      return false;
     }
     try {
       holders[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -907,7 +907,53 @@
       holders[0].scrollIntoView();
     }
     for (var i = 0; i < holders.length; i++) flash(holders[i]);
-    post({ type: 'locate-result', key: key, ok: true });
+    if (!quiet) post({ type: 'locate-result', key: key, ok: true });
+    return true;
+  }
+
+  function locateEvidence(target) {
+    if (!target || typeof target.id !== 'string') return;
+    if (typeof target.annotationKey === 'string' && locate(target.annotationKey, true)) {
+      post({ type: 'evidence-result', id: target.id, ok: true });
+      return;
+    }
+    var query = typeof target.quote === 'string' ? foldText(target.quote.slice(0, 240)) : '';
+    var parts = null;
+    var position = target.snapshot;
+    if (query && position && typeof position.selector === 'string' && position.selector.length <= 240
+      && Number.isSafeInteger(position.start) && Number.isSafeInteger(position.end)
+      && position.start >= 0 && position.end > position.start) {
+      try {
+        var element = document.querySelector(position.selector);
+        if (element !== null && document.body.contains(element)) {
+          var located = partsWithin(element, position.start, position.end);
+          var text = located.map(function (part) { return part.node.data.slice(part.from, part.to); }).join('');
+          if (foldText(text).startsWith(query)) parts = located;
+        }
+      } catch (error) {
+        parts = null;
+      }
+    }
+    if (parts === null && query) parts = partsByText(target.quote.slice(0, 240), true);
+    if (parts !== null && parts.length > 0) {
+      var first = parts[0];
+      var last = parts[parts.length - 1];
+      var range = document.createRange();
+      range.setStart(first.node, first.from);
+      range.setEnd(last.node, last.to);
+      var selection = window.getSelection();
+      if (selection !== null) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      first.node.parentElement.scrollIntoView({ block: 'center' });
+      post({ type: 'evidence-result', id: target.id, ok: true });
+      return;
+    }
+    var anchor = typeof target.anchor === 'string' && /^\d+$/.test(target.anchor) ? Number(target.anchor) : -1;
+    var hasAnchor = anchor >= 0 && anchor < outlineEntries.length;
+    if (hasAnchor) scrollToOutline(target.anchor);
+    post({ type: 'evidence-result', id: target.id, ok: hasAnchor && !query });
   }
 
   /* ----------------------------------------------------------- selection */
@@ -1073,6 +1119,10 @@
       locate(String(data.key || ''));
       return;
     }
+    if (data.type === 'locate-evidence') {
+      locateEvidence(data.target);
+      return;
+    }
     if (data.type === 'scroll-to-outline') {
       scrollToOutline(data.id);
       return;
@@ -1162,5 +1212,5 @@
   installStorageShim('localStorage');
   installStorageShim('sessionStorage');
 
-  post({ type: 'ready', bridge: 6 });
+  post({ type: 'ready', bridge: 7 });
 }());

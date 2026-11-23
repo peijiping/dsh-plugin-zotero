@@ -27,6 +27,7 @@ import { showToast } from '../paneStore'
 import { SOFT_BUTTON_STYLE } from '../styles'
 import { AnnotationCard, ANNOTATION_CARD_OUTER_WIDTH } from './AnnotationCard'
 import { anchorTarget, OUTLINE_MAX_DEPTH, OUTLINE_MAX_ITEMS } from './outline'
+import type { EvidenceLocation } from '../evidence'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import { createIframeAdapter } from './shot/adapters/iframe'
 import { TranslationCard } from './TranslationCard'
@@ -35,6 +36,7 @@ import {
   asSnapshotEvent,
   commandEnvelope,
   SNAPSHOT_BRIDGE_VERSION,
+  SNAPSHOT_EVIDENCE_VERSION,
   type SnapshotAnnotationItem,
   type SnapshotCapturePayload,
   type SnapshotCommand,
@@ -152,6 +154,20 @@ export function SnapshotViewer({
   const [marking, setMarking] = useState(false)
   /** 划词翻译浮层：在父容器坐标系里，iframe 内滚动不影响它。 */
   const translation = useTranslation(t)
+  const translationLocation = useRef<EvidenceLocation>()
+  const activeAnchor = useRef<string | undefined>()
+  const requestedEvidence = useRef<string>()
+
+  function evidenceLocation(text: string): EvidenceLocation {
+    const selected = selectionRef.current
+    return {
+      quote: text.slice(0, 240),
+      anchor: activeAnchor.current,
+      snapshot: selected && selected.selector.length <= 240
+        ? { selector: selected.selector, start: selected.start, end: selected.end }
+        : undefined,
+    }
+  }
   /**
    * 打开着的编辑卡片：只记标注 key 与点击位置，内容每次从 `annotations` 里现取。
    *
@@ -287,7 +303,15 @@ export function SnapshotViewer({
       if (data.type === 'outline-active') {
         // 桥接脚本给的是它自己那份列表的下标（十进制序号），无效值一概当作「说不清」。
         const index = data.id === null ? Number.NaN : Number.parseInt(data.id, 10)
+        activeAnchor.current = Number.isInteger(index) && index >= 0 ? String(index) : undefined
         activeRef.current?.(Number.isInteger(index) && index >= 0 ? index : null)
+        return
+      }
+      if (data.type === 'evidence-result') {
+        if (data.id === requestedEvidence.current) {
+          requestedEvidence.current = undefined
+          if (data.ok !== true) showToast(t('evidence.fallback'))
+        }
         return
       }
       if (data.type === 'applied') {
@@ -320,7 +344,7 @@ export function SnapshotViewer({
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [flushLocate, onReady, pushAnnotations, openCard])
+  }, [flushLocate, onReady, pushAnnotations, openCard, t])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -374,6 +398,19 @@ export function SnapshotViewer({
 
   useImperativeHandle(viewerRef, () => ({
     locate,
+    goToEvidence: (target) => {
+      if (!readyRef.current) return false
+      if (bridgeVersionRef.current < SNAPSHOT_EVIDENCE_VERSION) {
+        if (target.annotationKey !== undefined && locate(target.annotationKey)) return true
+        if (target.anchor === undefined) return false
+        post({ type: 'scroll-to-outline', id: target.anchor })
+        if (target.quote) showToast(t('evidence.fallback'))
+        return true
+      }
+      requestedEvidence.current = target.id
+      post({ type: 'locate-evidence', target })
+      return true
+    },
     currentPage: () => 1,
     goToPage: () => undefined,
     goToOutline: (target) => {
@@ -383,7 +420,7 @@ export function SnapshotViewer({
     zoomOut: () => undefined,
     setZoom: () => undefined,
     fitToWidth: () => undefined,
-  }), [locate, viewerRef])
+  }), [locate, post, t, viewerRef])
 
   function handleFrameLoad(): void {
     if (!readyRef.current) setBridgeMissing(true)
@@ -484,7 +521,7 @@ export function SnapshotViewer({
           text={selection.text}
           x={bar.x}
           y={bar.y}
-          onInsert={onInsertExcerpt}
+          onInsert={(text) => onInsertExcerpt(text, evidenceLocation(text))}
           onDismiss={() => {
             selectionRef.current = null
             setSelection(null)
@@ -493,7 +530,10 @@ export function SnapshotViewer({
           annotate={detail.writeEnabled && source !== null
             ? { busy: marking, onCreate: (type, color, comment) => void createMark(type, color, comment) }
             : undefined}
-          translate={{ onTranslate: translation.open }}
+          translate={{ onTranslate: (text, x, y) => {
+            translationLocation.current = evidenceLocation(text)
+            translation.open(text, x, y)
+          } }}
         />
       )}
       {translation.view !== null && (
@@ -505,7 +545,7 @@ export function SnapshotViewer({
           onEngineChange={translation.setEngine}
           onClose={translation.close}
           onRetry={translation.retry}
-          onInsert={onInsertTranslation}
+          onInsert={(text, translated) => onInsertTranslation(text, translated, translationLocation.current)}
         />
       )}
       {card !== null && cardAnnotation !== null && (
