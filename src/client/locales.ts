@@ -59,6 +59,7 @@ const zh: Record<string, string> = {
   'insert.tip.ranges': '按字符位置或标题范围精确截一段，适合只引某个片段',
   'insert.tip.shot': '把页面区域截成图片，图表、公式、扫描版文字取不到时用它',
   'history.title': 'Zotero 引用',
+  'history.openItem': '打开原文',
 
   'status.zoteroOn': 'Zotero 已连接',
   'status.zoteroOff': 'Zotero 未连接',
@@ -332,8 +333,8 @@ const zh: Record<string, string> = {
   'help.ex.reading.2.prompt': '解释上面文献里反复出现的专业名词，列成表格：术语｜一句话解释｜文中出处。',
   'help.ex.reading.3.label': '逐句翻译',
   'help.ex.reading.3.prompt': '把上面这段摘录逐句翻译为中文，保留术语原文并附在括号里。',
-  'help.ex.reading.4.label': '多篇对比',
-  'help.ex.reading.4.prompt': '对比上面三篇文献的研究方法和结论，做成一张表，并指出它们的分歧点。',
+  'help.ex.reading.4.label': '多篇对比（综述矩阵）',
+  'help.ex.reading.4.prompt': '把上面的文献做成一张对比表，列为：作者｜年份｜研究方法｜数据/样本｜主要结论。逐篇填写，最后用一段话指出它们在方法与结论上的分歧。注意：条目引用只含元数据；「研究方法 / 数据 / 结论」需要正文，请先用「整篇全文」或全文区间把各篇正文加入对话（或让我用 Zotero 工具现取），不要凭标题臆测。',
   'help.ex.reading.5.label': '列出参考文献及摘要',
   'help.ex.reading.5.prompt': '列出该文献正文引用的参考文献及其摘要，分两部分：被引用文献本身、原文每条参考文献及摘要。',
   // ③ 笔记整理
@@ -572,6 +573,7 @@ const zh: Record<string, string> = {
   'cmp.item.source': '出处：{value}',
   'cmp.item.doi': 'DOI：{value}',
   'cmp.item.url': '链接：{value}',
+  'cmp.item.bib': '参考文献（APA）：{value}',
   'cmp.fulltext.header': '【Zotero 全文｜{title}｜{key}｜范围={scope}】',
   'cmp.fulltext.truncated': '⚠️ 重要：本次只含原文前 {have} 字；原文共 {total} 字，其后 {missing} 字未返回。不要据此判断全文（尤其是结论、讨论与参考文献）的内容；需要后半段请改用「字符区间」插入。',
   'cmp.fulltext.bodyLabel': '以下为正文：',
@@ -659,6 +661,7 @@ const en: Record<string, string> = {
   'insert.tip.shot': 'Adds a picture of the page area — for figures, formulas or scanned text that cannot be extracted',
 
   'history.title': 'Zotero reference',
+  'history.openItem': 'Open original item',
 
   'status.zoteroOn': 'Zotero connected',
   'status.zoteroOff': 'Zotero not connected',
@@ -932,8 +935,8 @@ const en: Record<string, string> = {
   'help.ex.reading.2.prompt': 'Explain the recurring technical terms in the paper above as a table: term | one-line explanation | where it appears.',
   'help.ex.reading.3.label': 'Sentence-by-sentence translation',
   'help.ex.reading.3.prompt': 'Translate the excerpt above into English sentence by sentence, keeping technical terms in parentheses.',
-  'help.ex.reading.4.label': 'Compare papers',
-  'help.ex.reading.4.prompt': 'Compare the methods and findings of the three papers above in a table and point out where they disagree.',
+  'help.ex.reading.4.label': 'Compare papers (review matrix)',
+  'help.ex.reading.4.prompt': 'Build a comparison table of the papers above with columns: Authors | Year | Method | Data/Sample | Main findings. Fill in each paper, then add a paragraph on where their methods and conclusions disagree. Note: item references carry metadata only; Method / Data / Findings need the full text — add each paper via "Full text" or a text range first (or let me fetch it with Zotero tools). Do not guess from titles.',
   'help.ex.reading.5.label': 'List references & abstracts',
   'help.ex.reading.5.prompt': 'List the references cited in the body of the paper above along with their abstracts, in two parts: the cited work itself, and each reference from the original text with its abstract.',
   // ③ Notes
@@ -1172,6 +1175,7 @@ const en: Record<string, string> = {
   'cmp.item.source': 'Source: {value}',
   'cmp.item.doi': 'DOI: {value}',
   'cmp.item.url': 'URL: {value}',
+  'cmp.item.bib': 'Reference (APA): {value}',
   'cmp.fulltext.header': '[Zotero full text | {title} | {key} | range={scope}]',
   'cmp.fulltext.truncated': '⚠️ IMPORTANT: only the first {have} chars are included. The document has {total} chars total; the remaining {missing} are not provided. Do not draw conclusions about the rest of the document (especially results, discussion and references); insert a later character range if you need it.',
   'cmp.fulltext.bodyLabel': 'Body text follows:',

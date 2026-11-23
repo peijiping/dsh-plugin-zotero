@@ -40,6 +40,9 @@ export function itemText(t: Translate, detail: ZoteroItemDetail): string {
   if (detail.publicationTitle !== '') lines.push(line(t, 'cmp.item.source', detail.publicationTitle))
   if (detail.doi !== '') lines.push(line(t, 'cmp.item.doi', detail.doi))
   if (detail.url !== '') lines.push(line(t, 'cmp.item.url', detail.url))
+  // Host 已随详情下发 CSL 格式（style=apa），去标签后给模型一行可直接照抄的规范引用。
+  const bib = detail.bib?.replace(/<[^>]*>/gu, '').replace(/\s+/gu, ' ').trim() ?? ''
+  if (bib !== '') lines.push(line(t, 'cmp.item.bib', bib))
   return lines.join('\n')
 }
 

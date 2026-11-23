@@ -18,7 +18,9 @@ import { useState, type CSSProperties } from 'react'
 import { HoverCard, Modal, ReferenceChip } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { Translate } from './locales'
+import { itemKeyOf } from './historyRefKey'
 import { CITATION_CLOSE, CITATION_OPEN } from './reference'
+import { Button } from './ui'
 
 /** 节点 id 同时是 userText 规则 id 与 `conversation.user.text.node` 的 key。 */
 export const HISTORY_REF_NODE = 'zotero-ref'
@@ -115,12 +117,27 @@ const HOVER_BODY_STYLE: CSSProperties = {
   lineHeight: 1.6,
 }
 
-/** 生成历史节点渲染器：`t` 在 apply 时绑定，组件本身只拿席位下发的 prop。 */
-export function createHistoryRefNode(t: Translate) {
+/** 打开原文按钮与正文之间留一点间距。 */
+const OPEN_BUTTON_STYLE: CSSProperties = { marginTop: 8 }
+
+/** 生成历史节点渲染器：`t` 与 `openItem` 在 apply 时绑定，组件只拿席位下发的 prop。 */
+export function createHistoryRefNode(t: Translate, onOpenItem: (key: string) => void) {
   return function ZoteroHistoryRef({ node, raw, interactive }: HistoryRefNodeProps) {
     const [open, setOpen] = useState(false)
     const label = node.data.label ?? chipLabel(citationBody(raw))
     const body = citationBody(raw)
+    const itemKey = itemKeyOf(body)
+    // 点击胶囊原有的「看完整引用」行为不抢；回溯入口放在悬停卡片与 Modal 里。
+    const openOriginal = itemKey === null ? null : (
+      <Button
+        variant="outline"
+        size="sm"
+        style={OPEN_BUTTON_STYLE}
+        onClick={() => { setOpen(false); onOpenItem(itemKey) }}
+      >
+        {t('history.openItem')}
+      </Button>
+    )
     return (
       <>
         <HoverCard
@@ -139,6 +156,7 @@ export function createHistoryRefNode(t: Translate) {
           content={(
             <div style={HOVER_CARD_STYLE}>
               <div style={HOVER_BODY_STYLE}>{body}</div>
+              {openOriginal}
             </div>
           )}
         />
@@ -150,6 +168,7 @@ export function createHistoryRefNode(t: Translate) {
             closeLabel={t('action.close')}
           >
             <pre style={MODAL_BODY_STYLE}>{body}</pre>
+            {openOriginal}
           </Modal>
         )}
       </>

@@ -206,7 +206,7 @@ export function apply(ctx: ClientContext): void {
       () => scope.uiConversation.userText.register(zoteroHistoryRule),
       'dsh-plugin-zotero: history rule',
     )
-    const RefBody = createHistoryRefNode(t)
+    const RefBody = createHistoryRefNode(t, openItem)
     scope.effect(
       () => scope.slots.inject('conversation.user.text.node', () =>
         scope.slots.register(
