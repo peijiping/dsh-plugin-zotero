@@ -5,6 +5,7 @@
  */
 
 import type { ReviewEvidenceRecord } from '../zotero/review-evidence-types'
+import type { BibliographyStyle, ZoteroBibliography } from '../zotero/bibliography'
 import type {
   ApiFix,
   ZoteroAnnotationDraft,
@@ -165,6 +166,14 @@ export function fetchTagUsage(
 
 export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Promise<ZoteroItemDetail> {
   return get<ZoteroItemDetail>('item', { key, style }, signal)
+}
+
+export function fetchBibliography(
+  keys: readonly string[],
+  style: BibliographyStyle,
+  signal?: AbortSignal,
+): Promise<ZoteroBibliography> {
+  return get('bibliography', { key: keys, style }, signal)
 }
 
 export function fetchFulltext(key: string, signal?: AbortSignal): Promise<ZoteroFulltext | null> {

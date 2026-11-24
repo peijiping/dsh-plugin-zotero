@@ -18,6 +18,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as zotero from '../zotero/client.js'
 import { ZoteroError } from '../zotero/client.js'
 import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
+import { isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS } from '../zotero/bibliography.js'
 import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
 import { getReviewEvidence, requireReviewEvidenceId, requireReviewRun, saveReviewEvidence } from '../zotero/review-evidence.js'
@@ -349,6 +350,16 @@ async function handleItem(res: ServerResponse, params: URLSearchParams): Promise
 async function handleFulltext(res: ServerResponse, params: URLSearchParams): Promise<void> {
   const key = requireKey({ key: params.get('key') }, 'key')
   ok(res, await zotero.getItemFulltext(key))
+}
+
+async function handleBibliography(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const keys = [...new Set(params.getAll('key'))]
+  const style = params.get('style')
+  if (keys.length === 0 || keys.length > MAX_BIBLIOGRAPHY_ITEMS || keys.some((key) => !KEY_PATTERN.test(key))) {
+    throw new ZoteroError('bad_request', `请提供 1 至 ${MAX_BIBLIOGRAPHY_ITEMS} 个有效的 Zotero 条目 key`)
+  }
+  if (!isBibliographyStyle(style)) throw new ZoteroError('bad_request', '不支持的参考文献样式')
+  ok(res, await zotero.getBibliography(keys, style))
 }
 
 async function handleCollectionBib(res: ServerResponse, params: URLSearchParams): Promise<void> {
@@ -983,6 +994,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['tags', 'GET'],
   ['tag-usage', 'GET'],
   ['item', 'GET'],
+  ['bibliography', 'GET'],
   ['collection-bib', 'GET'],
   ['fulltext', 'GET'],
   ['file', 'GET'],
@@ -1060,6 +1072,9 @@ export function createHandler(
           return
         case 'item':
           await handleItem(res, url.searchParams)
+          return
+        case 'bibliography':
+          await handleBibliography(res, url.searchParams)
           return
         case 'fulltext':
           await handleFulltext(res, url.searchParams)

@@ -32,8 +32,11 @@ import {
 } from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
+import { isBibliographicItem, isBibliographyStyle, type BibliographyStyle } from '../zotero/bibliography'
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
+import { bibliographyStyles, formatBibliography } from './bibliography'
+import { writeClipboard } from './clipboard'
 import { useDismiss } from './dismiss'
 import { makeEvidence } from './evidence'
 import type { AttachmentCitation } from './cite'
@@ -45,7 +48,7 @@ import { itemFieldRows } from './itemFields'
 import { itemTypeLabel } from './itemType'
 import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
-import { fetchJournalRank, openJournalUrl, type JournalRank } from './api'
+import { fetchBibliography, fetchJournalRank, openJournalUrl, type JournalRank } from './api'
 import { extraChips, rankChips, readJournalMetrics, type MetricChip } from './journalMetrics'
 import { journalLinks } from './journalLinks'
 import { showToast } from './paneStore'
@@ -162,9 +165,96 @@ type RemoteRank =
  */
 type MetaRow = { label: string; value: ReactNode } | { block: ReactNode }
 
-/** 去掉 CSL HTML 标签，只留可见文本。 */
-function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/gu, '').replace(/\s+/gu, ' ').trim()
+function BibliographyBlock({ t, detail, open, onToggle }: {
+  t: Translate
+  detail: ZoteroItemDetail
+  open: boolean
+  onToggle(): void
+}): ReactElement {
+  const [style, setStyle] = useState<BibliographyStyle>('apa')
+  const [attempt, setAttempt] = useState(0)
+  const [result, setResult] = useState<{
+    detail: ZoteroItemDetail
+    style: BibliographyStyle
+    attempt: number
+    html: string
+    message?: string
+  } | null>(null)
+  const defaultPreview = useMemo(() => formatBibliography(detail.bib ?? ''), [detail.bib])
+  const styles = bibliographyStyles(t)
+  const current = result?.detail === detail && result.style === style && result.attempt === attempt ? result : null
+  const useDefault = style === 'apa' && defaultPreview.count === 1
+  const preview = useMemo(() => formatBibliography(current?.html ?? ''), [current?.html])
+  const formatted = useDefault ? defaultPreview : preview
+
+  useEffect(() => {
+    if (!open || useDefault || current !== null) return
+    const controller = new AbortController()
+    void fetchBibliography([detail.key], style, controller.signal).then(({ html }) => {
+      if (!controller.signal.aborted) setResult({ detail, style, attempt, html })
+    }, (error: unknown) => {
+      if (controller.signal.aborted) return
+      const message = error instanceof Error ? error.message : String(error)
+      setResult({ detail, style, attempt, html: '', message })
+    })
+    return () => controller.abort()
+  }, [open, useDefault, current, detail, style, attempt])
+
+  return (
+    <Block
+      t={t}
+      label={t('detail.bibTitle')}
+      open={open}
+      onToggle={onToggle}
+      action={(
+        <>
+          <select
+            aria-label={t('bibliography.style')}
+            title={styles.find(({ id }) => id === style)?.label}
+            value={style}
+            onChange={(event) => {
+              const value = event.currentTarget.value
+              if (isBibliographyStyle(value)) {
+                setStyle(value)
+                if (!open) onToggle()
+              }
+            }}
+            style={{ ...bibliographyActionStyle, maxWidth: 120 }}
+          >
+            {styles.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
+          </select>
+          <button
+            type="button"
+            style={bibliographyActionStyle}
+            aria-label={t('bibliography.copy')}
+            disabled={formatted.count !== 1 || formatted.text === ''}
+            onClick={() => {
+              void writeClipboard(formatted.text, formatted.html).then((ok) => {
+                showToast(t(ok ? 'toast.copied' : 'toast.copyFailed'))
+              })
+            }}
+          >
+            {t('bibliography.copyShort')}
+          </button>
+        </>
+      )}
+    >
+      {formatted.count > 0 ? (
+        <div style={{ ...paragraphStyle, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: formatted.html }} />
+      ) : current?.message !== undefined ? (
+        <div>
+          <p style={paragraphStyle} role="status">{tpl(t('bibliography.failed'), { message: current.message })}</p>
+          <button type="button" style={bibliographyActionStyle} onClick={() => setAttempt((value) => value + 1)}>
+            {t('action.retry')}
+          </button>
+        </div>
+      ) : (
+        <p style={paragraphStyle} role="status">
+          {current === null ? t('bibliography.loading') : t('bibliography.skipUnavailable')}
+        </p>
+      )}
+    </Block>
+  )
 }
 
 export function InfoPanel({
@@ -689,10 +779,8 @@ export function InfoPanel({
               </Block>
             )}
 
-            {detail.bib !== null && (
-              <Block t={t} label={t('detail.bibTitle')} open={sections.bib} onToggle={() => toggle('bib')}>
-                <p style={paragraphStyle}>{stripTags(detail.bib)}</p>
-              </Block>
+            {isBibliographicItem(detail.itemType) && (
+              <BibliographyBlock key={detail.key} t={t} detail={detail} open={sections.bib} onToggle={() => toggle('bib')} />
             )}
           </div>
 
@@ -964,6 +1052,17 @@ const blockHeaderRowStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 4,
+} as const
+
+const bibliographyActionStyle = {
+  flexShrink: 0,
+  padding: '2px 5px',
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.45)',
+  background: 'Canvas',
+  color: 'CanvasText',
+  fontSize: 11,
+  whiteSpace: 'nowrap',
 } as const
 
 /** 标题行上的图标按钮（当前只有「笔记」的加号 / 取消）。 */

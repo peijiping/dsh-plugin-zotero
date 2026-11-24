@@ -21,6 +21,7 @@ import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { anchorAnnotations, type RawAnnotation } from './annotations.js'
+import { isBibliographicItem, type BibliographyStyle, type ZoteroBibliography } from './bibliography.js'
 import {
   getSettings,
   libraryBase,
@@ -1781,6 +1782,43 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     bib,
     writeEnabled: getSettings().writeEnabled,
   }
+}
+
+// ---- 参考文献 ---------------------------------------------------------------
+
+/**
+ * Resolve the selected keys before rendering. Read top-level items and filter
+ * their types directly: adding itemType filters can bring children into the results.
+ * The final request must render the complete set together for CSL sorting/numbering.
+ */
+export async function getBibliography(
+  keys: readonly string[],
+  style: BibliographyStyle,
+): Promise<ZoteroBibliography> {
+  const params = new URLSearchParams({
+    itemKey: keys.join(','),
+    includeTrashed: '1',
+    limit: '100',
+    sort: 'title',
+    direction: 'asc',
+  })
+  const endpoint = `${libraryBase()}/items/top`
+  const { body } = await requestJson<RawItem[]>(`${endpoint}?${params}`)
+  const found = new Set(body.filter(({ data }) => isBibliographicItem(data?.itemType)).map(({ key }) => key))
+  const renderKeys = keys.filter((key) => found.has(key))
+  const skippedKeys = keys.filter((key) => !found.has(key))
+  if (renderKeys.length === 0) return { html: '', count: 0, skippedKeys }
+
+  params.set('itemKey', renderKeys.join(','))
+  params.set('format', 'bib')
+  params.set('style', style)
+  params.set('limit', String(renderKeys.length))
+  const { body: html, total } = await requestText(`${endpoint}?${params}`)
+  const count = pageCount(html)
+  if (count !== renderKeys.length || (total !== null && total !== count)) {
+    throw new ZoteroError('bad_request', 'Zotero 返回的参考文献条数与可导出的条目不一致，请重试。')
+  }
+  return { html, count, skippedKeys }
 }
 
 // ---- 整目录引用 -------------------------------------------------------------

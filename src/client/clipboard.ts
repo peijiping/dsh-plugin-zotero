@@ -5,7 +5,18 @@
  * 所以失败后退回一个临时 textarea + `execCommand('copy')`。
  */
 
-export async function writeClipboard(text: string): Promise<boolean> {
+export async function writeClipboard(text: string, html?: string): Promise<boolean> {
+  if (html !== undefined) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+      })])
+      return true
+    } catch {
+      if (legacyCopy(text, html)) return true
+    }
+  }
   try {
     await navigator.clipboard.writeText(text)
     return true
@@ -14,7 +25,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
   }
 }
 
-function legacyCopy(text: string): boolean {
+function legacyCopy(text: string, html?: string): boolean {
   const area = document.createElement('textarea')
   area.value = text
   area.setAttribute('readonly', '')
@@ -23,6 +34,13 @@ function legacyCopy(text: string): boolean {
   area.style.opacity = '0'
   document.body.appendChild(area)
   area.select()
+  const onCopy = (event: ClipboardEvent): void => {
+    if (event.clipboardData === null || html === undefined) return
+    event.clipboardData.setData('text/plain', text)
+    event.clipboardData.setData('text/html', html)
+    event.preventDefault()
+  }
+  if (html !== undefined) area.addEventListener('copy', onCopy)
   let ok = false
   try {
     ok = document.execCommand('copy')

@@ -13,16 +13,22 @@
  * 行与行之间用一条浅色细线分隔。
  */
 
-import { useState, type ReactElement } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 
-import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
+import { isBibliographicItem, isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS, type BibliographyStyle } from '../zotero/bibliography'
 import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary, ZoteroSearchMode } from '../zotero/types'
+import { fetchBibliography } from './api'
+import { bibliographySkipReason, bibliographyStyles, formatBibliography } from './bibliography'
+import { writeClipboard } from './clipboard'
+import { useDismiss } from './dismiss'
 import { ChildKindIcon, childKindLabel, ItemTypeIcon, itemTypeLabel } from './itemType'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ItemSort } from './paneStore'
-import { isRecentSelection, TREE_ROOT_ID } from './paneStore'
+import { isRecentSelection, showToast, TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
 import { SearchField, type SearchModeItem } from './SearchField'
 import { Button, SectionTitle } from './ui'
@@ -70,6 +76,29 @@ function selectionName(t: Translate, libraryName: string, collection: ZoteroColl
 
 const hintStyle: React.CSSProperties = { padding: '14px 12px', opacity: 0.6, fontSize: 12.5 }
 
+const bibliographyBarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  fontSize: 12,
+}
+
+const bibliographyResultStyle: React.CSSProperties = {
+  padding: '6px 8px',
+  border: '1px solid color-mix(in srgb, currentColor 16%, transparent)',
+  borderRadius: 6,
+  fontSize: 12,
+}
+
+const bibliographySkippedStyle: React.CSSProperties = {
+  margin: '4px 0 0',
+  paddingInlineStart: 18,
+  maxHeight: 100,
+  overflowY: 'auto',
+  overflowWrap: 'anywhere',
+}
+
 /** 底部分批进度：列表仍在追加后面几批时露一行，取满即消失。 */
 const progressStyle: React.CSSProperties = {
   padding: '6px 8px 2px',
@@ -104,21 +133,19 @@ const titleRowStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
-/**
- * 底色（hover / 选中）统一挂在外壳上，而不是内层行。
- *
- * Menu 的 anchor 外面会被包一层按内容收窄的元素，内层行即使 `width:100%` 也只能
- * 铺到「内容最宽的子元素」（标题）为止，于是就出现「只有标题那一截是蓝的」。
- * 外壳是普通块级容器，宽度必然是通栏的，把背景放这里最稳。
- */
+/** 底色（hover / 选中）统一挂在通栏外壳上。 */
 const ITEM_CSS = [
   '.dsh-zotero-item-shell:hover{background:rgba(127,127,127,0.08)}',
-  // Menu 的 anchor 包装自带 `width:fit-content` 之类的收缩规则，光靠 grid 轨道
-  // 拉不动它，这里显式覆盖宽度，内层行 / 标题才能拿到整行宽去截断。
-  '.dsh-zotero-item-shell > *{width:100%;min-width:0}',
   '.dsh-zotero-disclosure:hover{opacity:0.8}',
   '.dsh-zotero-child-row:hover{background:rgba(127,127,127,0.1)}',
+  '.dsh-zotero-item-context [role="menu"]:not([role="menu"] [role="menu"]){position:absolute;inset:0 auto auto 0;position-area:none;margin:0}',
+  '.dsh-zotero-context-open-left [role="menu"] [role="menu"]{left:auto;right:calc(100% + 10px)}',
+  '.dsh-zotero-context-open-left [role="menu"] [role="menu"]::before{left:auto;right:-10px}',
 ].join('')
+
+const ITEM_MENU_GUTTER = 8
+/** 给包含国标样式全称的子菜单留出横向空间。 */
+const ITEM_SUBMENU_SPACE = 250
 
 /** 选中行底色：整行（外壳）通栏染色，色值与列表 chip 同一支蓝。 */
 const ITEM_SELECTED_BG = 'rgba(80,140,255,0.16)'
@@ -126,9 +153,7 @@ const ITEM_SELECTED_BG = 'rgba(80,140,255,0.16)'
 /**
  * 行外壳：承载整行底色 + 那条浅色分隔线，通栏铺满。
  *
- * 单列 grid 给内层一个明确的行宽（配合 `ITEM_CSS` 里对 Menu 包装层的宽度覆盖），
- * 内层行的 `width:100%` 才有确定宽度可用；`minmax(0,1fr)` 允许轨道缩到比内容更窄，
- * 长标题才能出省略号而不是溢出被裁。
+ * 单列 grid 给内层一个明确的行宽，允许轨道收窄，让长标题正常显示省略号。
  */
 const itemShellStyle: React.CSSProperties = {
   display: 'grid',
@@ -143,7 +168,6 @@ const itemRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 7,
-  // Menu 的 anchor 外层是收缩宽度的容器，不显式铺满就会按内容宽度收缩。
   width: '100%',
   boxSizing: 'border-box',
   padding: '7px 8px',
@@ -379,15 +403,88 @@ const chipRemoveStyle: React.CSSProperties = {
   lineHeight: 1,
 }
 
-function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
+const ITEM_MENU_ICON_PATHS = {
+  chat: 'M18 11h-7l-4 3v-3H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2Z',
+  copy: 'M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM3 16V5a2 2 0 0 1 2-2h10',
+  text: 'M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6',
+  numbers: 'M10 6h10m-10 6h10m-10 6h10M3 4h2v4m-2 0h4m-4 3h3a1 1 0 0 1 0 2h-2l-1 2h4',
+} as const
+
+function ItemMenuIcon({ name }: { name: keyof typeof ITEM_MENU_ICON_PATHS }): ReactElement {
+  return (
+    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.65} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d={ITEM_MENU_ICON_PATHS[name]} />
+    </svg>
+  )
+}
+
+interface MenuPoint {
+  x: number
+  y: number
+}
+
+function ItemContextMenu({ point, items, onClose, onSelect }: {
+  point: MenuPoint
+  items: readonly MenuEntry[]
+  onClose(): void
+  onSelect(id: string): void
+}): ReactElement {
+  const containerRef = useRef<HTMLDivElement>(null)
+  // 宿主处理外部点击，包括可能独立挂载的子菜单。这里只补全 Esc 关闭。
+  useDismiss(true, containerRef, onClose, { pinned: true })
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const menu = container?.querySelector<HTMLElement>('[role="menu"]')
+    if (container === null || !menu) return
+    const position = (): void => {
+      const { width, height } = menu.getBoundingClientRect()
+      const { clientWidth, clientHeight } = document.documentElement
+      const x = Math.max(ITEM_MENU_GUTTER, Math.min(point.x, clientWidth - width - ITEM_MENU_GUTTER))
+      const y = Math.max(ITEM_MENU_GUTTER, Math.min(point.y + 4, clientHeight - height - ITEM_MENU_GUTTER))
+      container.style.left = `${x}px`
+      container.style.top = `${y}px`
+      container.classList.toggle('dsh-zotero-context-open-left', x + width + ITEM_SUBMENU_SPACE > clientWidth)
+    }
+    position()
+    const observer = new ResizeObserver(position)
+    observer.observe(menu)
+    window.addEventListener('resize', position)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', position)
+    }
+  }, [point])
+
+  return createPortal(
+    // 直接摆放整个菜单，宿主 Menu 仍负责交互和绘制。
+    <div ref={containerRef} className="dsh-zotero-item-context"
+      style={{ display: 'flex', position: 'fixed', left: point.x, top: point.y, zIndex: 1000 }}>
+      <Menu
+        open
+        portal={false}
+        onClose={onClose}
+        onSelect={onSelect}
+        items={items}
+        anchor={<span aria-hidden="true" />}
+      />
+    </div>,
+    document.body,
+  )
+}
+
+function ItemRow({ t, item, selected, onSelect, onOpen, onInsert, onCopy, copying }: {
   t: Translate
   item: ZoteroItemSummary
   selected: boolean
   onSelect(key: string, append: boolean): void
   onOpen(key: string, title: string): void
   onInsert(item: ZoteroItemSummary): void
+  onCopy(item: ZoteroItemSummary, style: BibliographyStyle): void
+  copying: boolean
 }): ReactElement {
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuPoint, setMenuPoint] = useState<MenuPoint | null>(null)
   const [expanded, setExpanded] = useState(false)
   const read = isRead(item)
   const typeLabel = itemTypeLabel(t, item.itemType)
@@ -401,85 +498,104 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert }: {
   const countTitle = shownKinds
     .map((kind) => `${childKindLabel(t, kind)} ${kindCounts.get(kind)}`)
     .join(' · ')
+  const menuItems: MenuEntry[] = [{
+    id: 'insert-item',
+    label: t('action.insertItem'),
+    icon: <ItemMenuIcon name="chat" />,
+  }]
+  if (isBibliographicItem(item.itemType)) {
+    menuItems.push({
+      id: 'copy-bibliography',
+      label: t('bibliography.copy'),
+      disabled: copying,
+      icon: <ItemMenuIcon name="copy" />,
+      submenu: bibliographyStyles(t).map((style) => ({
+        ...style,
+        icon: <ItemMenuIcon name={style.id === 'apa' ? 'text' : 'numbers'} />,
+      })),
+    })
+  }
   return (
     <div
       className="dsh-zotero-item-shell"
       style={selected ? { ...itemShellStyle, background: ITEM_SELECTED_BG } : itemShellStyle}
     >
-      <Menu
-        open={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onSelect={(id) => {
-          setMenuOpen(false)
-          if (id === 'insert-item') onInsert(item)
+      <div
+        className="dsh-zotero-item-row"
+        title={itemTooltip(t, item)}
+        onClick={(event) => onSelect(item.key, event.ctrlKey || event.metaKey)}
+        onDoubleClick={() => onOpen(item.key, item.title)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          const { clientX, clientY } = event
+          const row = event.currentTarget.getBoundingClientRect()
+          const insideRow = clientX >= row.left && clientX <= row.right && clientY >= row.top && clientY <= row.bottom
+          setMenuPoint(insideRow ? { x: clientX, y: clientY } : { x: row.left, y: row.bottom })
         }}
-        align="end"
-        portal
-        items={[{ id: 'insert-item', label: t('action.insertItem') }]}
-        anchor={(
-          <div
-            className="dsh-zotero-item-row"
-            title={itemTooltip(t, item)}
-            onClick={(event) => onSelect(item.key, event.ctrlKey || event.metaKey)}
-            onDoubleClick={() => onOpen(item.key, item.title)}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              setMenuOpen(true)
+        style={itemRowStyle}
+      >
+        {hasChildren ? (
+          <button
+            type="button"
+            className="dsh-zotero-disclosure"
+            aria-expanded={expanded}
+            aria-label={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
+            title={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
+            onClick={(event) => {
+              // 只开合子项，不连带选中 / 打开条目。
+              event.stopPropagation()
+              setExpanded((open) => !open)
             }}
-            style={itemRowStyle}
+            onDoubleClick={(event) => event.stopPropagation()}
+            style={disclosureButtonStyle}
           >
-            {hasChildren ? (
-              <button
-                type="button"
-                className="dsh-zotero-disclosure"
-                aria-expanded={expanded}
-                aria-label={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
-                title={t(expanded ? 'list.collapseAttachments' : 'list.expandAttachments')}
-                onClick={(event) => {
-                  // 只开合子项，不连带选中 / 打开条目。
-                  event.stopPropagation()
-                  setExpanded((open) => !open)
-                }}
-                onDoubleClick={(event) => event.stopPropagation()}
-                style={disclosureButtonStyle}
-              >
-                <DisclosureIcon open={expanded} />
-              </button>
-            ) : (
-              <span style={disclosureSlotStyle} aria-hidden />
-            )}
-            <span style={itemIconStyle}>
-              {item.itemType === 'attachment'
-                ? <ChildKindIcon kind={item.kind} read={read} size={22} />
-                : <ItemTypeIcon itemType={item.itemType} read={read} />}
-            </span>
-            <div style={itemBodyStyle}>
-              <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-              {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasChildren) && (
-                <div style={itemMetaStyle}>
-                  {typeLabel !== '' && <span style={itemMetaTypeStyle}>{typeLabel}</span>}
-                  {item.year !== '' && <span style={itemMetaYearStyle}>{item.year}</span>}
-                  {item.creators !== '' && <span style={itemMetaTextStyle}>{item.creators}</span>}
-                  {hasChildren && (
-                    <span style={itemMetaChildKindsStyle} title={countTitle}>
-                      {shownKinds.map((kind) => (
-                        <span
-                          key={kind}
-                          style={itemMetaChildKindStyle}
-                          title={childKindLabel(t, kind)}
-                        >
-                          <ChildKindIcon kind={kind} size={12} />
-                          {kindCounts.get(kind)}
-                        </span>
-                      ))}
+            <DisclosureIcon open={expanded} />
+          </button>
+        ) : (
+          <span style={disclosureSlotStyle} aria-hidden />
+        )}
+        <span style={itemIconStyle}>
+          {item.itemType === 'attachment'
+            ? <ChildKindIcon kind={item.kind} read={read} size={22} />
+            : <ItemTypeIcon itemType={item.itemType} read={read} />}
+        </span>
+        <div style={itemBodyStyle}>
+          <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
+          {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasChildren) && (
+            <div style={itemMetaStyle}>
+              {typeLabel !== '' && <span style={itemMetaTypeStyle}>{typeLabel}</span>}
+              {item.year !== '' && <span style={itemMetaYearStyle}>{item.year}</span>}
+              {item.creators !== '' && <span style={itemMetaTextStyle}>{item.creators}</span>}
+              {hasChildren && (
+                <span style={itemMetaChildKindsStyle} title={countTitle}>
+                  {shownKinds.map((kind) => (
+                    <span
+                      key={kind}
+                      style={itemMetaChildKindStyle}
+                      title={childKindLabel(t, kind)}
+                    >
+                      <ChildKindIcon kind={kind} size={12} />
+                      {kindCounts.get(kind)}
                     </span>
-                  )}
-                </div>
+                  ))}
+                </span>
               )}
             </div>
-          </div>
-        )}
-      />
+          )}
+        </div>
+      </div>
+      {menuPoint !== null && (
+        <ItemContextMenu
+          point={menuPoint}
+          items={menuItems}
+          onClose={() => setMenuPoint(null)}
+          onSelect={(id) => {
+            setMenuPoint(null)
+            if (id === 'insert-item') onInsert(item)
+            else if (isBibliographyStyle(id)) onCopy(item, id)
+          }}
+        />
+      )}
       {expanded && hasChildren && (
         <div style={childListStyle}>
           {children.map((child) => (
@@ -549,6 +665,43 @@ export function ItemList(props: Props): ReactElement {
     ?? t('list.searchPlaceholder')
   /** 按列表顺序取选中项，插进草稿的 chip 顺序才与眼前一致。 */
   const chosen = items.filter((item) => selectedItemKeys.has(item.key))
+  const [styleMenuOpen, setStyleMenuOpen] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [copyResult, setCopyResult] = useState<{
+    count: number
+    style: BibliographyStyle
+    skipped: ZoteroItemSummary[]
+  } | null>(null)
+  const selectionTooLarge = chosen.length > MAX_BIBLIOGRAPHY_ITEMS
+
+  async function copyReferences(selection: readonly ZoteroItemSummary[], style: BibliographyStyle): Promise<void> {
+    if (copying || selection.length === 0 || selection.length > MAX_BIBLIOGRAPHY_ITEMS) return
+    setCopying(true)
+    setCopyResult(null)
+    try {
+      const result = await fetchBibliography(selection.map(({ key }) => key), style)
+      const skippedKeys = new Set(result.skippedKeys)
+      const skipped = selection.filter(({ key }) => skippedKeys.has(key))
+      if (result.count > 0) {
+        const formatted = formatBibliography(result.html)
+        if (formatted.count !== result.count || formatted.text === '') {
+          showToast(t('toast.copyFailed'))
+          return
+        }
+        if (!await writeClipboard(formatted.text, formatted.html)) {
+          showToast(t('toast.copyFailed'))
+          return
+        }
+      }
+      if (selection.length > 1 || skipped.length > 0) setCopyResult({ count: result.count, style, skipped })
+      else showToast(tpl(t('bibliography.copied'), { n: result.count }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      showToast(tpl(t('bibliography.failed'), { message }))
+    } finally {
+      setCopying(false)
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -615,6 +768,68 @@ export function ItemList(props: Props): ReactElement {
           modeLabel={t('search.modeLabel')}
           onModeChange={onSearchModeChange}
         />
+        {chosen.length > 1 && (
+          <div style={bibliographyBarStyle}>
+            <span>{tpl(t('bibliography.selected'), { n: chosen.length })}</span>
+            {selectionTooLarge ? (
+              <span role="status">{tpl(t('bibliography.limit'), { n: MAX_BIBLIOGRAPHY_ITEMS })}</span>
+            ) : (
+              <Menu
+                open={styleMenuOpen}
+                onClose={() => setStyleMenuOpen(false)}
+                onSelect={(id) => {
+                  setStyleMenuOpen(false)
+                  if (isBibliographyStyle(id)) void copyReferences(chosen, id)
+                }}
+                align="end"
+                portal
+                items={bibliographyStyles(t)}
+                anchor={(
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    style={citeButtonStyle}
+                    disabled={copying}
+                    aria-haspopup="menu"
+                    aria-expanded={styleMenuOpen}
+                    onClick={() => setStyleMenuOpen((open) => !open)}
+                  >
+                    {t(copying ? 'bibliography.loading' : 'bibliography.copy')}
+                  </Button>
+                )}
+              />
+            )}
+          </div>
+        )}
+        {copyResult !== null && (
+          <div style={bibliographyResultStyle}>
+            <div style={bibliographyBarStyle}>
+              <strong role="status">
+                {tpl(t(copyResult.count === 0 ? 'bibliography.empty'
+                  : copyResult.skipped.length > 0 ? 'bibliography.partial' : 'bibliography.copied'), {
+                  n: copyResult.count,
+                  skipped: copyResult.skipped.length,
+                })}
+              </strong>
+              <button
+                type="button"
+                aria-label={t('bibliography.dismiss')}
+                style={chipRemoveStyle}
+                onClick={() => setCopyResult(null)}
+              >×</button>
+            </div>
+            <div style={{ opacity: 0.7 }}>
+              {bibliographyStyles(t).find(({ id }) => id === copyResult.style)?.label}
+            </div>
+            {copyResult.skipped.length > 0 && (
+              <ul style={bibliographySkippedStyle}>
+                {copyResult.skipped.map((item) => (
+                  <li key={item.key}>{item.title} · {t(bibliographySkipReason(item.itemType))}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {tags.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, fontSize: 11.5 }}>
             {tags.map((tag) => (
@@ -667,6 +882,8 @@ export function ItemList(props: Props): ReactElement {
                 onSelect={onSelectItem}
                 onOpen={onOpenItem}
                 onInsert={onInsertItem}
+                onCopy={(item, style) => { void copyReferences([item], style) }}
+                copying={copying}
               />
             ))}
             {itemsLoading && items.length > 0 && items.length < itemsTotal && (
