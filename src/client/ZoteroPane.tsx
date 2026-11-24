@@ -377,9 +377,9 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
           t={t}
           items={review.items}
           onClose={() => setReview(null)}
-          onConfirm={(sources) => {
+          onConfirm={(sources, run) => {
             const label = tpl(t('review.label'), { count: sources.length })
-            if (insertion.insertReference(reviewReference(sources, label))) setReview(null)
+            if (insertion.insertReference(reviewReference(sources, label, run))) setReview(null)
           }}
         />
       )}

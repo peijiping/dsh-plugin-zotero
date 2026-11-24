@@ -151,6 +151,14 @@ export function childKindIconClass(kind: ZoteroChildKind, read = false): string 
 
 /** 全局主题样式：只在入口注入一次，portal / 浮层里的按钮同样生效。 */
 export const THEME_CSS = `
+.dsh-zp-history-modal[role="dialog"] {
+  width: min(720px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+.dsh-zp-history-actions {
+  max-height: 24vh;
+  overflow: auto;
+}
 .dsh-zp-review-modal[role="dialog"] {
   width: min(960px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);

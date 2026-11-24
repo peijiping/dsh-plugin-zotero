@@ -384,7 +384,7 @@ export function TextViewer({
     locate,
     goToEvidence: (target) => {
       const root = contentRef.current
-      if (root !== null && target.quote && revealQuote(root, target.quote)) return true
+      if (root !== null && target.quote && revealQuote(root, target.quote, false, target.review !== undefined)) return true
       if (target.anchor === undefined || root === null) return false
       const found = noteParsed !== null
         ? root.querySelector(`[${OUTLINE_ANCHOR_ATTR}="${target.anchor}"]`) !== null

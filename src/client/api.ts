@@ -4,6 +4,7 @@
  * 响应信封由 Host 产出：`{ok:true,data}` / `{ok:false,error}`。
  */
 
+import type { ReviewEvidenceRecord } from '../zotero/review-evidence-types'
 import type {
   ApiFix,
   ZoteroAnnotationDraft,
@@ -168,6 +169,14 @@ export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Pro
 
 export function fetchFulltext(key: string, signal?: AbortSignal): Promise<ZoteroFulltext | null> {
   return get<ZoteroFulltext | null>('fulltext', { key }, signal)
+}
+
+export function fetchReviewEvidence(run: string, id: string): Promise<ReviewEvidenceRecord | null> {
+  return get('review-evidence', { run, id })
+}
+
+export function saveReviewEvidence(run: string, records: readonly ReviewEvidenceRecord[], signal: AbortSignal): Promise<unknown> {
+  return post('review-evidence-save', { run, records }, signal)
 }
 
 /** 附件文件地址；直接交给 PDF.js / Word 渲染器按 Range 取流。 */

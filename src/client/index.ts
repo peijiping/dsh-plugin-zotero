@@ -25,8 +25,10 @@ import {
 import type { InputActions } from './inline'
 import { ensureItemTitle, rememberItemTitle, useItemTitle } from './itemTitles'
 import { dicts, NS, type Translate } from './locales'
-import { resetPaneStore } from './paneStore'
+import { resetPaneStore, showToast } from './paneStore'
 import { EVIDENCE_LINK_PREFIX, evidenceFromHref, type EvidenceTarget } from './evidence'
+import { linkReviewAnswers } from './reviewAnswerLinks'
+import { loadReviewEvidence, parseReviewEvidenceHref, type ReviewEvidenceRef } from './reviewEvidence'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { SettingsNavIcon } from './SettingsNavIcon'
 import { installTheme } from './styles'
@@ -197,6 +199,16 @@ export function apply(ctx: ClientContext): void {
     ctx.sidebarRight.openResource(`${ITEM_ADDRESS_PREFIX}${target.key}`, { params: { evidence: target } })
   }
 
+  let evidenceRequest = 0
+  function openReviewEvidence(ref: ReviewEvidenceRef): void {
+    const request = ++evidenceRequest
+    void loadReviewEvidence(ref).catch(() => null).then((target) => {
+      if (request !== evidenceRequest) return
+      if (target === null) showToast(t('review.evidenceUnavailable'))
+      else openEvidence(target)
+    })
+  }
+
   // The host Markdown renderer accepts absolute HTTP(S) links. Handle this reserved
   // address before its normal browser or external-link delegate can run.
   ctx.effect(() => {
@@ -206,8 +218,15 @@ export function apply(ctx: ClientContext): void {
       if (!href.startsWith(EVIDENCE_LINK_PREFIX)) return
       event.preventDefault()
       event.stopPropagation()
+      const review = parseReviewEvidenceHref(href)
+      if (review !== null) {
+        openReviewEvidence(review)
+        return
+      }
+      evidenceRequest += 1
       const target = evidenceFromHref(href)
-      if (target !== null) openEvidence(target)
+      if (target === null) showToast(t('review.evidenceUnavailable'))
+      else openEvidence(target)
     }
     document.addEventListener('click', onEvidenceClick, true)
     document.addEventListener('auxclick', onEvidenceClick, true)
@@ -216,6 +235,8 @@ export function apply(ctx: ClientContext): void {
       document.removeEventListener('auxclick', onEvidenceClick, true)
     }
   }, 'dsh-plugin-zotero: open evidence')
+
+  ctx.effect(linkReviewAnswers, 'dsh-plugin-zotero: link review evidence in answers')
 
   // 引用 chip 的展开器：面板插的 chip 只带 key，提交时由这个 codec 现取文本。
   ctx.effect(
@@ -231,7 +252,7 @@ export function apply(ctx: ClientContext): void {
       () => scope.uiConversation.userText.register(zoteroHistoryRule),
       'dsh-plugin-zotero: history rule',
     )
-    const RefBody = createHistoryRefNode(t, openItem, openEvidence)
+    const RefBody = createHistoryRefNode(t, openItem, openEvidence, openReviewEvidence)
     scope.effect(
       () => scope.slots.inject('conversation.user.text.node', () =>
         scope.slots.register(

@@ -62,6 +62,7 @@ export interface ViewerHandle {
   /** 滚动到指定标注；未就绪或标注无位置时返回 false。 */
   locate(annotationKey: string): boolean
   goToEvidence?(target: EvidenceTarget): boolean
+  findReviewLocation?(target: EvidenceTarget, signal: AbortSignal): Promise<{ page: number; quote: string } | null>
   currentPage(): number
   /** 跳到指定页（1 基）。不支持分页的渲染器是空实现。 */
   goToPage(page: number): void

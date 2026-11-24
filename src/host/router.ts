@@ -20,6 +20,7 @@ import { ZoteroError } from '../zotero/client.js'
 import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
 import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
+import { getReviewEvidence, requireReviewEvidenceId, requireReviewRun, saveReviewEvidence } from '../zotero/review-evidence.js'
 import { listRecent, loadPosition, loadViewState, RECENT_LIMIT, savePosition, saveViewState, type ViewStatePatch } from '../zotero/view-state.js'
 import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type { TranslateInput, TranslateResult } from './translate.js'
@@ -109,6 +110,7 @@ const WRITE_ACTIONS = new Set([
   'annotation-create',
   'read-position-save',
   'view-state-save',
+  'review-evidence-save',
   // 不改 Zotero 数据，但会代表用户外发选中文本，同样要求「本插件的界面在操作」。
   'translate',
   // 同样不改 Zotero 数据，但会把刊名发给 easyScholar，并发起外部网络请求。
@@ -989,6 +991,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['auth-status', 'GET'],
   ['read-position', 'GET'],
   ['view-state', 'GET'],
+  ['review-evidence', 'GET'],
   ['note-raw', 'GET'],
   ['open-in-zotero', 'POST'],
   ['open-settings', 'POST'],
@@ -1002,6 +1005,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['annotation-create', 'POST'],
   ['read-position-save', 'POST'],
   ['view-state-save', 'POST'],
+  ['review-evidence-save', 'POST'],
   ['translate', 'POST'],
   ['journal-rank', 'POST'],
 ])
@@ -1090,6 +1094,18 @@ export function createHandler(
         case 'view-state':
           await handleViewState(res)
           return
+        case 'review-evidence':
+          ok(res, await getReviewEvidence(
+            requireReviewRun(url.searchParams.get('run')),
+            requireReviewEvidenceId(url.searchParams.get('id')),
+          ))
+          return
+        case 'review-evidence-save': {
+          const body = await readJsonBody(req, 16 * 1024 * 1024)
+          await saveReviewEvidence(requireReviewRun(body.run), body.records)
+          ok(res, { saved: true })
+          return
+        }
         case 'authorize':
           await handleAuthorize(res)
           return

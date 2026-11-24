@@ -44,6 +44,7 @@ import { readPdfOutline } from './pdfOutline'
 import { PDF_ASSET_BASE, PDF_CSS } from './pdfjs'
 import type { EvidenceLocation, EvidenceTarget } from '../evidence'
 import { offsetsWithin, revealOffsets, revealQuote } from './evidenceSelection'
+import { findReviewPdfLocation, normalizeEvidenceText } from './reviewLocation'
 import { SelectionBar, type MarkType } from './SelectionBar'
 import { TranslationCard } from './TranslationCard'
 import { useTranslation } from './useTranslation'
@@ -928,6 +929,21 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     }
   }
 
+  const reviewPageText = useMemo(() => new Map<number, string>(), [pdf])
+
+  async function findReviewLocation(target: EvidenceTarget, signal: AbortSignal) {
+    if (pdf === null || target.review === undefined) return null
+    return findReviewPdfLocation(target.review.excerpt, pdf.numPages, async (number) => {
+      const cached = reviewPageText.get(number)
+      if (cached !== undefined) return cached
+      const page = await pdf.getPage(number)
+      const content = await page.getTextContent()
+      const text = normalizeEvidenceText(content.items.map((item) => 'str' in item ? item.str : '').join(''))
+      reviewPageText.set(number, text)
+      return text
+    }, signal)
+  }
+
   function goToEvidence(target: EvidenceTarget): boolean {
     const page = target.page
     if (page === undefined || page > pageCount || !pagesSized) return false
@@ -939,8 +955,9 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
     if (!target.quote) return true
     const layer = scrollRef.current?.querySelector<HTMLElement>(`.page[data-page-number="${page}"] .textLayer`)
     return layer !== null && layer !== undefined
-      && ((target.pdfRange !== undefined && revealOffsets(layer, target.pdfRange, target.quote))
-        || revealQuote(layer, target.quote, true) || revealQuote(layer, target.quote))
+      && (target.review !== undefined ? revealQuote(layer, target.quote, false, true)
+        : (target.pdfRange !== undefined && revealOffsets(layer, target.pdfRange, target.quote))
+          || revealQuote(layer, target.quote, true) || revealQuote(layer, target.quote))
   }
 
   function goToPage(page: number): void {
@@ -951,6 +968,7 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   useImperativeHandle(viewerRef, () => ({
     locate,
     goToEvidence,
+    findReviewLocation,
     currentPage: () => currentPageRef.current,
     goToPage,
     goToOutline: (target) => {

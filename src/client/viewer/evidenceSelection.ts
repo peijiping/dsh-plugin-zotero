@@ -1,3 +1,5 @@
+import { normalizeEvidenceChar, normalizeEvidenceText } from './reviewLocation'
+
 function selectRange(root: HTMLElement, range: Range): boolean {
   const selection = root.ownerDocument.getSelection()
   if (selection === null) return false
@@ -41,24 +43,33 @@ export function revealOffsets(root: HTMLElement, offsets: { start: number; end: 
 }
 
 /** Restore a unique text fragment and leave it selected in the reader. */
-export function revealQuote(root: HTMLElement, quote: string, separateNodes = false): boolean {
-  const needle = quote.replace(/\s+/gu, ' ').trim()
+export function revealQuote(
+  root: HTMLElement,
+  quote: string,
+  separateNodes = false,
+  normalize = false,
+): boolean {
+  const needle = normalize ? normalizeEvidenceText(quote) : quote.replace(/\s+/gu, ' ').trim()
   if (needle === '') return false
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-  const offsets: { node: Text; offset: number }[] = []
+  const offsets: { node: Text; offset: number; end: number }[] = []
   let text = ''
   let node = walker.nextNode() as Text | null
   while (node !== null) {
     const value = node.data
     if (separateNodes && text !== '' && !text.endsWith(' ') && value !== '') {
-      offsets.push({ node, offset: 0 })
+      offsets.push({ node, offset: 0, end: 1 })
       text += ' '
     }
-    for (let offset = 0; offset < value.length; offset += 1) {
-      const char = /\s/u.test(value[offset]) ? ' ' : value[offset]
-      if (char === ' ' && text.endsWith(' ')) continue
-      text += char
-      offsets.push({ node, offset })
+    let offset = 0
+    for (const point of value) {
+      const char = normalize ? normalizeEvidenceChar(point) : /\s/u.test(point) ? ' ' : point
+      const end = offset + point.length
+      if (char !== ' ' || !text.endsWith(' ')) {
+        text += char
+        for (let index = 0; index < char.length; index += 1) offsets.push({ node, offset, end })
+      }
+      offset = end
     }
     node = walker.nextNode() as Text | null
   }
@@ -69,6 +80,6 @@ export function revealQuote(root: HTMLElement, quote: string, separateNodes = fa
   if (from === undefined || to === undefined) return false
   const range = root.ownerDocument.createRange()
   range.setStart(from.node, from.offset)
-  range.setEnd(to.node, to.offset + 1)
+  range.setEnd(to.node, to.end)
   return selectRange(root, range)
 }

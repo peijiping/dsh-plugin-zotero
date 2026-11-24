@@ -16,6 +16,7 @@
  *    若改名或改语义，全项目只有 {@link insertChip} 这一处需要跟着改。
  */
 
+import { isReviewEvidenceRun } from '../zotero/review-evidence-types'
 import type { Translate } from './locales'
 import { makeEvidence, type EvidenceLocation } from './evidence'
 import type { InsertionSpan } from './inline'
@@ -164,8 +165,11 @@ export function citationForRef(t: Translate, ref: string, signal: AbortSignal): 
     return attachmentCitation(t, source, signal)
   }
   if (ref.startsWith(REVIEW_PREFIX)) {
-    const sources: ReviewSource[] = JSON.parse(decodeURIComponent(ref.slice(REVIEW_PREFIX.length)))
-    return reviewCitation(t, sources, signal)
+    const value: ReviewSource[] | { run: string; sources: ReviewSource[] } =
+      JSON.parse(decodeURIComponent(ref.slice(REVIEW_PREFIX.length)))
+    if (Array.isArray(value)) return reviewCitation(t, value, signal)
+    if (!isReviewEvidenceRun(value.run) || !Array.isArray(value.sources)) throw new Error('Invalid review reference')
+    return reviewCitation(t, value.sources, signal, value.run)
   }
   if (ref.startsWith(FULLTEXT_PREFIX)) return fulltextCitation(t, ref.slice(FULLTEXT_PREFIX.length), signal)
   if (ref.startsWith(COLLECTION_PREFIX)) return collectionCitation(t, ref.slice(COLLECTION_PREFIX.length), signal)
@@ -237,8 +241,8 @@ export function attachmentFulltextReference(source: AttachmentCitation, label: s
   return reference(ATTACHMENT_FULLTEXT_PREFIX, encodeURIComponent(JSON.stringify(source)), label, 'file')
 }
 
-export function reviewReference(sources: readonly ReviewSource[], label: string): ReferenceInsert {
-  return reference(REVIEW_PREFIX, encodeURIComponent(JSON.stringify(sources)), label, 'folder')
+export function reviewReference(sources: readonly ReviewSource[], label: string, run: string): ReferenceInsert {
+  return reference(REVIEW_PREFIX, encodeURIComponent(JSON.stringify({ run, sources })), label, 'folder')
 }
 
 /** 一个目录的 chip。 */

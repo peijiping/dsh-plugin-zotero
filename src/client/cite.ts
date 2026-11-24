@@ -10,10 +10,11 @@
  *   后重发即可；静默降级成 `@item:KEY` 等于给模型发一个裸 key。
  */
 
+import type { ReviewEvidenceRecord } from '../zotero/review-evidence-types'
 import type { ZoteroFulltext } from '../zotero/types'
 import type { Translate } from './locales'
 import { tpl } from './locales'
-import { ApiFailure, fetchFulltext, fetchItem, fetchItems, fetchTags, fetchTree } from './api'
+import { ApiFailure, fetchFulltext, fetchItem, fetchItems, fetchTags, fetchTree, saveReviewEvidence } from './api'
 import {
   COLLECTION_PREVIEW_LIMIT,
   annotationText,
@@ -30,6 +31,7 @@ import {
 import type { ShotMeta } from './viewer/shot/types'
 import { evidenceLine, makeEvidence, type EvidenceTarget } from './evidence'
 import { parseFulltextRange, sliceFulltext } from './fulltextRange'
+import { reviewEvidenceHref, reviewFragments } from './reviewEvidence'
 
 /** 文库里已经没有这个对象（与「连不上 Zotero」区分开）。 */
 function isMissing(error: unknown): boolean {
@@ -97,11 +99,19 @@ export async function attachmentCitation(
   source: AttachmentCitation,
   signal?: AbortSignal,
 ): Promise<string> {
+  return attachmentCitationText(t, source, await verifiedFulltext(t, source, signal))
+}
+
+async function verifiedFulltext(
+  t: Translate,
+  source: AttachmentCitation,
+  signal?: AbortSignal,
+): Promise<ZoteroFulltext> {
   const fulltext = await fetchFulltext(source.attachmentKey, signal)
   if (fulltext === null || fulltext.attachmentKey !== source.attachmentKey || fulltext.revision !== source.revision) {
     throw new Error(tpl(t('fulltext.changed'), { name: source.attachmentTitle }))
   }
-  return attachmentCitationText(t, source, fulltext)
+  return fulltext
 }
 
 export function attachmentCitationText(t: Translate, source: AttachmentCitation, fulltext: ZoteroFulltext): string {
@@ -148,18 +158,60 @@ export function reviewText(t: Translate, sections: readonly string[]): string {
   return [t('review.title'), t('review.instructions'), ...sections].join('\n\n')
 }
 
+export function reviewEvidenceSource(
+  t: Translate,
+  source: ReviewSource,
+  fulltext: ZoteroFulltext,
+  run: string,
+  paper: number,
+): { section: string; records: ReviewEvidenceRecord[] } {
+  const attachment = source.text
+  if (attachment === undefined) return { section: reviewSourceText(t, source), records: [] }
+  const slice = sliceFulltext(fulltext.content, attachment.range)
+  const records = reviewFragments(fulltext.content, attachment.range).map((fragment, index) => ({
+    ...fragment,
+    id: `Z${paper}.${index + 1}`,
+    key: source.key,
+    attachmentKey: attachment.attachmentKey,
+    revision: attachment.revision,
+  }))
+  slice.text = records.map(({ id, excerpt }) => `[${id}](${reviewEvidenceHref({ run, id })})\n${excerpt}`).join('\n\n')
+  const body = fulltextText(t, source, slice, fulltext, attachment.attachmentTitle)
+  return { section: reviewSourceText(t, source, body), records }
+}
+
 export async function reviewCitation(
   t: Translate,
   sources: readonly ReviewSource[],
   signal: AbortSignal,
+  run?: string,
 ): Promise<string> {
   const sections: string[] = []
+  const records: ReviewEvidenceRecord[] = []
   for (let start = 0; start < sources.length; start += 4) {
-    const group = await Promise.all(sources.slice(start, start + 4).map(async (source) => {
-      const body = source.text === undefined ? undefined : await attachmentCitation(t, source.text, signal)
-      return reviewSourceText(t, source, body)
+    const group = await Promise.all(sources.slice(start, start + 4).map(async (source, index) => {
+      if (source.text === undefined) return { section: reviewSourceText(t, source), records: [] }
+      const fulltext = await verifiedFulltext(t, source.text, signal)
+      if (run !== undefined) return reviewEvidenceSource(t, source, fulltext, run, start + index + 1)
+      return { section: reviewSourceText(t, source, attachmentCitationText(t, source.text, fulltext)), records: [] }
     }))
-    sections.push(...group)
+    for (const entry of group) {
+      sections.push(entry.section)
+      records.push(...entry.records)
+    }
+  }
+  if (run !== undefined && records.length > 0) {
+    signal.throwIfAborted()
+    try {
+      await saveReviewEvidence(run, records, signal)
+    } catch (error) {
+      signal.throwIfAborted()
+      if (error instanceof ApiFailure && error.code === 'bad_request' && error.message.includes('未知 action')) {
+        throw new Error(t('review.hostOutdated'))
+      }
+      throw new Error(t('review.evidenceSaveFailed'))
+    }
+    signal.throwIfAborted()
   }
   return reviewText(t, sections)
 }

@@ -1,3 +1,4 @@
+import type { ReviewEvidenceRecord } from '../zotero/review-evidence-types'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 
@@ -17,6 +18,7 @@ export interface EvidenceLocation {
 export interface EvidenceTarget extends EvidenceLocation {
   key: string
   id: string
+  review?: Omit<ReviewEvidenceRecord, 'key' | 'attachmentKey'>
 }
 
 export const EVIDENCE_LINK_PREFIX = 'https://zotero-evidence.invalid/'

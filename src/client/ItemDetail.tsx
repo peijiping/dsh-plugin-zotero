@@ -152,6 +152,11 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
   }, [])
   const [readyDocumentKey, setReadyDocumentKey] = useState('')
   const handledEvidence = useRef<EvidenceTarget>()
+  const [reviewPosition, setReviewPosition] = useState<{
+    target: EvidenceTarget
+    status: 'searching' | 'excerpt' | 'page' | 'located'
+    page?: number
+  }>()
   const pendingLocate = useRef<string | null>(null)
   const locateTimer = useRef<number | null>(null)
 
@@ -317,13 +322,57 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
     const targetAttachment = evidence.attachmentKey
     if (targetAttachment !== undefined && !attachments.some((item) => item.key === targetAttachment)) {
       handledEvidence.current = evidence
-      showToast(t('evidence.fallback'))
+      if (evidence.review) setReviewPosition({ target: evidence, status: 'excerpt' })
+      else showToast(t('evidence.fallback'))
       return
     }
     if (targetAttachment !== undefined && attachmentKey !== targetAttachment) {
       setReadyDocumentKey('')
       setSelectedKey(targetAttachment)
       return
+    }
+    if (evidence.review !== undefined) {
+      if (readyDocumentKey !== documentKey) return
+      const viewer = viewerRef.current
+      if (viewer === null) return
+      const controller = new AbortController()
+      let timer: number | undefined
+      const target = evidence
+      const { excerpt } = evidence.review
+      function finish(status: 'excerpt' | 'page' | 'located', page?: number): void {
+        handledEvidence.current = target
+        setReviewPosition({ target, status, page })
+      }
+      if (!viewer.findReviewLocation) {
+        const quoted = { ...target, quote: renderer.id === 'snapshot' ? excerpt.trim().slice(0, 160) : excerpt }
+        const matched = viewer.goToEvidence?.(quoted) === true
+        finish(matched && renderer.id === 'text' ? 'located' : 'excerpt')
+        return
+      }
+      setReviewPosition({ target, status: 'searching' })
+      void viewer.findReviewLocation(target, controller.signal).catch(() => null).then((position) => {
+        if (controller.signal.aborted) return
+        if (position === null) {
+          finish('excerpt')
+          return
+        }
+        const positioned = { ...target, ...position }
+        let attempts = 0
+        function reveal(): void {
+          const currentViewer = viewerRef.current
+          if (currentViewer?.goToEvidence?.(positioned) === true) finish('located', positioned.page)
+          else if (++attempts < 30) timer = window.setTimeout(reveal, 100)
+          else {
+            currentViewer?.goToPage(positioned.page)
+            finish('page', positioned.page)
+          }
+        }
+        reveal()
+      })
+      return () => {
+        controller.abort()
+        window.clearTimeout(timer)
+      }
     }
     const hasPosition = evidence.annotationKey !== undefined || evidence.page !== undefined
       || evidence.anchor !== undefined || (evidence.quote !== undefined && renderer.id !== 'pdf')
@@ -404,8 +453,23 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
     viewerRef.current?.goToOutline(item.target)
   }
 
+  const status = reviewPosition?.target === evidence ? reviewPosition?.status : undefined
+  const reviewStatus = status === 'located' ? t('review.evidenceLocated')
+    : status === 'page' ? tpl(t('review.evidencePage'), { page: reviewPosition?.page ?? '' })
+    : status === 'searching' ? t('review.evidenceSearching')
+    : status === 'excerpt' ? t('review.evidenceIndexOnly') : ''
+
   return (
     <div style={{ ...rootStyle, '--dsh-zp-topbar-pad': `${topbarPad}px` } as CSSProperties}>
+      {evidence?.review !== undefined && (
+        <details key={evidence.id} open style={reviewExcerptStyle}>
+          <summary>
+            {tpl(t('review.evidenceExcerpt'), { id: evidence.review.id })}
+            <span aria-live="polite">{reviewStatus === '' ? '' : ` · ${reviewStatus}`}</span>
+          </summary>
+          <div style={reviewExcerptTextStyle}>{evidence.review.excerpt}</div>
+        </details>
+      )}
       <DocumentView
         t={t}
         detail={readingDetail}
@@ -489,6 +553,20 @@ const rootStyle = {
   height: '100%',
   minHeight: 0,
 } as const
+
+const reviewExcerptStyle: CSSProperties = {
+  flex: '0 0 auto',
+  padding: '6px 10px',
+  borderBottom: '1px solid color-mix(in srgb, CanvasText 15%, transparent)',
+  fontSize: 12,
+}
+const reviewExcerptTextStyle: CSSProperties = {
+  maxHeight: 'min(130px, 24vh)',
+  overflow: 'auto',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+  marginTop: 4,
+}
 
 /** 采集进行中的覆盖提示：只遮正文（工具条 30px 高），不拦指针。 */
 const capturingStyle = {

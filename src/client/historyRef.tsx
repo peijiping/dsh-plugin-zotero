@@ -13,7 +13,7 @@
  * 老会话里的引用块也能显示。
  */
 
-import { useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 
 import { HoverCard, Modal, ReferenceChip } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -21,6 +21,8 @@ import type { Translate } from './locales'
 import { evidenceDisplayText, evidenceIn, type EvidenceTarget } from './evidence'
 import { tpl } from './locales'
 import { itemKeyOf } from './historyRefKey'
+import { REVIEW_CITATION_DATA } from './reviewAnswerLinks'
+import { displayReviewEvidence, reviewEvidenceGroups, type ReviewEvidenceRef } from './reviewEvidence'
 import { CITATION_CLOSE, CITATION_OPEN } from './reference'
 import { Button } from './ui'
 
@@ -93,7 +95,7 @@ export const zoteroHistoryRule: UserTextRuleLike = {
 
 const MODAL_BODY_STYLE: CSSProperties = {
   margin: 0,
-  maxHeight: '60vh',
+  maxHeight: '52vh',
   overflow: 'auto',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
@@ -120,13 +122,28 @@ const HOVER_BODY_STYLE: CSSProperties = {
 }
 
 /** 打开原文按钮与正文之间留一点间距。 */
-const OPEN_BUTTON_STYLE: CSSProperties = { marginTop: 8 }
+const OPEN_BUTTON_STYLE: CSSProperties = {
+  marginTop: 8,
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
+  height: 'auto',
+}
+
+function citationTitles(body: string): Map<string, string> {
+  const titles = new Map<string, string>()
+  // 标题来自引用头，按条目 key 匹配，多个章节可共用同一文献标题。
+  for (const match of body.matchAll(/^(?:【Zotero [^｜\n]+｜|\[Zotero [^|\n]+ \| )(.+?)(?:｜| \| )([A-Z2-9]{8})(?=｜|】| \||\])/gmu)) {
+    titles.set(match[2], match[1])
+  }
+  return titles
+}
 
 /** 生成历史节点渲染器：`t` 与 `openItem` 在 apply 时绑定，组件只拿席位下发的 prop。 */
 export function createHistoryRefNode(
   t: Translate,
   onOpenItem: (key: string) => void,
   onOpenEvidence: (evidence: EvidenceTarget) => void,
+  onOpenReviewEvidence: (ref: ReviewEvidenceRef) => void,
 ) {
   return function ZoteroHistoryRef({ node, raw, interactive }: HistoryRefNodeProps) {
     const [open, setOpen] = useState(false)
@@ -134,19 +151,51 @@ export function createHistoryRefNode(
     const body = citationBody(raw)
     const itemKey = itemKeyOf(body)
     const evidence = evidenceIn(body)
-    const displayText = evidenceDisplayText(body)
+    const titles = evidence.length > 0 ? citationTitles(body) : undefined
+    const groups = useMemo(() => reviewEvidenceGroups(body), [body])
+    const displayText = groups.length === 0 ? evidenceDisplayText(body) : displayReviewEvidence(body)
+    const references = groups.flatMap(({ links }) => links)
+    const run = references[0]?.run
+    const reviewActions = groups.length === 0 ? null : (
+      <details>
+        <summary>{t('review.evidenceList')}</summary>
+        {groups.map(({ title, links }) => (
+          <details key={links[0].id}>
+            <summary>{title}</summary>
+            {links.map((ref) => (
+              <Button
+                key={ref.id}
+                variant="outline"
+                size="sm"
+                style={OPEN_BUTTON_STYLE}
+                onClick={() => { setOpen(false); onOpenReviewEvidence(ref) }}
+              >
+                {ref.id}
+              </Button>
+            ))}
+          </details>
+        ))}
+      </details>
+    )
     // 点击胶囊原有的「看完整引用」行为不抢；回溯入口放在悬停卡片与 Modal 里。
-    const openOriginal = evidence.length > 0 ? evidence.map((target) => (
-      <Button
-        key={target.id}
-        variant="outline"
-        size="sm"
-        style={OPEN_BUTTON_STYLE}
-        onClick={() => { setOpen(false); onOpenEvidence(target) }}
-      >
-        {tpl(t('evidence.open'), { id: target.id })}
-      </Button>
-    )) : itemKey === null ? null : (
+    const openOriginal = evidence.length > 0 ? evidence.map((target, index) => {
+      const quote = target.quote?.replace(/\s+/gu, ' ').trim()
+      const title = titles?.get(target.key) || (quote && (quote.length > 64 ? `${quote.slice(0, 64)}…` : quote))
+      const page = target.pageLabel || target.page
+      const location = page === undefined ? '' : tpl(t(target.chapterStart ? 'evidence.chapterPage' : 'evidence.page'), { page })
+      const name = title || tpl(t('evidence.number'), { number: index + 1 })
+      return (
+        <Button
+          key={target.id}
+          variant="outline"
+          size="sm"
+          style={OPEN_BUTTON_STYLE}
+          onClick={() => { setOpen(false); onOpenEvidence(target) }}
+        >
+          {tpl(t('evidence.open'), { name: name + location })}
+        </Button>
+      )
+    }) : itemKey === null ? null : (
       <Button
         variant="outline"
         size="sm"
@@ -158,6 +207,11 @@ export function createHistoryRefNode(
     )
     return (
       <>
+        {run !== undefined && (
+          <span hidden {...{
+            [REVIEW_CITATION_DATA]: [run, ...references.filter((ref) => ref.run === run).map((ref) => ref.id)].join(' '),
+          }} />
+        )}
         <HoverCard
           inline
           grouped
@@ -174,19 +228,22 @@ export function createHistoryRefNode(
           content={(
             <div style={HOVER_CARD_STYLE}>
               <div style={HOVER_BODY_STYLE}>{displayText}</div>
-              {openOriginal}
+              {reviewActions ?? openOriginal}
             </div>
           )}
         />
         {open && (
           <Modal
             open
+            className="dsh-zp-history-modal"
             onClose={() => setOpen(false)}
             title={t('history.title')}
             closeLabel={t('action.close')}
           >
             <pre style={MODAL_BODY_STYLE}>{displayText}</pre>
-            {openOriginal}
+            {(reviewActions ?? openOriginal) && (
+              <div className="dsh-zp-history-actions">{reviewActions ?? openOriginal}</div>
+            )}
           </Modal>
         )}
       </>

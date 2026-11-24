@@ -4,20 +4,18 @@ import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroFulltext, ZoteroItemDetail, ZoteroItemSummary } from '../zotero/types'
 import { ApiFailure, fetchFulltext, fetchItem } from './api'
-import { attachmentCitationText, reviewSourceText, reviewText, type ReviewSource } from './cite'
-import { makeEvidence, type EvidenceTarget } from './evidence'
+import { reviewEvidenceSource, reviewSourceText, reviewText, type ReviewSource } from './cite'
+import { createReviewRun, displayReviewEvidence } from './reviewEvidence'
 import { planChapters, type ChapterPlan } from './fulltextPlan'
 import { sliceFulltext } from './fulltextRange'
 import { readAttachmentOutline } from './viewer/attachmentOutline'
-import type { DocumentOutlineItem, OutlineTarget } from './viewer/types'
+import type { DocumentOutlineItem } from './viewer/types'
 import { tpl, type Translate } from './locales'
 import { wrapCitation } from './reference'
 import { estimateTokens } from './tokens'
 import { Button } from './ui'
 
 const INITIAL_CHARS = 6000
-// Review answers repeat these URLs in table cells. Keep the locator short.
-const EVIDENCE_QUOTE_CHARS = 96
 
 interface ReviewRow {
   item: ZoteroItemSummary
@@ -25,9 +23,8 @@ interface ReviewRow {
   attachmentKey: string
   fulltext?: ZoteroFulltext | null
   error?: 'load' | 'host'
-  evidence: EvidenceTarget
   mode: 'metadata' | 'range' | 'all' | 'chapter'
-  outline?: (DocumentOutlineItem & { evidence: EvidenceTarget })[]
+  outline?: DocumentOutlineItem[]
   outlineError?: boolean
   chapters: ReadonlySet<number>
   start: string
@@ -38,19 +35,17 @@ interface Props {
   t: Translate
   items: readonly ZoteroItemSummary[]
   onClose(): void
-  onConfirm(sources: readonly ReviewSource[]): void
+  onConfirm(sources: readonly ReviewSource[], run: string): void
 }
 
 function createRow(item: ZoteroItemSummary): ReviewRow {
-  return { item, evidence: makeEvidence(item.key), attachmentKey: '', mode: 'all', chapters: new Set(), start: '0', end: String(INITIAL_CHARS) }
+  return { item, attachmentKey: '', mode: 'all', chapters: new Set(), start: '0', end: String(INITIAL_CHARS) }
 }
 
 interface ReviewSelection {
   range: string
   scope: string
   text: string
-  estimated?: boolean
-  target?: OutlineTarget
 }
 
 function getSelection(row: ReviewRow, t: Translate, plan: ChapterPlan | null): ReviewSelection | null {
@@ -60,7 +55,7 @@ function getSelection(row: ReviewRow, t: Translate, plan: ChapterPlan | null): R
     if (plan === null || plan.fallbackAll) return null
     const slice = sliceFulltext(index.content, plan.range)
     if (slice.text === '') return null
-    return { range: plan.range, scope: plan.scope, text: slice.text, estimated: slice.estimated, target: plan.target }
+    return { range: plan.range, scope: plan.scope, text: slice.text }
   }
   if (row.mode === 'all') return { range: 'all', scope: t('fulltext.scope.all'), text: index.content }
   if (row.start.trim() === '' || row.end.trim() === '') return null
@@ -76,18 +71,8 @@ function getSelection(row: ReviewRow, t: Translate, plan: ChapterPlan | null): R
   }
 }
 
-function attachmentEvidence(base: EvidenceTarget, attachmentKey: string, text: string, target?: OutlineTarget): EvidenceTarget {
-  return {
-    ...base,
-    attachmentKey,
-    page: target?.kind === 'page' ? target.page : undefined,
-    chapterStart: target?.kind === 'page' || undefined,
-    anchor: target?.kind === 'anchor' ? target.id : undefined,
-    quote: target?.kind === 'page' ? undefined : text.trimStart().slice(0, EVIDENCE_QUOTE_CHARS) || undefined,
-  }
-}
-
 export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElement {
+  const [run] = useState(createReviewRun)
   const [reload, setReload] = useState(0)
   const [rows, setRows] = useState(() => items.map(createRow))
 
@@ -137,6 +122,7 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
       : selected !== null ? 'text' : 'missing'
     const missingIndex = row.attachmentKey !== '' && row.fulltext === null
     let status = t(`review.coverage.${coverage}`)
+    if (coverage === 'text' && row.fulltext?.truncated) status += ` · ${t('review.indexTruncated')}`
     if (row.mode === 'metadata') {
       if (missingIndex) status += ` · ${t('review.indexMissing')}`
     } else {
@@ -154,23 +140,15 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
         }
       }
     }
-    return { row, selected, plan, status, pending, coverage, missingIndex, tokens: estimateTokens(selected?.text ?? '') }
+    return { row, selected, status, pending, coverage, missingIndex, tokens: estimateTokens(selected?.text ?? '') }
   })
 
   const canConfirm = prepared.every(({ row, selected }) => row.mode === 'metadata' || selected !== null)
-  const sources = prepared.map(({ row, selected, plan, coverage, missingIndex }) => {
+  const sources = prepared.map(({ row, selected, coverage, missingIndex }) => {
     const { key, title, creators, year } = row.item
     const attachment = row.detail?.attachments.find((candidate) => candidate.key === row.attachmentKey)
     const attachmentTitle = attachment?.title || attachment?.filename
     const fulltext = row.fulltext
-    const outline = row.outline
-    const chapterRanges = plan?.chapters
-    const chapters = fulltext && outline && chapterRanges && chapterRanges.length > 1
-      ? chapterRanges.map(({ index, start, end }) => {
-        const chapter = outline[index]
-        const quote = fulltext.content.slice(start, Math.min(start + EVIDENCE_QUOTE_CHARS, end))
-        return { start, end, evidence: attachmentEvidence(chapter.evidence, row.attachmentKey, quote, chapter.target ?? undefined) }
-      }) : undefined
     const text = selected !== null && fulltext?.revision !== undefined ? {
       key,
       title,
@@ -178,15 +156,14 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
       attachmentTitle: attachmentTitle || row.attachmentKey,
       revision: fulltext.revision,
       range: `${selected.range}|${encodeURIComponent(selected.scope)}`,
-      evidence: chapters === undefined ? attachmentEvidence(row.evidence, row.attachmentKey, selected.text, selected.target) : undefined,
-      chapters,
     } : undefined
     return { key, title, creators, year, attachmentTitle, text, coverage, missingIndex: missingIndex || undefined }
   })
   const sections = sources.map((source, index) => {
     const fulltext = rows[index].fulltext
-    const body = source.text && fulltext ? attachmentCitationText(t, source.text, fulltext) : undefined
-    return reviewSourceText(t, source, body)
+    return source.text && fulltext
+      ? reviewEvidenceSource(t, source, fulltext, run, index + 1).section
+      : reviewSourceText(t, source)
   })
   const total = estimateTokens(wrapCitation(reviewText(t, sections)))
   const bodyTokens = prepared.reduce((sum, row) => sum + row.tokens, 0)
@@ -196,7 +173,7 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
     : t('review.unavailable')
 
   function confirm(): void {
-    if (canConfirm) onConfirm(sources)
+    if (canConfirm) onConfirm(sources, run)
   }
 
   return (
@@ -215,14 +192,14 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
             </span>}
           </small>
           <Button type="button" variant="primary" size="sm" disabled={!canConfirm} onClick={confirm} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-            {t(prepared.some(({ selected }) => selected?.estimated) ? 'fulltext.confirmEstimate' : 'fulltext.confirm')}
+            {t('fulltext.confirm')}
           </Button>
         </div>
       )}
     >
       <p style={{ marginTop: 0 }}>{t('review.hint')}</p>
       <ol style={{ margin: 0, padding: '0 4px 0 22px', maxHeight: 'min(60vh, 640px)', overflow: 'auto' }}>
-        {prepared.map(({ row, selected, status, tokens }) => (
+        {prepared.map(({ row, selected, status, tokens }, index) => (
           <li key={row.item.key} style={{ padding: '8px 0', borderBottom: '1px solid rgba(127,127,127,0.24)' }}>
             <strong style={{ overflowWrap: 'anywhere' }}>{row.item.title}</strong>
             <ReviewControls
@@ -236,11 +213,9 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
                 <>
                   {' · '}{selected.scope}{' · '}
                   {tpl(t('fulltext.tokens'), { n: tokens.toLocaleString() })}
-                  {row.fulltext.truncated && ` · ${t('insert.menu.truncated')}`}
                 </>
               )}
             </div>
-            {selected?.estimated && <p style={{ marginBlock: 4 }}>{t('fulltext.estimateHint')}</p>}
             {row.error === 'load' && (
               <Button type="button" size="sm" onClick={() => {
                 if (row.detail === undefined) {
@@ -253,7 +228,7 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
             {selected !== null && (
               <details>
                 <summary>{t('fulltext.preview')}</summary>
-                <pre style={{ maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{selected.text}</pre>
+                <pre style={{ maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{displayReviewEvidence(sections[index])}</pre>
               </details>
             )}
           </li>
@@ -298,7 +273,7 @@ function ReviewControls({ t, row, update }: {
     const attachment = detail?.attachments.find((item) => item.key === attachmentKey)
     readAttachmentOutline(attachment, row.fulltext.content, controller.signal).then((outline) => {
       if (!controller.signal.aborted) {
-        update({ outline: outline.map((chapter) => ({ ...chapter, evidence: makeEvidence(row.item.key) })) })
+        update({ outline })
       }
     }).catch(() => {
       if (!controller.signal.aborted) update({ outlineError: true })
