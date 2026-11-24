@@ -231,13 +231,17 @@ export function InfoPanel({
     [detail.extra, detail.tags],
   )
 
-  /** 外部站点入口。目前只留 easyScholar 一家，见 `journalLinks.ts`。 */
+  /**
+   * 外部站点入口：四个站查的东西不重叠（指标 / 收录核验 / 投稿参考 / SJR），
+   * 见 `journalLinks.ts`。ISSN 优先、刊名兜底。
+   */
   const journalQueryLinks = useMemo(
     () => journalLinks({
+      issn: detail.issn,
       publicationTitle: detail.publicationTitle,
       journalAbbreviation: detail.journalAbbreviation,
     }),
-    [detail.publicationTitle, detail.journalAbbreviation],
+    [detail.issn, detail.publicationTitle, detail.journalAbbreviation],
   )
 
   async function handleOpenJournalLink(url: string): Promise<void> {
@@ -282,7 +286,7 @@ export function InfoPanel({
               key={link.id}
               type="button"
               onClick={() => { void handleOpenJournalLink(link.url) }}
-              title={tpl(t('detail.queryIn'), { site: link.label })}
+              title={t(link.hintKey)}
               style={journalLinkStyle}
             >
               {link.label}
