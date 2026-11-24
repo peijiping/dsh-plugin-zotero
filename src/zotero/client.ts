@@ -94,6 +94,15 @@ interface RawItemData {
   abstractNote?: string
   date?: string
   publicationTitle?: string
+  /** 期刊 ISSN；Zotero 里多值以空格分隔，单值也可能没有连字符。 */
+  ISSN?: string
+  /** 期刊缩写，`J. Am. Chem. Soc.` 这种形态。 */
+  journalAbbreviation?: string
+  /**
+   * 自由文本备注。Zotero 官方没有影响因子 / 分区 / 被引字段，社区插件一律写这里，
+   * 所以它也是本插件唯一能读到这类指标的通道（只读，不回写）。
+   */
+  extra?: string
   url?: string
   DOI?: string
   creators?: RawCreator[]
@@ -1704,6 +1713,9 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     creators: (data.creators ?? []).map(creatorName).filter((n) => n !== ''),
     year: yearOf(raw.meta, data),
     publicationTitle: data.publicationTitle ?? '',
+    issn: data.ISSN ?? '',
+    journalAbbreviation: data.journalAbbreviation ?? '',
+    extra: data.extra ?? '',
     url: data.url ?? '',
     doi: data.DOI ?? '',
     abstract: data.abstractNote ?? '',

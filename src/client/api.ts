@@ -205,6 +205,16 @@ export async function openInZotero(input: OpenInZoteroInput): Promise<void> {
 }
 
 /**
+ * 在默认浏览器里打开期刊查询页。
+ *
+ * 站点白名单在 Host 侧（`router.ts` 的 `ALLOWED_EXTERNAL_HOSTS`），客户端不再
+ * 校验一遍：两处各写一份迟早会漂移，而真正的安全边界本来就在 Host。
+ */
+export async function openJournalUrl(url: string): Promise<void> {
+  await post<{ opened: boolean }>('open-url', { url })
+}
+
+/**
  * 打开「去那儿修」的系统面板。
  *
  * 目前只支持 macOS 的「文件与文件夹」授权：插件读不到 Zotero 附件时，最需要

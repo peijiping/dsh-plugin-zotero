@@ -33,10 +33,15 @@ import { InsertMenu } from './InsertMenu'
 import type { DocumentOutlineItem } from './viewer/types'
 import { useFloatingBox } from './floatingBox'
 import { itemTypeLabel } from './itemType'
-import type { Translate } from './locales'
+import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
+import { openJournalUrl } from './api'
+import { readJournalMetrics } from './journalMetrics'
+import { isCjkTitle, journalLinks } from './journalLinks'
+import { showToast } from './paneStore'
 import { ACCENT } from './styles'
 import { estimateTokens } from './tokens'
+import { OpenInZoteroIcon } from './viewer/OpenInZoteroIcon'
 import {
   setInfoSection,
   toggleInfoSection,
@@ -215,12 +220,83 @@ export function InfoPanel({
     [detail.fulltext?.content],
   )
 
-  const metaRows: { label: string; value: string }[] = []
+  /**
+   * 期刊指标：只从条目**已有**的 extra / 标签里读，读不到就整块不出现。
+   *
+   * 不做在线查询也不内置数据表 —— 影响因子与分区是商业授权数据，见
+   * `journalMetrics.ts` 顶部那段说明。面板上多一行错的值比少一行严重得多。
+   */
+  const metrics = useMemo(
+    () => readJournalMetrics(detail.extra, detail.tags),
+    [detail.extra, detail.tags],
+  )
+
+  /** 外部站点入口：ISSN 优先、刊名兜底，站点选择权留给用户。 */
+  const journalQueryLinks = useMemo(
+    () => journalLinks({
+      issn: detail.issn,
+      publicationTitle: detail.publicationTitle,
+      journalAbbreviation: detail.journalAbbreviation,
+    }),
+    [detail.issn, detail.publicationTitle, detail.journalAbbreviation],
+  )
+
+  async function handleOpenJournalLink(url: string): Promise<void> {
+    try {
+      await openJournalUrl(url)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      showToast(tpl(t('detail.queryFailed'), { message }))
+    }
+  }
+
+  const metaRows: { label: string; value: ReactNode }[] = []
   const typeLabel = itemTypeLabel(t, detail.itemType)
   if (typeLabel !== '') metaRows.push({ label: t('detail.type'), value: typeLabel })
   if (detail.creators.length > 0) metaRows.push({ label: t('detail.creators'), value: detail.creators.join('、') })
   if (detail.year !== '') metaRows.push({ label: t('detail.year'), value: detail.year })
   if (detail.publicationTitle !== '') metaRows.push({ label: t('detail.source'), value: detail.publicationTitle })
+  // 指标行紧跟在「出处」下面：读者看完成分才会想「这刊什么水平」。
+  if (metrics !== null) {
+    if (metrics.impactFactor !== '') {
+      metaRows.push({ label: t('detail.impactFactor'), value: metrics.impactFactor })
+    }
+    if (metrics.jcrQuartile !== '') {
+      metaRows.push({ label: t('detail.jcrQuartile'), value: metrics.jcrQuartile })
+    }
+    if (metrics.casQuartile !== '') {
+      metaRows.push({ label: t('detail.casQuartile'), value: metrics.casQuartile })
+    }
+    if (metrics.citations !== '') {
+      metaRows.push({ label: t('detail.citations'), value: metrics.citations })
+    }
+  }
+  if (journalQueryLinks.length > 0) {
+    // 没有指标时，悬停提示告诉用户「这刊是中文刊，查不到很正常」；有指标时
+    // 说明这些值是从他自己库里读的，不是插件查的。
+    const hint = metrics !== null
+      ? t('detail.metricsHint')
+      : isCjkTitle(detail.publicationTitle) ? t('detail.cjkJournalHint') : undefined
+    metaRows.push({
+      label: t('detail.queryExternal'),
+      value: (
+        <span style={journalLinkRowStyle} title={hint}>
+          {journalQueryLinks.map((link) => (
+            <button
+              key={link.id}
+              type="button"
+              onClick={() => { void handleOpenJournalLink(link.url) }}
+              title={tpl(t('detail.queryIn'), { site: link.label })}
+              style={journalLinkStyle}
+            >
+              {link.label}
+              <OpenInZoteroIcon size={10} />
+            </button>
+          ))}
+        </span>
+      ),
+    })
+  }
   if (detail.doi !== '') metaRows.push({ label: t('detail.doi'), value: detail.doi })
   if (detail.url !== '') metaRows.push({ label: t('detail.url'), value: detail.url })
   if (detail.collectionNames.length > 0) {
@@ -713,6 +789,38 @@ const metaLabelStyle = {
   marginRight: 4,
   whiteSpace: 'nowrap',
   opacity: 0.6,
+} as const
+
+/** 「外部查询」那一行的站点按钮组：横向排开，浮层拖窄时允许折行。 */
+const journalLinkRowStyle = {
+  display: 'inline-flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  alignItems: 'center',
+} as const
+
+/**
+ * 站点按钮做成文字链接形态，刻意不用 `SOFT_BUTTON_STYLE`。
+ *
+ * 这一行是「离开插件」的出口，不是浮层里的操作按钮；做成按钮会跟「加入对话」
+ * 抢视觉权重，也容易被误读成「点了就在面板里查」。下划线 + 外链箭头才是
+ * 「跳出去」的通用符号。
+ */
+const journalLinkStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+  padding: 0,
+  border: 'none',
+  background: 'none',
+  color: ACCENT,
+  fontFamily: 'inherit',
+  fontSize: 12,
+  fontWeight: 'inherit',
+  lineHeight: 1.4,
+  cursor: 'pointer',
+  textDecoration: 'underline',
+  textUnderlineOffset: 2,
 } as const
 
 const paragraphStyle = {

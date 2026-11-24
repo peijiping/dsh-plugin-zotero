@@ -285,6 +285,28 @@ export interface ZoteroItemDetail {
   creators: string[]
   year: string
   publicationTitle: string
+  /**
+   * 期刊 ISSN（原始串，多值以空格分隔）。
+   *
+   * 期刊指标检索的唯一可靠锚点：刊名会缩写、会改名、会有同名刊，ISSN 不会。
+   * Zotero 里这一栏经常是空的（实测本机 100 条期刊论文只有 12 条填了），
+   * 所以读取方必须准备好回落到刊名。
+   */
+  issn: string
+  /** 期刊缩写（如 `J. Am. Chem. Soc.`），同样常为空。 */
+  journalAbbreviation: string
+  /**
+   * `extra` 原始文本。
+   *
+   * Zotero 官方 schema 没有任何评价性字段（影响因子、分区、被引），社区插件的
+   * 通行做法就是往这里塞 `键: 值` 行 —— Zotero Citation Counts Manager 的
+   * README 原话是「Zotero doesn't have any special field for the number of
+   * citations, so they are stored in the Extra field」。
+   *
+   * 本插件只读不写：解析见 `client/journalMetrics.ts`，回写会污染用户文库，
+   * 且要承担数据错误的责任。
+   */
+  extra: string
   url: string
   doi: string
   abstract: string

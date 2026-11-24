@@ -89,6 +89,9 @@ export function isTrusted(req: IncomingMessage): boolean {
 const WRITE_ACTIONS = new Set([
   'open-in-zotero',
   'open-settings',
+  // 会启动用户的默认浏览器并带上刊名/ISSN，跟 open-in-zotero 同类：
+  // 不改 Zotero 数据，但要确认「是本插件的界面在操作」。
+  'open-url',
   'authorize',
   'note-create',
   'note-update',
@@ -558,6 +561,50 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
 }
 
 /**
+ * 允许 `open-url` 打开的站点白名单。
+ *
+ * 不给「打开任意 URL」的能力：那等于把系统默认浏览器变成可由渲染层驱动的
+ * 任意跳转原语 —— 网页里注入一行就能把用户送去钓鱼页。这里只放期刊查询站，
+ * 而且是 https + host 精确匹配，不做后缀匹配（`letpub.com.cn.evil.com` 不通过）。
+ */
+const ALLOWED_EXTERNAL_HOSTS = new Set([
+  'letpub.com.cn',
+  'www.letpub.com.cn',
+  'mjl.clarivate.com',
+  'www.scimagojr.com',
+  'www.ablesci.com',
+])
+
+/**
+ * 在用户的默认浏览器里打开一个期刊查询页。
+ *
+ * 只做跳转，不在插件里请求、缓存或存储任何第三方数据 —— 影响因子与分区是
+ * 商业授权数据，插件既不内置也不代为查询，数据责任留在用户和那些站点之间。
+ */
+async function handleOpenUrl(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const record = await readJsonBody(req, 4096)
+  const raw = typeof record.url === 'string' ? record.url : ''
+  let target: URL
+  try {
+    target = new URL(raw)
+  } catch {
+    fail(res, 400, 'bad_request', 'url 不合法')
+    return
+  }
+  if (target.protocol !== 'https:') {
+    fail(res, 400, 'bad_request', '只允许 https 链接')
+    return
+  }
+  const host = target.hostname.toLowerCase()
+  if (!ALLOWED_EXTERNAL_HOSTS.has(host)) {
+    fail(res, 400, 'bad_request', `不在允许的站点列表内：${host}`)
+    return
+  }
+  await openExternal(target.toString())
+  ok(res, { opened: true })
+}
+
+/**
  * 打开「去那儿修」的系统面板。
  *
  * 目前只认 macOS 的「文件与文件夹」授权：插件读不到 Zotero 附件时，绝大多数是
@@ -900,6 +947,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['note-raw', 'GET'],
   ['open-in-zotero', 'POST'],
   ['open-settings', 'POST'],
+  ['open-url', 'POST'],
   ['authorize', 'POST'],
   ['note-create', 'POST'],
   ['note-update', 'POST'],
@@ -980,6 +1028,9 @@ export function createHandler(
           return
         case 'open-settings':
           await handleOpenSettings(req, res)
+          return
+        case 'open-url':
+          await handleOpenUrl(req, res)
           return
         case 'mcp-tools':
           await handleMcpTools(res, deps)
