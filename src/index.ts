@@ -25,6 +25,7 @@ import { createTranslator } from './host/translate.js'
 import { createJournalRanker } from './host/easyscholar.js'
 import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
+import { scheduleReviewEvidenceCleanup } from './zotero/review-evidence.js'
 import {
   DEFAULT_LIMIT,
   FULLTEXT_MAX_CHARS,
@@ -82,6 +83,7 @@ export const Config = Schema.object({
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
+  ctx.effect(scheduleReviewEvidenceCleanup, 'dsh-plugin-zotero: review evidence retention')
   // 每次读取都走 volatile 引用，始终拿到最新值。
   setSettingsReader(() => ({
     zoteroBaseUrl: config.zoteroBaseUrl.get(),

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { link, lstat, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -23,6 +23,43 @@ export function requireReviewEvidenceId(id: unknown): string {
 
 function directory(): string {
   return join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'dsh-plugin-zotero', 'review-evidence')
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+export async function cleanExpiredReviewEvidence(): Promise<void> {
+  const folder = directory()
+  const cutoff = Date.now() - 180 * DAY_MS
+  let entries
+  try {
+    entries = await readdir(folder, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json') || !isReviewEvidenceRun(entry.name.slice(0, -5))) continue
+    const path = join(folder, entry.name)
+    try {
+      // Published indexes are immutable. Their write time also works for undated legacy names.
+      const info = await lstat(path)
+      if (info.isFile() && info.mtimeMs < cutoff) await unlink(path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[dsh-plugin-zotero] 证据索引清理失败：', error)
+      }
+    }
+  }
+}
+
+export function scheduleReviewEvidenceCleanup(): () => void {
+  const clean = () => cleanExpiredReviewEvidence().catch((error: unknown) => {
+    console.warn('[dsh-plugin-zotero] 证据索引目录检查失败：', error)
+  })
+  void clean()
+  const timer = setInterval(clean, DAY_MS)
+  timer.unref()
+  return () => clearInterval(timer)
 }
 
 async function readReview(run: string): Promise<string | null> {

@@ -17,7 +17,11 @@ export interface ReviewEvidenceRef {
 }
 
 export function createReviewRun(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  const today = new Date()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${id}_${today.getFullYear()}-${month}-${day}`
 }
 
 export function reviewEvidenceHref(ref: ReviewEvidenceRef): string {

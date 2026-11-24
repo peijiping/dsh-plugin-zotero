@@ -1,4 +1,4 @@
-const RUN = /^[a-f0-9]{24}$/u
+const RUN = /^[a-f0-9]{24}(?:_\d{4}-\d{2}-\d{2})?$/u
 const ID = /^Z[1-9]\d{0,5}\.[1-9]\d{0,5}$/u
 export const REVIEW_FRAGMENT_MAX = 760
 

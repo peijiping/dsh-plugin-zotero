@@ -154,7 +154,7 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
   const handledEvidence = useRef<EvidenceTarget>()
   const [reviewPosition, setReviewPosition] = useState<{
     target: EvidenceTarget
-    status: 'searching' | 'excerpt' | 'page' | 'located'
+    status: 'excerpt' | 'page' | 'located'
     page?: number
   }>()
   const pendingLocate = useRef<string | null>(null)
@@ -349,7 +349,6 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
         finish(matched && renderer.id === 'text' ? 'located' : 'excerpt')
         return
       }
-      setReviewPosition({ target, status: 'searching' })
       void viewer.findReviewLocation(target, controller.signal).catch(() => null).then((position) => {
         if (controller.signal.aborted) return
         if (position === null) {
@@ -454,18 +453,16 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
   }
 
   const status = reviewPosition?.target === evidence ? reviewPosition?.status : undefined
-  const reviewStatus = status === 'located' ? t('review.evidenceLocated')
-    : status === 'page' ? tpl(t('review.evidencePage'), { page: reviewPosition?.page ?? '' })
-    : status === 'searching' ? t('review.evidenceSearching')
-    : status === 'excerpt' ? t('review.evidenceIndexOnly') : ''
 
   return (
     <div style={{ ...rootStyle, '--dsh-zp-topbar-pad': `${topbarPad}px` } as CSSProperties}>
-      {evidence?.review !== undefined && (
+      {evidence?.review !== undefined && (status === 'page' || status === 'excerpt') && (
         <details key={evidence.id} open style={reviewExcerptStyle}>
           <summary>
             {tpl(t('review.evidenceExcerpt'), { id: evidence.review.id })}
-            <span aria-live="polite">{reviewStatus === '' ? '' : ` · ${reviewStatus}`}</span>
+            <span aria-live="polite"> · {status === 'page'
+              ? tpl(t('review.evidencePage'), { page: reviewPosition?.page ?? '' })
+              : t('review.evidenceIndexOnly')}</span>
           </summary>
           <div style={reviewExcerptTextStyle}>{evidence.review.excerpt}</div>
         </details>
