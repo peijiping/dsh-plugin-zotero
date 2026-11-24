@@ -35,11 +35,11 @@ import { useFloatingBox } from './floatingBox'
 import { itemTypeLabel } from './itemType'
 import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
-import { openJournalUrl } from './api'
+import { fetchJournalRank, openJournalUrl, type JournalRank } from './api'
 import { readJournalMetrics } from './journalMetrics'
 import { journalLinks } from './journalLinks'
 import { showToast } from './paneStore'
-import { ACCENT } from './styles'
+import { ACCENT, TREE_ORANGE } from './styles'
 import { estimateTokens } from './tokens'
 import { OpenInZoteroIcon } from './viewer/OpenInZoteroIcon'
 import {
@@ -110,6 +110,41 @@ function Block({ label, hint, open, onToggle, action, children }: BlockProps): R
     </section>
   )
 }
+
+/**
+ * 远程查询的界面状态。
+ *
+ * `no_key` / `miss` 都不是错误：前者提示去设置页填密钥，后者说明这刊不在
+ * easyScholar 库里 —— 静默跳过，不要制造「功能坏了」的错觉。
+ */
+type RemoteRank =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ok'; rank: JournalRank }
+  | { kind: 'no_key' }
+  | { kind: 'miss' }
+  | { kind: 'failed'; message: string }
+
+/**
+ * 远程指标行的显示顺序。
+ *
+ * 只列与「这刊什么档次」直接相关的项，空值整行跳过。接口另外还有各校自建目录、
+ * ABDC、FT50 等字段，全列会把浮层撑爆，而校内目录各家口径不同，显示一半反而误导。
+ */
+const REMOTE_ROWS: readonly { field: keyof JournalRank; labelKey: string }[] = [
+  { field: 'impactFactor', labelKey: 'detail.impactFactor' },
+  { field: 'fiveYearIf', labelKey: 'detail.fiveYearIf' },
+  { field: 'jcrQuartile', labelKey: 'detail.jcrQuartile' },
+  { field: 'casUp', labelKey: 'detail.casQuartile' },
+  { field: 'casUpSmall', labelKey: 'detail.casUpSmall' },
+  { field: 'casUpTop', labelKey: 'detail.casUpTop' },
+  { field: 'casWarn', labelKey: 'detail.casWarn' },
+  { field: 'xr', labelKey: 'detail.xr' },
+  { field: 'xrTop', labelKey: 'detail.xrTop' },
+  { field: 'ccf', labelKey: 'detail.ccf' },
+  { field: 'pku', labelKey: 'detail.pku' },
+  { field: 'cssci', labelKey: 'detail.cssci' },
+]
 
 /** 去掉 CSL HTML 标签，只留可见文本。 */
 function stripTags(html: string): string {
@@ -231,6 +266,44 @@ export function InfoPanel({
     [detail.extra, detail.tags],
   )
 
+  /** 期刊名：远程查询与外部入口都用它，空表示这条不是期刊文献。 */
+  const journalName = detail.publicationTitle.trim() !== ''
+    ? detail.publicationTitle.trim()
+    : detail.journalAbbreviation.trim()
+
+  /**
+   * 远程查询：仅在「浮层打开 + 库里没有指标 + 有刊名」时发起。
+   *
+   * 三个条件缺一不可 —— 收起浮层不该消耗查询额度；用户库里已有数据时也不该用
+   * 第三方结果盖掉他自己核对过的值（`extra` 优先，远程只做兜底）。
+   */
+  const [remote, setRemote] = useState<RemoteRank>({ kind: 'idle' })
+
+  useEffect(() => {
+    if (!open || metrics !== null || journalName === '') {
+      setRemote({ kind: 'idle' })
+      return
+    }
+    const controller = new AbortController()
+    setRemote({ kind: 'loading' })
+    void fetchJournalRank(journalName, controller.signal)
+      .then((outcome) => {
+        if (controller.signal.aborted) return
+        if (outcome.status === 'ok') setRemote({ kind: 'ok', rank: outcome.rank })
+        else if (outcome.status === 'no_key') setRemote({ kind: 'no_key' })
+        else if (outcome.status === 'miss') setRemote({ kind: 'miss' })
+        else setRemote({ kind: 'failed', message: outcome.message })
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        setRemote({
+          kind: 'failed',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      })
+    return () => { controller.abort() }
+  }, [open, metrics, journalName])
+
   /**
    * 外部站点入口：四个站查的东西不重叠（指标 / 收录核验 / 投稿参考 / SJR），
    * 见 `journalLinks.ts`。ISSN 优先、刊名兜底。
@@ -260,6 +333,7 @@ export function InfoPanel({
   if (detail.year !== '') metaRows.push({ label: t('detail.year'), value: detail.year })
   if (detail.publicationTitle !== '') metaRows.push({ label: t('detail.source'), value: detail.publicationTitle })
   // 指标行紧跟在「出处」下面：读者看完成分才会想「这刊什么水平」。
+  // 来源优先级：条目 extra（用户自己库里、可能核对过）> easyScholar 远程查询。
   if (metrics !== null) {
     if (metrics.impactFactor !== '') {
       metaRows.push({ label: t('detail.impactFactor'), value: metrics.impactFactor })
@@ -273,10 +347,33 @@ export function InfoPanel({
     if (metrics.citations !== '') {
       metaRows.push({ label: t('detail.citations'), value: metrics.citations })
     }
+  } else if (remote.kind === 'ok') {
+    for (const row of REMOTE_ROWS) {
+      const value = remote.rank[row.field]
+      if (value !== '') metaRows.push({ label: t(row.labelKey), value })
+    }
+  }
+
+  // 没有本地指标时的两条提示：没配密钥（引导去设置）、查询失败（多半是密钥错）。
+  // `miss`（这刊不在 easyScholar 库里）静默跳过 —— 那不是错误。
+  if (metrics === null && journalName !== '') {
+    if (remote.kind === 'no_key') {
+      metaRows.push({
+        label: t('detail.journalMetrics'),
+        value: <span style={mutedHintStyle}>{t('detail.noKeyHint')}</span>,
+      })
+    } else if (remote.kind === 'failed') {
+      metaRows.push({
+        label: t('detail.journalMetrics'),
+        value: <span style={warnHintStyle}>{remote.message}</span>,
+      })
+    }
   }
   if (journalQueryLinks.length > 0) {
-    // 有指标时说明这些值是从用户自己库里读的，不是插件查的。
-    const hint = metrics !== null ? t('detail.metricsHint') : undefined
+    // 有指标时说明这些值的来源：库里读的 / easyScholar 查的，两者责任不同。
+    const hint = metrics !== null
+      ? t('detail.metricsHint')
+      : remote.kind === 'ok' ? t('detail.metricsFromEasyScholar') : undefined
     metaRows.push({
       label: t('detail.queryExternal'),
       value: (
@@ -797,6 +894,20 @@ const journalLinkRowStyle = {
   flexWrap: 'wrap',
   gap: 10,
   alignItems: 'center',
+} as const
+
+/** 灰色小字：用于「未配置密钥」这类提示，不抢指标本身的注意力。 */
+const mutedHintStyle = {
+  fontSize: 11.5,
+  opacity: 0.7,
+  lineHeight: 1.5,
+} as const
+
+/** 橙色小字：查询失败（多半是密钥错），需要用户动手。用色板里的橙，不另起炉灶。 */
+const warnHintStyle = {
+  fontSize: 11.5,
+  color: TREE_ORANGE,
+  lineHeight: 1.5,
 } as const
 
 /**

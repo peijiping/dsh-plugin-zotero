@@ -22,6 +22,7 @@ import { createHandler, type WebServerLike } from './host/router.js'
 import { createSnapshotHandler } from './host/snapshot.js'
 import { createStaticHandler } from './host/static.js'
 import { createTranslator } from './host/translate.js'
+import { createJournalRanker } from './host/easyscholar.js'
 import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
 import {
@@ -72,6 +73,12 @@ export const Config = Schema.object({
   translateProvider: Schema.string().default('bing').volatile(),
   /** 翻译目标语言（默认 `auto`：按原文语种中英互译，也可手动锁定具体语言）。 */
   translateTarget: Schema.string().default(TRANSLATE_TARGET).volatile(),
+  /**
+   * easyScholar 开放接口密钥（空 = 未配置，面板不发请求只给跳转入口）。
+   *
+   * 明文存在本地 DSH 配置里：这是用户自己的第三方密钥，需要在设置页可见可改。
+   */
+  easyScholarKey: Schema.string().default('').volatile(),
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
@@ -88,6 +95,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     // schema 是纯字符串，这里做一次白名单，防止 patch 文件里写了别的值。
     translateProvider: config.translateProvider.get() === 'deepseek' ? 'deepseek' : 'bing',
     translateTarget: config.translateTarget.get() || TRANSLATE_TARGET,
+    easyScholarKey: config.easyScholarKey.get().trim(),
   }))
 
   // 模型侧：自持集成 MCP 连接，按 disabledMcpTools 过滤后注册工具。
@@ -129,6 +137,9 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
         }
         return bridge ? bridge.sync() : listMcpTools()
       },
+      // 期刊等级查询：读配置里的 easyScholar SecretKey，限速 + 内存缓存。
+      // 无 key 时返回 `no_key`，界面据此提示去设置页填，不会发请求。
+      journalRank: createJournalRanker(),
       // llm 服务由 `dsh-base` 提供，但不保证每种部署都装了 provider，
       // 所以这里按需取、取不到就让翻译器只走免密钥端点。
       translate: createTranslator({

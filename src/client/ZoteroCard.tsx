@@ -76,6 +76,7 @@ type FieldName =
   | 'mcpProbeTimeoutMs'
   | 'fulltextMaxBytes'
   | 'defaultLimit'
+  | 'easyScholarKey'
 
 interface FieldMeta {
   name: FieldName
@@ -97,7 +98,17 @@ const MCP_FIELDS: readonly FieldMeta[] = [
   { name: 'mcpProbeTimeoutMs', numeric: true },
 ]
 
-const ALL_FIELDS: readonly FieldMeta[] = [...API_FIELDS, ...MCP_FIELDS]
+/**
+ * 「期刊指标」组的字段。
+ *
+ * 只有一个密钥：填了就能在文献信息里直接看到影响因子与分区，留空则只显示
+ * 跳转入口。密钥由用户自己在 easyScholar 注册后取得，免登录、不绑会员。
+ */
+const JOURNAL_FIELDS: readonly FieldMeta[] = [
+  { name: 'easyScholarKey', numeric: false },
+]
+
+const ALL_FIELDS: readonly FieldMeta[] = [...API_FIELDS, ...MCP_FIELDS, ...JOURNAL_FIELDS]
 
 /**
  * 自动保存的静默窗口（毫秒）：最后一次改动后停手这么久才落盘。
@@ -131,6 +142,7 @@ interface CardState extends SettingsFormState {
   writeEnabled: SettingsFieldState
   translateProvider: SettingsFieldState
   translateTarget: SettingsFieldState
+  easyScholarKey: SettingsFieldState
 }
 
 /** 席位注册时经 `inject()` 下发给组件的面。 */
@@ -257,6 +269,7 @@ export class ZoteroCardController {
       writeEnabled: this.form.field(WRITE_FIELD),
       translateProvider: this.form.field(TRANSLATE_PROVIDER_FIELD),
       translateTarget: this.form.field(TRANSLATE_TARGET_FIELD),
+      easyScholarKey: this.form.field('easyScholarKey'),
     }
   }
 
@@ -794,6 +807,10 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
       <section style={SETTINGS_CARD_STYLE}>
         <SectionTitle style={CARD_TITLE_STYLE}>{t('group.translate')}</SectionTitle>
         {renderTranslate()}
+      </section>
+      <section style={SETTINGS_CARD_STYLE}>
+        <SectionTitle style={CARD_TITLE_STYLE}>{t('group.journal')}</SectionTitle>
+        {JOURNAL_FIELDS.map(renderField)}
       </section>
     </div>
   )

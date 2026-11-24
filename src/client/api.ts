@@ -368,3 +368,46 @@ export interface TranslateOptions {
 export function translateSelection(text: string, options: TranslateOptions = {}): Promise<TranslateResult> {
   return post<TranslateResult>('translate', { text, provider: options.provider }, options.signal)
 }
+
+/**
+ * 期刊等级（easyScholar 开放接口的返回值）。
+ *
+ * 字段由 Host 从接口的 37 个等级里挑出与「这刊什么档次」相关的那批，全空表示
+ * 这刊不在 easyScholar 库里。
+ */
+export interface JournalRank {
+  impactFactor: string
+  jcrQuartile: string
+  fiveYearIf: string
+  casUp: string
+  casUpSmall: string
+  casUpTop: string
+  casWarn: string
+  xr: string
+  xrTop: string
+  ccf: string
+  pku: string
+  cssci: string
+}
+
+/**
+ * 查询结果。`no_key` 与 `miss` 都是正常态 —— 前者提示去设置页填密钥，
+ * 后者说明这刊不在库里，只有 `failed` 需要报错。
+ */
+export type JournalRankOutcome =
+  | { status: 'ok'; rank: JournalRank }
+  | { status: 'no_key' }
+  | { status: 'miss' }
+  | { status: 'failed'; message: string }
+
+/**
+ * 按刊名查期刊等级。
+ *
+ * 必须走 Host：渲染层直连 easyScholar 会被 CORS 挡，密钥也不该落到这里。
+ */
+export function fetchJournalRank(
+  publicationName: string,
+  signal?: AbortSignal,
+): Promise<JournalRankOutcome> {
+  return post<JournalRankOutcome>('journal-rank', { publicationName }, signal)
+}

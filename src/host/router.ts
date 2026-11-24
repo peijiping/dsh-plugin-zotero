@@ -23,6 +23,7 @@ import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
 import { listRecent, loadPosition, loadViewState, RECENT_LIMIT, savePosition, saveViewState, type ViewStatePatch } from '../zotero/view-state.js'
 import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type { TranslateInput, TranslateResult } from './translate.js'
+import type { JournalRankInput, JournalRankOutcome } from './easyscholar.js'
 import type {
   ApiEnvelope,
   ApiError,
@@ -63,6 +64,13 @@ export interface HandlerDeps {
   syncTools?: () => Promise<zotero.McpToolInfo[]>
   /** 划词翻译：由入口注入（要拿宿主 llm 服务），缺省时该端点返回不可用。 */
   translate?: (input: TranslateInput, signal?: AbortSignal) => Promise<TranslateResult>
+  /**
+   * easyScholar 期刊等级查询：由入口注入。缺省时该端点返回不可用。
+   *
+   * 之所以不在这里直接实现，是因为它要读配置里的 SecretKey 并做限速缓存 ——
+   * 状态属于创建它的那个实例，不该散在路由层。
+   */
+  journalRank?: (input: JournalRankInput) => Promise<JournalRankOutcome>
 }
 
 /** 单条条目列表的条数上限，防止 Client 拉爆宿主。 */
@@ -103,6 +111,8 @@ const WRITE_ACTIONS = new Set([
   'view-state-save',
   // 不改 Zotero 数据，但会代表用户外发选中文本，同样要求「本插件的界面在操作」。
   'translate',
+  // 同样不改 Zotero 数据，但会把刊名发给 easyScholar，并发起外部网络请求。
+  'journal-rank',
 ])
 
 /** 自定义写头 + JSON content-type：让任何跨源写都变成需要预检的非简单请求。 */
@@ -926,6 +936,37 @@ async function handleTranslate(
   ok(res, await translate({ text, provider, target }))
 }
 
+/** 查询 body 上限：只带一个期刊名，4 KB 足够。 */
+const JOURNAL_RANK_BODY_LIMIT = 4096
+
+/**
+ * 按刊名查期刊等级。
+ *
+ * 返回的 `status` 决定界面怎么显示：`no_key` 与 `miss` 都是正常态（前者提示去
+ * 设置页填密钥，后者说明这刊不在 easyScholar 库里），只有 `failed` 是异常。
+ * 一律走 200，让渲染层按 status 分支处理，而不是拿 HTTP 状态码表达业务语义。
+ */
+async function handleJournalRank(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HandlerDeps,
+): Promise<void> {
+  const journalRank = deps.journalRank
+  if (journalRank === undefined) {
+    throw new ZoteroError('internal_error', '期刊等级查询未就绪：插件入口没有注入查询器')
+  }
+  const record = await readJsonBody(req, JOURNAL_RANK_BODY_LIMIT)
+  const name = record.publicationName
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new ZoteroError('bad_request', 'publicationName 必须是非空字符串')
+  }
+  // 刊名长度上限：真实刊名没有这么长，超长只可能是构造出来的请求。
+  if (name.length > 300) {
+    throw new ZoteroError('bad_request', 'publicationName 过长')
+  }
+  ok(res, await journalRank({ publicationName: name }))
+}
+
 /**
  * action → 允许的 HTTP 方法。
  *
@@ -962,6 +1003,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['read-position-save', 'POST'],
   ['view-state-save', 'POST'],
   ['translate', 'POST'],
+  ['journal-rank', 'POST'],
 ])
 
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
@@ -1080,6 +1122,9 @@ export function createHandler(
           return
         case 'translate':
           await handleTranslate(req, res, deps)
+          return
+        case 'journal-rank':
+          await handleJournalRank(req, res, deps)
           return
         default:
           fail(res, 404, 'bad_request', `未知 action ${action}`)

@@ -165,6 +165,14 @@ export interface ZoteroSettings {
   translateProvider: TranslateProvider
   /** 翻译目标语言（BCP 47 或 `auto`；auto 按原文语种在中 / 英之间互换）。 */
   translateTarget: string
+  /**
+   * easyScholar 开放接口的 SecretKey。
+   *
+   * 空串表示未配置：此时面板只显示「外部查询」跳转入口，不发起任何请求。
+   * 密钥由用户自己在 easyScholar 注册后取得（用户信息 → 开放接口），免登录、
+   * 不绑会员。它只用于查询期刊等级，插件不写回 Zotero，也不缓存结果到磁盘。
+   */
+  easyScholarKey: string
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -179,6 +187,7 @@ let readSettings = (): ZoteroSettings => ({
   writeEnabled: false,
   translateProvider: 'bing',
   translateTarget: TRANSLATE_TARGET,
+  easyScholarKey: '',
 })
 
 /**
