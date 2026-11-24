@@ -279,6 +279,15 @@ export function InfoPanel({
    */
   const [remote, setRemote] = useState<RemoteRank>({ kind: 'idle' })
 
+  /**
+   * 「重查」计数：点一下 +1，让下面那个 effect 重跑。
+   *
+   * 不另加 force 参数去绕过 Host 的 6 小时缓存 —— 缓存命中是即时的，而真正
+   * 需要远端新数据的场景是「刚在设置页填好密钥」，那种情况 effect 重跑本身
+   * 就会重新读配置（`getSettings()` 是 volatile 的），不需要重启 DSH。
+   */
+  const [refreshNonce, setRefreshNonce] = useState(0)
+
   useEffect(() => {
     if (!open || metrics !== null || journalName === '') {
       setRemote({ kind: 'idle' })
@@ -302,7 +311,7 @@ export function InfoPanel({
         })
       })
     return () => { controller.abort() }
-  }, [open, metrics, journalName])
+  }, [open, metrics, journalName, refreshNonce])
 
   /**
    * 外部站点入口：四个站查的东西不重叠（指标 / 收录核验 / 投稿参考 / SJR），
@@ -354,20 +363,38 @@ export function InfoPanel({
     }
   }
 
-  // 没有本地指标时的两条提示：没配密钥（引导去设置）、查询失败（多半是密钥错）。
-  // `miss`（这刊不在 easyScholar 库里）静默跳过 —— 那不是错误。
+  /**
+   * 没有本地指标时，这一行同时承担「状态」和「重查」。
+   *
+   * 查到了就由上面那段显示指标、这里整行不出现；查不到 / 没密钥 / 出错时才
+   * 给一句说明 + 一个按钮 —— **按钮只是就地重查，不跳网页**。以前这里是一枚
+   * 「去 easyScholar」的链接，点开只能落到它首页（它是单页应用，URL 带不进
+   * 具体期刊），实际什么都查不到，纯噪音。
+   */
   if (metrics === null && journalName !== '') {
-    if (remote.kind === 'no_key') {
-      metaRows.push({
-        label: t('detail.journalMetrics'),
-        value: <span style={mutedHintStyle}>{t('detail.noKeyHint')}</span>,
-      })
-    } else if (remote.kind === 'failed') {
-      metaRows.push({
-        label: t('detail.journalMetrics'),
-        value: <span style={warnHintStyle}>{remote.message}</span>,
-      })
-    }
+    const status = remote.kind
+    let note: ReactNode = null
+    if (status === 'loading') note = <span style={mutedHintStyle}>{t('detail.querying')}</span>
+    else if (status === 'no_key') note = <span style={mutedHintStyle}>{t('detail.noKeyHint')}</span>
+    else if (status === 'miss') note = <span style={mutedHintStyle}>{t('detail.missHint')}</span>
+    else if (status === 'failed') note = <span style={warnHintStyle}>{remote.message}</span>
+
+    metaRows.push({
+      label: t('detail.journalMetrics'),
+      value: (
+        <span style={journalStatusRowStyle}>
+          {note}
+          <button
+            type="button"
+            disabled={status === 'loading'}
+            onClick={() => { setRefreshNonce((prev) => prev + 1) }}
+            style={journalLinkStyle}
+          >
+            {status === 'idle' ? t('detail.queryNow') : t('detail.queryRetry')}
+          </button>
+        </span>
+      ),
+    })
   }
   if (journalQueryLinks.length > 0) {
     // 有指标时说明这些值的来源：库里读的 / easyScholar 查的，两者责任不同。
@@ -901,6 +928,14 @@ const mutedHintStyle = {
   fontSize: 11.5,
   opacity: 0.7,
   lineHeight: 1.5,
+} as const
+
+/** 「期刊指标」状态行：一句说明 + 一个重查按钮，浮层拖窄时允许折行。 */
+const journalStatusRowStyle = {
+  display: 'inline-flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 8,
 } as const
 
 /** 橙色小字：查询失败（多半是密钥错），需要用户动手。用色板里的橙，不另起炉灶。 */

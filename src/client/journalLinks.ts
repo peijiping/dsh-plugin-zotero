@@ -23,7 +23,7 @@
 
 export interface JournalLink {
   /** 稳定标识，用于 React key。 */
-  id: 'easyscholar' | 'wos' | 'letpub' | 'scimago'
+  id: 'wos' | 'letpub' | 'scimago'
   label: string
   /**
    * 用途说明的文案 key。
@@ -57,10 +57,12 @@ export function normalizeIssn(raw: string): string {
   return `${digits.slice(0, 4)}-${digits.slice(4)}`
 }
 
-const EASYSCHOLAR_HOME = 'https://www.easyscholar.cc/'
-
 /**
- * 生成外部查询入口。返回顺序即 UI 顺序：指标 → 收录核验 → 投稿参考 → 另一口径。
+ * 生成外部查询入口。返回顺序即 UI 顺序：收录核验 → 投稿参考 → 另一口径。
+ *
+ * **不包含 easyScholar**：它有官方开放接口，指标直接在面板里查、就地显示
+ * （见 `easyscholar.ts` 与 `InfoPanel` 的「查询期刊等级」），再给一个只能落到
+ * 它首页的链接是纯噪音。另外三家没有可用接口，只能跳转。
  *
  * 刊名与缩写都为空时不返回任何入口 —— 书、笔记、学位论文这类没有「期刊」
  * 概念的条目不该出现这一行。
@@ -73,17 +75,7 @@ export function journalLinks(input: JournalLinkInput): JournalLink[] {
 
   if (issn === '' && name === '') return []
 
-  const links: JournalLink[] = [
-    {
-      id: 'easyscholar',
-      label: 'easyScholar',
-      hintKey: 'detail.site.easyscholar',
-      // easyScholar 是单页应用，实测 `/query?name=` 与 `/journal/search?name=`
-      // 都返回同一个入口页，URL 参数进不去具体某本刊。刻意不带参数，免得
-      // 让用户误以为已经查好了。
-      url: EASYSCHOLAR_HOME,
-    },
-  ]
+  const links: JournalLink[] = []
 
   // WoS Master Journal List 只支持 ISSN 检索，没有 ISSN 就没法定位。
   if (issn !== '') {
