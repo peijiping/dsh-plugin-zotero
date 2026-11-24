@@ -27,6 +27,20 @@ export interface ChapterPlan {
   chapters?: { index: number; start: number; end: number }[]
 }
 
+/**
+ * 标题的匹配键：在 tidy 基础上去掉分节编号。
+ *
+ * PDF 书签常不带编号（`Halitosis`），索引正文却带（`2. Halitosis`）；
+ * 两边统一去掉编号后才能定位。只在匹配时使用，切分仍按原始行偏移。
+ */
+function headingKey(value: string): string {
+  return tidyHeading(value)
+    .replace(/^第[一二三四五六七八九十百零〇\d]+[章节部分篇]\s*/u, '')
+    .replace(/^[（(]?(?:\d+(?:\.\d+)*|[IVXLC]+)(?:[)）][.、:：]?|[.、:：]|\s+)\s*/u, '')
+    .replace(/^[一二三四五六七八九十]+[、.]\s*/u, '')
+    .trim()
+}
+
 /** 章节下标按 outline 顺序排序去重。 */
 function sortedIndices(selected: ReadonlySet<number>): number[] {
   return [...selected].filter((n) => Number.isInteger(n) && n >= 0).sort((a, b) => a - b)
@@ -35,8 +49,9 @@ function sortedIndices(selected: ReadonlySet<number>): number[] {
 /**
  * 正文里可当章节起点的标题行 → 首次出现的偏移。
  *
- * 一次扫描建好两张表：`lines` 是所有「整行等于某条目录标题」的行（按出现顺序），
- * `lineIndex` 是标题 → 全部出现位置。之后每个标题的定位都是查表，不再重复扫正文。
+ * 一次扫描建好两张表：`lines` 是所有「整行等于某条目录标题（忽略分节编号）」的行
+ * （按出现顺序），`lineIndex` 是标题键 → 全部出现位置。之后每个标题的定位都是查表，
+ * 不再重复扫正文。
  */
 function indexHeadings(content: string, titles: ReadonlyMap<string, number>): {
   lineIndex: Map<string, number[]>
@@ -46,12 +61,12 @@ function indexHeadings(content: string, titles: ReadonlyMap<string, number>): {
   const lines: HeadingLine[] = []
   let offset = 0
   for (const line of content.split('\n')) {
-    const tidy = tidyHeading(line)
-    if (tidy !== '' && titles.has(tidy)) {
+    const key = headingKey(line)
+    if (key !== '' && titles.has(key)) {
       const markdown = /^[ \t]{0,3}#{1,6}[ \t]/u.test(line)
-      lines.push({ start: offset, end: offset + line.length, markdown, depth: titles.get(tidy) ?? 0 })
-      const bucket = lineIndex.get(tidy)
-      if (bucket === undefined) lineIndex.set(tidy, [offset])
+      lines.push({ start: offset, end: offset + line.length, markdown, depth: titles.get(key) ?? 0 })
+      const bucket = lineIndex.get(key)
+      if (bucket === undefined) lineIndex.set(key, [offset])
       else bucket.push(offset)
     }
     offset += line.length + 1
@@ -88,11 +103,11 @@ export function planChapters(
   const indices = sortedIndices(selected).filter((i) => i < items.length)
   if (indices.length === 0) return null
 
-  const known = new Map(items.map((item) => [tidyHeading(item.title), item.depth]))
+  const known = new Map(items.map((item) => [headingKey(item.title), item.depth]))
   const { lineIndex, navStarts } = indexHeadings(content, known)
   const counts = new Map<string, number>()
   for (const item of items) {
-    const title = tidyHeading(item.title)
+    const title = headingKey(item.title)
     counts.set(title, (counts.get(title) ?? 0) + 1)
   }
   const matches = new Map<string, number[]>()
@@ -105,7 +120,7 @@ export function planChapters(
   const label = titles.join(' · ')
   let previous = -1
   const offsets = items.map((item) => {
-    const offset = matches.get(tidyHeading(item.title))?.shift()
+    const offset = matches.get(headingKey(item.title))?.shift()
     if (offset === undefined || offset <= previous) return null
     previous = offset
     return offset
