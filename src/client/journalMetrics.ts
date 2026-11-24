@@ -23,18 +23,42 @@ import type { JournalRank } from './api'
 export interface JournalMetrics {
   /** 影响因子，如 `5.2`。 */
   impactFactor: string
+  /** 五年影响因子（Green Frog 会写）。 */
+  fiveYearIf: string
   /** JCR 分区，`Q1`–`Q4`。 */
   jcrQuartile: string
   /** 中科院分区，如 `2区`。 */
   casQuartile: string
+  /**
+   * 知网的复合影响因子（`CIF`）。
+   *
+   * 中文期刊没有 JCR / 中科院分区，知网给的这两个才是它们唯一的量化指标。
+   * **不能并进 `impactFactor`**：口径和量级都不同（知网 0.5 对 JCR 56），
+   * 混在一枚胶囊里等于造假。
+   */
+  compositeIf: string
+  /** 知网的综合影响因子（`AIF`，他引口径）。 */
+  comprehensiveIf: string
+  /**
+   * 中文核心类收录标签（北大核心 / CSSCI / CSCD / 科技核心 / AMI）。
+   *
+   * 来自知网导出的 `publicationTag`，形如 `北大核心, JST, WJCI`；只挑中文
+   * 语境的这几项，`JST` / `WJCI` / `CAS` 这类外文索引标签不入库 —— 它们跟
+   * 「国内核心」不是一件事，混在一起反而误导。
+   */
+  coreTags: string[]
   /** 被引次数，如 `128`。 */
   citations: string
 }
 
 const EMPTY: JournalMetrics = {
   impactFactor: '',
+  fiveYearIf: '',
   jcrQuartile: '',
   casQuartile: '',
+  compositeIf: '',
+  comprehensiveIf: '',
+  coreTags: [],
   citations: '',
 }
 
@@ -49,12 +73,20 @@ const EMPTY: JournalMetrics = {
  * 生态里用得最多的期刊指标插件（下载量与 star 数都远超同类），适配它就等于
  * 覆盖了绝大多数中文用户的库。
  */
-const KEY_MAP: Record<string, keyof JournalMetrics> = {
+const KEY_MAP: Record<string, Exclude<keyof JournalMetrics, 'coreTags'>> = {
   'impact factor': 'impactFactor',
   'impactfactor': 'impactFactor',
   'if': 'impactFactor',
   'sciif': 'impactFactor',
   '影响因子': 'impactFactor',
+  '5年影响因子': 'fiveYearIf',
+  '5年if': 'fiveYearIf',
+  'five year if': 'fiveYearIf',
+  'sciif5': 'fiveYearIf',
+  'cif': 'compositeIf',
+  '复合影响因子': 'compositeIf',
+  'aif': 'comprehensiveIf',
+  '综合影响因子': 'comprehensiveIf',
   'jcr': 'jcrQuartile',
   'jcr quartile': 'jcrQuartile',
   'jcr分区': 'jcrQuartile',
@@ -75,6 +107,28 @@ const KEY_MAP: Record<string, keyof JournalMetrics> = {
   'citation count': 'citations',
   '被引': 'citations',
   '被引次数': 'citations',
+  'cnkicite': 'citations',
+}
+
+/** 知网 `publicationTag` 里值得留的几项：中文核心类收录。 */
+const CORE_TAG_HINTS = ['北大核心', 'CSSCI', 'CSCD', '科技核心', 'AMI']
+
+/**
+ * 拆知网的 `publicationTag`（`北大核心, JST, WJCI`）。
+ *
+ * 只留中文核心类标签：`JST`（日本科技振兴机构）、`WJCI`、`CAS` 这些是外文
+ * 索引标记，跟「国内核心期刊」不是一回事，塞进同一行会让人误读。
+ */
+function parseCoreTags(raw: string): string[] {
+  const out: string[] = []
+  for (const part of raw.split(/[,，;；]/u)) {
+    const tag = part.trim()
+    if (tag === '') continue
+    const upper = tag.toUpperCase()
+    if (!CORE_TAG_HINTS.some((hint) => upper.includes(hint.toUpperCase()))) continue
+    if (!out.includes(tag)) out.push(tag)
+  }
+  return out
 }
 
 /**
@@ -92,8 +146,8 @@ const CAS_RANK: Record<string, number> = {
 /** 单行 `键: 值`；中英文冒号都认，键长上限防止把整段话当键。 */
 const LINE = /^\s*([^:：]{1,40})[:：]\s*(.+?)\s*$/u
 
-/** 影响因子：纯数值。`5.2` 认，`约 5` / `5 左右` 不认。 */
-const IF_VALUE = /^\d{1,3}(?:\.\d{1,3})?$/u
+/** 影响因子：纯数值。`5.2` 认，`约 5` / `5 左右` 不认。知网的 CIF 会有 3–4 位小数。 */
+const IF_VALUE = /^\d{1,3}(?:\.\d{1,4})?$/u
 
 /** JCR 分区：`Q1`–`Q4`，允许小写。 */
 const QUARTILE_VALUE = /^[Qq]([1-4])$/u
@@ -123,11 +177,15 @@ function normalizeKey(raw: string): string {
 }
 
 /** 校验并规整值；不合格返回空串。 */
-function accept(field: keyof JournalMetrics, raw: string): string {
+function accept(field: Exclude<keyof JournalMetrics, 'coreTags'>, raw: string): string {
   const value = raw.trim()
   if (value === '' || value.length > MAX_VALUE_LEN) return ''
   switch (field) {
+    // 三个 IF 类指标同一套数值校验（JCR 影响因子 / 五年 IF / 知网复合·综合 IF）。
     case 'impactFactor':
+    case 'fiveYearIf':
+    case 'compositeIf':
+    case 'comprehensiveIf':
       return IF_VALUE.test(value) ? value : ''
     case 'jcrQuartile': {
       const match = QUARTILE_VALUE.exec(value)
@@ -167,6 +225,11 @@ export function readJournalMetrics(extra: string, tags: readonly string[]): Jour
     const match = LINE.exec(line)
     if (match === null) continue
     const key = normalizeKey(match[1])
+    // 知网的收录标签是一串（`北大核心, JST, WJCI`），不是单值指标，单独拆。
+    if (key === 'publicationtag') {
+      if (found.coreTags.length === 0) found.coreTags = parseCoreTags(match[2])
+      continue
+    }
     const field = KEY_MAP[key]
     if (field === undefined) continue
     const rank = CAS_RANK[key] ?? 0
@@ -199,7 +262,15 @@ export function readJournalMetrics(extra: string, tags: readonly string[]): Jour
     }
   }
 
-  const hit = (Object.keys(found) as (keyof JournalMetrics)[]).some((key) => found[key] !== '')
+  // 逐项判断而不是遍历键：`coreTags` 是数组，空数组也不等于空串。
+  const hit = found.impactFactor !== ''
+    || found.fiveYearIf !== ''
+    || found.jcrQuartile !== ''
+    || found.casQuartile !== ''
+    || found.compositeIf !== ''
+    || found.comprehensiveIf !== ''
+    || found.citations !== ''
+    || found.coreTags.length > 0
   return hit ? found : null
 }
 
@@ -246,10 +317,19 @@ function hasTop(raw: string): boolean {
 export function extraChips(metrics: JournalMetrics): MetricChip[] {
   const chips: MetricChip[] = []
   if (metrics.impactFactor !== '') chips.push({ tagKey: 'chip.if', value: metrics.impactFactor })
+  if (metrics.fiveYearIf !== '') chips.push({ tagKey: 'chip.if5', value: metrics.fiveYearIf })
   if (metrics.jcrQuartile !== '') chips.push({ tagKey: 'chip.jcr', value: metrics.jcrQuartile })
   if (metrics.casQuartile !== '') {
     chips.push({ tagKey: 'chip.cas', value: trimCas(metrics.casQuartile) })
     if (hasTop(metrics.casQuartile)) chips.push({ tagKey: 'chip.top', value: '' })
+  }
+  // 中文期刊这一段：知网口径的两个 IF 与核心收录标签。它们和 JCR 的 IF 不同源，
+  // 所以各有各的标签，不合并。
+  if (metrics.compositeIf !== '') chips.push({ tagKey: 'chip.cif', value: metrics.compositeIf })
+  if (metrics.comprehensiveIf !== '') chips.push({ tagKey: 'chip.aif', value: metrics.comprehensiveIf })
+  for (const tag of metrics.coreTags) {
+    // 标签本身就是内容（北大核心 / CSSCI），不再套一层小标签。
+    chips.push({ tagKey: '', value: tag })
   }
   if (metrics.citations !== '') chips.push({ tagKey: 'chip.cited', value: metrics.citations })
   return chips

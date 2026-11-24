@@ -378,7 +378,7 @@ export function InfoPanel({
             <div style={chipGroupStyle}>
               {chips.map((chip, index) => (
                 <span key={`${chip.tagKey}-${String(index)}`} style={chipStyle}>
-                  <span style={chipTagStyle}>{t(chip.tagKey)}</span>
+                  {chip.tagKey !== '' && <span style={chipTagStyle}>{t(chip.tagKey)}</span>}
                   {chip.value !== '' && (
                     <span style={chip.warn === true ? chipWarnStyle : chipValueStyle}>{chip.value}</span>
                   )}
