@@ -39,6 +39,7 @@ import {
 import type { ZoteroWriteStatus } from '../zotero/types'
 import { authorizeWrites, fetchWriteStatus } from './api'
 import { tpl, type Translate } from './locales'
+import { ACCENT } from './styles'
 import { Button, SectionTitle } from './ui'
 
 /** 设置命名空间 id（= cordis.patch.yml 的 insert 行 id）。 */
@@ -411,6 +412,54 @@ const TOOL_NAME_STYLE = { fontSize: 12, display: 'block' }
 const TOOL_DESC_STYLE = { fontSize: 11, opacity: 0.66, display: 'block', marginTop: 2 }
 /** 翻译组里的字段名，与写开关那一行同一视觉层级。 */
 const TRANSLATE_LABEL_STYLE = { fontSize: 13, fontWeight: 600, display: 'block' }
+
+/** 密钥字段：标题行（label + 已覆盖 / 恢复默认）+ 输入行 + 说明。 */
+const SECRET_FIELD_STYLE = { padding: '6px 0' }
+const SECRET_HEADER_STYLE = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }
+const OVERRIDDEN_BADGE_STYLE = { fontSize: 11, opacity: 0.62 }
+const SECRET_RESET_STYLE: CSSProperties = {
+  padding: 0,
+  border: 'none',
+  background: 'none',
+  fontSize: 11,
+  color: ACCENT,
+  cursor: 'pointer',
+  textDecoration: 'underline',
+  textUnderlineOffset: 2,
+}
+const SECRET_INPUT_ROW_STYLE = { display: 'flex', alignItems: 'center', gap: 6 }
+
+/** 与 `SELECT_STYLE` 同一套边框与圆角，看起来像同一张卡里的控件。 */
+const SECRET_INPUT_STYLE: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  height: 30,
+  padding: '0 8px',
+  fontSize: 13,
+  fontFamily: 'inherit',
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.35)',
+  background: 'transparent',
+  color: 'inherit',
+  outline: 'none',
+}
+
+/** 眼睛按钮：纯图标，不给文字，宽高与输入框对齐。 */
+const EYE_BUTTON_STYLE: CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 30,
+  height: 30,
+  padding: 0,
+  border: '1px solid rgba(127,127,127,0.35)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'inherit',
+  cursor: 'pointer',
+  opacity: 0.72,
+}
 /** 目标语言下拉：原生 select，主题色靠 CSS 变量跟随明暗。 */
 const SELECT_STYLE: CSSProperties = {
   flexShrink: 0,
@@ -459,6 +508,8 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
   const [write, reloadWrite] = useWriteStatus()
   const [authorizing, setAuthorizing] = useState(false)
   const [authNotice, setAuthNotice] = useState<string | null>(null)
+  /** 密钥默认遮着，点眼睛才看明文（截屏、共享屏幕时不至于直接漏出去）。 */
+  const [keyRevealed, setKeyRevealed] = useState(false)
 
   const locked = !state.writable
   const disabledSet = readDisabled(state.disabledMcpTools.text)
@@ -481,6 +532,8 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
     state.writeEnabled.text,
     state.translateProvider.text,
     state.translateTarget.text,
+    // 漏一个字段就会「填完不保存」：这个指纹才是防抖自动保存的依赖。
+    state.easyScholarKey.text,
   ].join('\u0000')
 
   /**
@@ -564,6 +617,66 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
       onReset={() => props.resetField(field.name)}
     />
   )
+
+  /**
+   * 密钥字段：默认显示圆点，点右侧眼睛才看明文。
+   *
+   * 不走 `SettingsValueField` —— 那个组件的 props 里没有 `type`，只能渲染普通
+   * 文本框，密钥会明晃晃摊在屏幕上（截屏、录屏、当着别人开设置页都会漏）。
+   * 「已覆盖 / 恢复默认」两枚标记自己补上，与其它字段保持一致的交互。
+   */
+  const renderSecretField = (field: FieldMeta): ReactElement => {
+    const fieldState = state[field.name]
+    const inputId = `plugin-config-zotero-${field.name}`
+    return (
+      <div key={field.name} style={SECRET_FIELD_STYLE}>
+        <div style={SECRET_HEADER_STYLE}>
+          <label htmlFor={inputId} style={TRANSLATE_LABEL_STYLE}>
+            {t(`field.${field.name}`)}
+          </label>
+          {fieldState.overridden && (
+            <>
+              <span style={OVERRIDDEN_BADGE_STYLE}>{t('form.overridden')}</span>
+              <button
+                type="button"
+                disabled={locked}
+                onClick={() => props.resetField(field.name)}
+                style={SECRET_RESET_STYLE}
+              >
+                {t('form.reset')}
+              </button>
+            </>
+          )}
+        </div>
+        <div style={SECRET_INPUT_ROW_STYLE}>
+          <input
+            id={inputId}
+            type={keyRevealed ? 'text' : 'password'}
+            value={fieldState.text}
+            disabled={locked}
+            placeholder={t('field.easyScholarKeyPlaceholder')}
+            // 密钥不该进浏览器的密码管理器，也不该被拼写检查盯上。
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => props.edit(field.name, event.target.value)}
+            style={SECRET_INPUT_STYLE}
+          />
+          <button
+            type="button"
+            onClick={() => { setKeyRevealed((prev) => !prev) }}
+            aria-label={keyRevealed ? t('field.secretHide') : t('field.secretShow')}
+            title={keyRevealed ? t('field.secretHide') : t('field.secretShow')}
+            aria-pressed={keyRevealed}
+            disabled={locked}
+            style={EYE_BUTTON_STYLE}
+          >
+            <EyeIcon open={keyRevealed} />
+          </button>
+        </div>
+        <span style={TOOL_DESC_STYLE}>{t(`field.${field.name}Hint`)}</span>
+      </div>
+    )
+  }
 
   const renderTools = (): ReactElement => {
     if (tools.kind === 'loading') return <div style={HINT_STYLE}>{t('tools.loading')}</div>
@@ -810,8 +923,45 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
       </section>
       <section style={SETTINGS_CARD_STYLE}>
         <SectionTitle style={CARD_TITLE_STYLE}>{t('group.journal')}</SectionTitle>
-        {JOURNAL_FIELDS.map(renderField)}
+        {JOURNAL_FIELDS.map(renderSecretField)}
       </section>
     </div>
+  )
+}
+
+/**
+ * 眼睛图标：睁眼 = 当前显示明文，闭眼 = 当前遮着。
+ *
+ * 纯 `currentColor` 描边，颜色跟着按钮文字走，深浅主题不用另配一份。
+ * 不用「锁」的隐喻 —— 这里的动作是「看一眼」，不是「加密」。
+ */
+function EyeIcon({ open }: { open: boolean }): ReactElement {
+  return (
+    <svg
+      width={15}
+      height={15}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      style={{ flexShrink: 0 }}
+    >
+      {open ? (
+        <>
+          <path d="M1.5 8S4 3.8 8 3.8 14.5 8 14.5 8 12 12.2 8 12.2 1.5 8 1.5 8Z" />
+          <circle cx="8" cy="8" r="1.8" />
+        </>
+      ) : (
+        <>
+          <path d="M2.2 8S4.4 4.2 8 4.2c1.1 0 2.1.3 3 .8" />
+          <path d="M13.8 8s-2.2 3.8-5.8 3.8c-1.1 0-2.1-.3-3-.8" />
+          <path d="M2.8 13.2 13.2 2.8" />
+        </>
+      )}
+    </svg>
   )
 }
