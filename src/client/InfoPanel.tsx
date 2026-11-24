@@ -275,6 +275,15 @@ export function InfoPanel({
    */
   const [refreshNonce, setRefreshNonce] = useState(0)
 
+  /**
+   * ⓘ 的数据来源说明是否展开。
+   *
+   * 用点击展开而不是 hover 提示：内容区是 `overflow: auto`，任何绝对定位的
+   * 浮层都会被裁掉（卡片靠底部时尤其明显），而原生 `title` 有半秒多延迟。
+   * 展开在卡内，不涉及定位，长文案还能选中复制。
+   */
+  const [showSource, setShowSource] = useState(false)
+
   useEffect(() => {
     if (!open || metrics !== null || journalName === '') {
       setRemote({ kind: 'idle' })
@@ -402,10 +411,17 @@ export function InfoPanel({
                 {remote.kind === 'idle' ? t('detail.queryNow') : t('detail.queryRetry')}
               </button>
             )}
-            <span style={infoIconStyle} title={sourceHint} aria-label={sourceHint} role="img">
+            <button
+              type="button"
+              onClick={() => { setShowSource((prev) => !prev) }}
+              aria-expanded={showSource}
+              aria-label={t('detail.metricsSource')}
+              style={{ ...infoIconStyle, opacity: showSource ? 0.9 : 0.45 }}
+            >
               <InfoIcon />
-            </span>
+            </button>
           </div>
+          {showSource && <div style={sourceNoteStyle}>{sourceHint}</div>}
         </div>
       ),
     })
@@ -966,12 +982,23 @@ const metricActionRowStyle = {
   marginTop: 7,
 } as const
 
-/** ⓘ 只用图标，靠 hover 出说明；`cursor: help` 是它的通用信号。 */
+/** ⓘ 按钮：纯图标，去掉按钮默认外观；透明度由调用处按展开状态覆盖。 */
 const infoIconStyle = {
   display: 'inline-flex',
   alignItems: 'center',
-  opacity: 0.45,
-  cursor: 'help',
+  padding: 0,
+  border: 'none',
+  background: 'none',
+  color: 'inherit',
+  cursor: 'pointer',
+} as const
+
+/** 展开后的来源说明：比正文再弱一级，但要保证能读清、能选中复制。 */
+const sourceNoteStyle = {
+  marginTop: 6,
+  fontSize: 11.5,
+  lineHeight: 1.55,
+  opacity: 0.72,
 } as const
 
 /** 灰色小字：用于「未配置密钥」这类提示，不抢指标本身的注意力。 */
