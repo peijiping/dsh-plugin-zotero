@@ -75,6 +75,9 @@ export const SECTION_TITLE_CLASS = 'dsh-zp-title'
 /** 插入方式菜单的菜单项 class：hover / 键盘聚焦态写在 {@link THEME_CSS}（内联 style 写不了伪类）。 */
 export const MENU_ITEM_CLASS = 'dsh-zp-menu-item'
 
+/** 信息浮层里区块标题行最右的折叠箭头：hover / active 底色写在 {@link THEME_CSS}。 */
+export const SECTION_TOGGLE_CLASS = 'dsh-zp-section-toggle'
+
 /** 按钮 class：选中 / 激活态多挂 `is-active`，hover 时底色加深得更多。 */
 export function softButtonClass(active = false): string {
   return active ? `${SOFT_BUTTON_CLASS} is-active` : SOFT_BUTTON_CLASS
@@ -203,6 +206,18 @@ export const THEME_CSS = `
 }
 /* 插入方式菜单项：默认透明底，hover 与键盘聚焦同一套底色，pointer 与 Tab 走哪个都看得见。
    底色必须写在 class 里而不是内联 style —— 内联会盖掉下面这两条伪类规则。 */
+/* 区块标题行最右的折叠箭头：常态透明，hover / 聚焦铺一层中性灰。
+   底色写在 class 里而不是内联 style —— 内联会盖掉伪类规则。 */
+.dsh-zp-section-toggle {
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+.dsh-zp-section-toggle:hover {
+  background-color: rgba(127, 127, 127, 0.16);
+}
+.dsh-zp-section-toggle:active {
+  background-color: rgba(127, 127, 127, 0.26);
+}
 .dsh-zp-menu-item {
   background-color: transparent;
 }

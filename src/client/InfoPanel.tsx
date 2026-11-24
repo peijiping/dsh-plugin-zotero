@@ -20,7 +20,16 @@
  * 它同时影响页面上的标注，浮层收着的时候也应该能点。
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 
 import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { AnnotationList } from './AnnotationList'
@@ -32,6 +41,7 @@ import { FulltextScope, type FulltextMode } from './fulltextScope'
 import { InsertMenu } from './InsertMenu'
 import type { DocumentOutlineItem } from './viewer/types'
 import { useFloatingBox } from './floatingBox'
+import { itemFieldRows } from './itemFields'
 import { itemTypeLabel } from './itemType'
 import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
@@ -39,7 +49,7 @@ import { fetchJournalRank, openJournalUrl, type JournalRank } from './api'
 import { extraChips, rankChips, readJournalMetrics, type MetricChip } from './journalMetrics'
 import { journalLinks } from './journalLinks'
 import { showToast } from './paneStore'
-import { ACCENT, TREE_ORANGE } from './styles'
+import { ACCENT, SECTION_TOGGLE_CLASS, TREE_ORANGE } from './styles'
 import { estimateTokens } from './tokens'
 import { OpenInZoteroIcon } from './viewer/OpenInZoteroIcon'
 import {
@@ -82,6 +92,7 @@ interface Props {
 }
 
 interface BlockProps {
+  t: Translate
   label: string
   hint?: string
   open: boolean
@@ -95,16 +106,34 @@ interface BlockProps {
   children: ReactNode
 }
 
-function Block({ label, hint, open, onToggle, action, children }: BlockProps): ReactElement {
+/**
+ * 一个可折叠区块。
+ *
+ * 开合图标放在**标题行最右边**（计数与加号之后）：标题本身是整行可点的按钮，
+ * 但点文字不像「能折」，右侧那个翻转的箭头才是通用符号。两个按钮都调
+ * `onToggle`，右边的从键盘焦点里摘掉（`tabIndex={-1}` + `aria-hidden`），
+ * 免得同一件事在 Tab 序列里出现两次。
+ */
+function Block({ t, label, hint, open, onToggle, action, children }: BlockProps): ReactElement {
   return (
     <section style={blockStyle}>
       <div style={blockHeaderRowStyle}>
         <button type="button" onClick={onToggle} aria-expanded={open} style={blockHeaderStyle}>
-          <span style={blockChevronStyle}>{open ? '▾' : '▸'}</span>
           <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
           {hint !== undefined && <span style={blockHintStyle}>{hint}</span>}
         </button>
         {action}
+        <button
+          type="button"
+          onClick={onToggle}
+          tabIndex={-1}
+          aria-hidden="true"
+          title={open ? t('detail.sectionCollapse') : t('detail.sectionExpand')}
+          className={SECTION_TOGGLE_CLASS}
+          style={blockToggleStyle}
+        >
+          <ChevronIcon open={open} />
+        </button>
       </div>
       {open && <div style={blockBodyStyle}>{children}</div>}
     </section>
@@ -335,8 +364,24 @@ export function InfoPanel({
   const typeLabel = itemTypeLabel(t, detail.itemType)
   if (typeLabel !== '') metaRows.push({ label: t('detail.type'), value: typeLabel })
   if (detail.creators.length > 0) metaRows.push({ label: t('detail.creators'), value: detail.creators.join('、') })
-  if (detail.year !== '') metaRows.push({ label: t('detail.year'), value: detail.year })
-  if (detail.publicationTitle !== '') metaRows.push({ label: t('detail.source'), value: detail.publicationTitle })
+
+  /*
+   * 字段表：除类型 / 作者外，其余元数据一律按 Zotero 信息栏的次序铺开（见
+   * `itemFields.ts`）。有值才出现 —— Zotero 里那一片空行对读者没有信息量，
+   * 面板又比信息栏窄，全列出来只会把摘要与标注挤到屏幕外。
+   *
+   * 「出版物」在这里单独一行，不交给字段表：期刊指标卡要紧接着它（指标的
+   * 主体是这本刊，不是这篇文献），让循环来排就插不进这个位置了。
+   */
+  const fields = detail.fields ?? {}
+  if (detail.publicationTitle !== '') {
+    metaRows.push({ label: t('detail.field.publicationTitle'), value: detail.publicationTitle })
+  }
+  // 日期缺失（手工录入的旧条目常见）才退回只显示年份：Zotero 只有「日期」一栏，
+  // 两行都出现等于把同一个信息说两遍。
+  if (fields.date === undefined && detail.year !== '') {
+    metaRows.push({ label: t('detail.year'), value: detail.year })
+  }
 
   /*
    * 期刊指标卡：胶囊 + 一行操作。
@@ -426,8 +471,16 @@ export function InfoPanel({
       ),
     })
   }
-  if (detail.doi !== '') metaRows.push({ label: t('detail.doi'), value: detail.doi })
-  if (detail.url !== '') metaRows.push({ label: t('detail.url'), value: detail.url })
+  /*
+   * 指标卡之后接上其余字段（出版社、地点、日期、卷期页码、DOI、网址、ISSN、
+   * 语言、版权、其他、添加/修改时间…），次序照 Zotero 信息栏。
+   *
+   * 「其他」= extra 原文，整段照搬，和上面的指标胶囊重复也没关系：那块是给一眼
+   * 看的摘要，这一行才是条目里真实存着的东西（模型插入文献信息时读的也是原文）。
+   */
+  for (const row of itemFieldRows(fields, t, ['publicationTitle'])) {
+    metaRows.push({ label: row.label, value: row.value })
+  }
   if (detail.collectionNames.length > 0) {
     metaRows.push({ label: t('detail.collections'), value: detail.collectionNames.join(' / ') })
   }
@@ -512,14 +565,16 @@ export function InfoPanel({
           </div>
 
           <div style={bodyStyle}>
-            <Block label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
+            <Block t={t} label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
               {metaRows.map((row, index) => (
                 'block' in row
                   ? <div key={`block-${String(index)}`}>{row.block}</div>
                   : (
-                    <div key={row.label} style={metaRowStyle}>
+                    // 字段表里有两个同名的（`videoRecordingFormat` / `audioRecordingFormat`
+                    // 都叫「格式」），key 不能只用标签，否则 React 会报重复键。
+                    <div key={`${String(index)}-${row.label}`} style={metaRowStyle}>
                       <span style={metaLabelStyle}>{row.label}</span>
-                      <span style={{ wordBreak: 'break-word' }}>{row.value}</span>
+                      <span style={metaValueStyle(row.value)}>{row.value}</span>
                     </div>
                   )
               ))}
@@ -527,6 +582,7 @@ export function InfoPanel({
 
             {detail.abstract !== '' && (
               <Block
+                t={t}
                 label={t('detail.abstract')}
                 open={sections.abstract}
                 onToggle={() => toggle('abstract')}
@@ -537,6 +593,7 @@ export function InfoPanel({
 
             {detail.annotations.length > 0 && (
               <Block
+                t={t}
                 label={t('detail.annotations')}
                 hint={String(detail.annotations.length)}
                 open={sections.annotations}
@@ -559,6 +616,7 @@ export function InfoPanel({
 
             {(notes.length > 0 || (detail.writeEnabled && !selfNote)) && (
               <Block
+                t={t}
                 label={t('detail.notes')}
                 hint={String(notes.length)}
                 open={sections.notes}
@@ -601,6 +659,7 @@ export function InfoPanel({
 
             {detail.attachments.length > 0 && (
               <Block
+                t={t}
                 label={t('detail.attachments')}
                 hint={String(detail.attachments.length)}
                 open={sections.attachments}
@@ -631,7 +690,7 @@ export function InfoPanel({
             )}
 
             {detail.bib !== null && (
-              <Block label={t('detail.bibTitle')} open={sections.bib} onToggle={() => toggle('bib')}>
+              <Block t={t} label={t('detail.bibTitle')} open={sections.bib} onToggle={() => toggle('bib')}>
                 <p style={paragraphStyle}>{stripTags(detail.bib)}</p>
               </Block>
             )}
@@ -680,6 +739,36 @@ export function InfoPanel({
         }}
       />
     </div>
+  )
+}
+
+/**
+ * 区块开合箭头：展开时朝下，收起时朝右（`rotate(-90deg)`）。
+ *
+ * 用 SVG 而不是 `▾` / `▸` 文字：字形在不同字体下大小与基线都不一样，和右边的
+ * 计数、加号排在一行会高低不齐；旋转动画也只有图形元素做得干净。
+ */
+function ChevronIcon({ open }: { open: boolean }): ReactElement {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      style={{
+        flexShrink: 0,
+        transform: open ? 'rotate(0deg)' : 'rotate(-90deg)',
+        transition: 'transform 140ms ease',
+      }}
+    >
+      <path d="M4 6.25 8 10.25 12 6.25" />
+    </svg>
   )
 }
 
@@ -893,10 +982,28 @@ const blockActionStyle = {
   cursor: 'pointer',
 } as const
 
-const blockChevronStyle = {
+/**
+ * 区块标题行最右的开合按钮。
+ *
+ * 20×20 的点击区比箭头本身大，贴着浮层右内边距放（`marginRight: -4` 抵掉面板
+ * 的 10px padding 里那点空隙，视觉上和其他行的内容右缘对齐）。颜色跟标题一致，
+ * 常态压到 0.6 不抢标题；hover 底色来自 `.dsh-zp-section-toggle`。
+ */
+const blockToggleStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
   flexShrink: 0,
-  fontSize: 10,
-  opacity: 0.8,
+  width: 20,
+  height: 20,
+  marginRight: -4,
+  padding: 0,
+  borderRadius: 4,
+  border: 'none',
+  background: 'transparent',
+  color: ACCENT,
+  opacity: 0.6,
+  cursor: 'pointer',
 } as const
 
 const blockHintStyle = {
@@ -923,6 +1030,17 @@ const metaLabelStyle = {
   whiteSpace: 'nowrap',
   opacity: 0.6,
 } as const
+
+/**
+ * 值那一侧：长 URL / DOI 必须能在任意位置断行，否则会把浮层撑宽。
+ *
+ * 多行值（「其他」里剩下的 extra 行）要保留换行 —— 那是「键: 值」一行一条的
+ * 结构，折成一串逗号分隔后就没法读了。
+ */
+function metaValueStyle(value: ReactNode): CSSProperties {
+  const multiline = typeof value === 'string' && value.includes('\n')
+  return { wordBreak: 'break-word', whiteSpace: multiline ? 'pre-wrap' : undefined }
+}
 
 /** 期刊指标卡：浅底容器，把它从上面的元数据行里拎出来。 */
 const metricCardStyle = {

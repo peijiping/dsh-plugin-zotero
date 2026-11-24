@@ -225,6 +225,57 @@ function yearOf(meta: RawItem['meta'], data: RawItemData): string {
   return ''
 }
 
+/**
+ * 不适合当作「一行元数据」下发的键。
+ *
+ * 分三类：条目自身的标识（`key` / `version` / `itemType`）、子结构（`creators` /
+ * `tags` / `collections` / `relations` / 标注系列字段）、以及由 Client 单独成块渲染
+ * 的字段（标题进浮层标题栏、摘要与 extra 各有自己的区块）。除此之外凡是标量，
+ * 一律原样交给面板 —— Zotero 的字段集随版本增加，Host 侧不做白名单才不会漏。
+ */
+const STRUCTURAL_KEYS = new Set([
+  'key',
+  'version',
+  'itemType',
+  'creators',
+  'tags',
+  'collections',
+  'relations',
+  'deleted',
+  'inPublications',
+  'parentItem',
+  'note',
+  'annotationType',
+  'annotationText',
+  'annotationComment',
+  'annotationColor',
+  'annotationPageLabel',
+  'annotationSortIndex',
+  'annotationPosition',
+  'annotationAuthorName',
+  'annotationIsExternal',
+])
+
+/**
+ * 除结构化字段外的全部标量字段（键 = Zotero 字段 id，如 `publisher` / `pages`）。
+ *
+ * 只在 Host 侧做「是不是标量」的判断，顺序与文案都留给 Client：面板要按 Zotero
+ * 信息栏的次序排，而那份次序是纯展示问题，改它不该动构建产物。
+ */
+function itemFieldMap(data: RawItemData): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [id, value] of Object.entries(data as unknown as Record<string, unknown>)) {
+    if (STRUCTURAL_KEYS.has(id)) continue
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed !== '') out[id] = trimmed
+    } else if (typeof value === 'number' && Number.isFinite(value)) {
+      out[id] = String(value)
+    }
+  }
+  return out
+}
+
 function attachmentTitle(raw: RawItem): string {
   return raw.data?.title || raw.data?.filename || '(无标题附件)'
 }
@@ -1719,6 +1770,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     url: data.url ?? '',
     doi: data.DOI ?? '',
     abstract: data.abstractNote ?? '',
+    fields: itemFieldMap(data),
     tags: (data.tags ?? []).map((tag) => tag.tag ?? '').filter((tag) => tag !== ''),
     collections: data.collections ?? [],
     collectionNames: collectionPaths(collections, data.collections ?? []),

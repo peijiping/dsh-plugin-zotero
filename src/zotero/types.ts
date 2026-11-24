@@ -310,6 +310,17 @@ export interface ZoteroItemDetail {
   url: string
   doi: string
   abstract: string
+  /**
+   * 除结构化字段外的全部标量字段：键 = Zotero 字段 id（`publisher` / `pages` /
+   * `PMID` / `dateAdded` …），值已 trim、空值不出现。
+   *
+   * 单独给一份而不是把每个字段都写进这个接口：Zotero 的字段集按条目类型有几十个，
+   * 逐字段声明既写不完，也会让「面板要不要显示」这种展示决策渗进 Host。顺序与文案
+   * 全在 `client/itemFields.ts`。
+   *
+   * 可选：只重建 client 没重启 Host 时这份字段还不存在，读取方一律 `?? {}`。
+   */
+  fields?: Record<string, string>
   tags: string[]
   /** 所属分类 key 列表。 */
   collections: string[]
