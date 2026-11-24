@@ -36,7 +36,7 @@ import { itemTypeLabel } from './itemType'
 import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
 import { fetchJournalRank, openJournalUrl, type JournalRank } from './api'
-import { readJournalMetrics } from './journalMetrics'
+import { extraChips, rankChips, readJournalMetrics, type MetricChip } from './journalMetrics'
 import { journalLinks } from './journalLinks'
 import { showToast } from './paneStore'
 import { ACCENT, TREE_ORANGE } from './styles'
@@ -126,25 +126,12 @@ type RemoteRank =
   | { kind: 'failed'; message: string }
 
 /**
- * 远程指标行的显示顺序。
+ * 文献信息里的一行。
  *
- * 只列与「这刊什么档次」直接相关的项，空值整行跳过。接口另外还有各校自建目录、
- * ABDC、FT50 等字段，全列会把浮层撑爆，而校内目录各家口径不同，显示一半反而误导。
+ * 普通行是「标签 + 值」；`block` 用于整块自定义内容（期刊指标卡）—— 它需要
+ * 自己的浅底容器和胶囊排版，塞进两段式 label/value 里做不出来。
  */
-const REMOTE_ROWS: readonly { field: keyof JournalRank; labelKey: string }[] = [
-  { field: 'impactFactor', labelKey: 'detail.impactFactor' },
-  { field: 'fiveYearIf', labelKey: 'detail.fiveYearIf' },
-  { field: 'jcrQuartile', labelKey: 'detail.jcrQuartile' },
-  { field: 'casUp', labelKey: 'detail.casQuartile' },
-  { field: 'casUpSmall', labelKey: 'detail.casUpSmall' },
-  { field: 'casUpTop', labelKey: 'detail.casUpTop' },
-  { field: 'casWarn', labelKey: 'detail.casWarn' },
-  { field: 'xr', labelKey: 'detail.xr' },
-  { field: 'xrTop', labelKey: 'detail.xrTop' },
-  { field: 'ccf', labelKey: 'detail.ccf' },
-  { field: 'pku', labelKey: 'detail.pku' },
-  { field: 'cssci', labelKey: 'detail.cssci' },
-]
+type MetaRow = { label: string; value: ReactNode } | { block: ReactNode }
 
 /** 去掉 CSL HTML 标签，只留可见文本。 */
 function stripTags(html: string): string {
@@ -335,89 +322,91 @@ export function InfoPanel({
     }
   }
 
-  const metaRows: { label: string; value: ReactNode }[] = []
+  const metaRows: MetaRow[] = []
   const typeLabel = itemTypeLabel(t, detail.itemType)
   if (typeLabel !== '') metaRows.push({ label: t('detail.type'), value: typeLabel })
   if (detail.creators.length > 0) metaRows.push({ label: t('detail.creators'), value: detail.creators.join('、') })
   if (detail.year !== '') metaRows.push({ label: t('detail.year'), value: detail.year })
   if (detail.publicationTitle !== '') metaRows.push({ label: t('detail.source'), value: detail.publicationTitle })
-  // 指标行紧跟在「出处」下面：读者看完成分才会想「这刊什么水平」。
-  // 来源优先级：条目 extra（用户自己库里、可能核对过）> easyScholar 远程查询。
-  if (metrics !== null) {
-    if (metrics.impactFactor !== '') {
-      metaRows.push({ label: t('detail.impactFactor'), value: metrics.impactFactor })
-    }
-    if (metrics.jcrQuartile !== '') {
-      metaRows.push({ label: t('detail.jcrQuartile'), value: metrics.jcrQuartile })
-    }
-    if (metrics.casQuartile !== '') {
-      metaRows.push({ label: t('detail.casQuartile'), value: metrics.casQuartile })
-    }
-    if (metrics.citations !== '') {
-      metaRows.push({ label: t('detail.citations'), value: metrics.citations })
-    }
-  } else if (remote.kind === 'ok') {
-    for (const row of REMOTE_ROWS) {
-      const value = remote.rank[row.field]
-      if (value !== '') metaRows.push({ label: t(row.labelKey), value })
-    }
-  }
 
-  /**
-   * 没有本地指标时，这一行同时承担「状态」和「重查」。
+  /*
+   * 期刊指标卡：胶囊 + 一行操作。
    *
-   * 查到了就由上面那段显示指标、这里整行不出现；查不到 / 没密钥 / 出错时才
-   * 给一句说明 + 一个按钮 —— **按钮只是就地重查，不跳网页**。以前这里是一枚
-   * 「去 easyScholar」的链接，点开只能落到它首页（它是单页应用，URL 带不进
-   * 具体期刊），实际什么都查不到，纯噪音。
+   * 为什么单独成块：这些数字评价的是**期刊**，不是这篇文献，跟上面的类型 / 作者 /
+   * 年份不是一类信息。浅底容器把它从元数据里拎出来，值改用胶囊 —— 形态本身就在
+   * 说「这是另一类东西」，而不是靠颜色暗示（绿色红色会被读成「好刊 / 烂刊」）。
+   *
+   * 来源优先级：条目 extra（用户自己库里、可能核对过）> easyScholar 远程查询。
    */
-  if (metrics === null && journalName !== '') {
-    const status = remote.kind
-    let note: ReactNode = null
-    if (status === 'loading') note = <span style={mutedHintStyle}>{t('detail.querying')}</span>
-    else if (status === 'no_key') note = <span style={mutedHintStyle}>{t('detail.noKeyHint')}</span>
-    else if (status === 'miss') note = <span style={mutedHintStyle}>{t('detail.missHint')}</span>
-    else if (status === 'failed') note = <span style={warnHintStyle}>{remote.message}</span>
+  const chips: MetricChip[] = metrics !== null
+    ? extraChips(metrics)
+    : remote.kind === 'ok' ? rankChips(remote.rank) : []
 
-    metaRows.push({
-      label: t('detail.journalMetrics'),
-      value: (
-        <span style={journalStatusRowStyle}>
-          {note}
-          <button
-            type="button"
-            disabled={status === 'loading'}
-            onClick={() => { setRefreshNonce((prev) => prev + 1) }}
-            style={journalLinkStyle}
-          >
-            {status === 'idle' ? t('detail.queryNow') : t('detail.queryRetry')}
-          </button>
-        </span>
-      ),
-    })
+  // 没有指标时用一句话说明原因：没密钥 / 查不到 / 出错。查到了就只显示胶囊。
+  let note: string | null = null
+  let noteWarn = false
+  if (metrics === null && journalName !== '') {
+    if (remote.kind === 'loading') note = t('detail.querying')
+    else if (remote.kind === 'no_key') note = t('detail.noKeyHint')
+    else if (remote.kind === 'miss') note = t('detail.missHint')
+    else if (remote.kind === 'failed') {
+      note = remote.message
+      noteWarn = true
+    }
   }
-  if (journalQueryLinks.length > 0) {
-    // 有指标时说明这些值的来源：库里读的 / easyScholar 查的，两者责任不同。
-    const hint = metrics !== null
-      ? t('detail.metricsHint')
-      : remote.kind === 'ok' ? t('detail.metricsFromEasyScholar') : undefined
+
+  const showRetry = metrics === null && journalName !== '' && remote.kind !== 'loading'
+  if (chips.length > 0 || note !== null || journalQueryLinks.length > 0) {
+    // ⓘ 的说明随来源变化：本地读的和第三方查的，责任完全不同。
+    const sourceHint = metrics !== null
+      ? t('detail.metricsSourceExtra')
+      : t('detail.metricsSourceRemote')
     metaRows.push({
-      label: t('detail.queryExternal'),
-      value: (
-        <span style={journalLinkRowStyle} title={hint}>
-          {journalQueryLinks.map((link) => (
-            <button
-              key={link.id}
-              type="button"
-              onClick={() => { void handleOpenJournalLink(link.url) }}
-              title={t(link.hintKey)}
-              style={journalLinkStyle}
-            >
-              {link.label}
-              <OpenInZoteroIcon size={10} />
-            </button>
-          ))}
-        </span>
+      block: (
+        <div style={metricCardStyle}>
+          <div style={metricCardTitleStyle}>{t('detail.journalMetrics')}</div>
+          {(chips.length > 0 || note !== null) && (
+            <div style={chipGroupStyle}>
+              {chips.map((chip, index) => (
+                <span key={`${chip.tagKey}-${String(index)}`} style={chipStyle}>
+                  <span style={chipTagStyle}>{t(chip.tagKey)}</span>
+                  {chip.value !== '' && (
+                    <span style={chip.warn === true ? chipWarnStyle : chipValueStyle}>{chip.value}</span>
+                  )}
+                </span>
+              ))}
+              {note !== null && (
+                <span style={noteWarn ? warnHintStyle : mutedHintStyle}>{note}</span>
+              )}
+            </div>
+          )}
+          <div style={metricActionRowStyle}>
+            {journalQueryLinks.map((link) => (
+              <button
+                key={link.id}
+                type="button"
+                onClick={() => { void handleOpenJournalLink(link.url) }}
+                title={t(link.hintKey)}
+                style={journalLinkStyle}
+              >
+                {link.label}
+                <OpenInZoteroIcon size={10} />
+              </button>
+            ))}
+            {showRetry && (
+              <button
+                type="button"
+                onClick={() => { setRefreshNonce((prev) => prev + 1) }}
+                style={journalLinkStyle}
+              >
+                {remote.kind === 'idle' ? t('detail.queryNow') : t('detail.queryRetry')}
+              </button>
+            )}
+            <span style={infoIconStyle} title={sourceHint} aria-label={sourceHint} role="img">
+              <InfoIcon />
+            </span>
+          </div>
+        </div>
       ),
     })
   }
@@ -508,11 +497,15 @@ export function InfoPanel({
 
           <div style={bodyStyle}>
             <Block label={t('detail.metadata')} open={sections.metadata} onToggle={() => toggle('metadata')}>
-              {metaRows.map((row) => (
-                <div key={row.label} style={metaRowStyle}>
-                  <span style={metaLabelStyle}>{row.label}</span>
-                  <span style={{ wordBreak: 'break-word' }}>{row.value}</span>
-                </div>
+              {metaRows.map((row, index) => (
+                'block' in row
+                  ? <div key={`block-${String(index)}`}>{row.block}</div>
+                  : (
+                    <div key={row.label} style={metaRowStyle}>
+                      <span style={metaLabelStyle}>{row.label}</span>
+                      <span style={{ wordBreak: 'break-word' }}>{row.value}</span>
+                    </div>
+                  )
               ))}
             </Block>
 
@@ -915,12 +908,70 @@ const metaLabelStyle = {
   opacity: 0.6,
 } as const
 
-/** 「外部查询」那一行的站点按钮组：横向排开，浮层拖窄时允许折行。 */
-const journalLinkRowStyle = {
-  display: 'inline-flex',
+/** 期刊指标卡：浅底容器，把它从上面的元数据行里拎出来。 */
+const metricCardStyle = {
+  background: 'rgba(127,127,127,0.09)',
+  borderRadius: 8,
+  padding: '8px 10px 7px',
+  margin: '7px 0 5px',
+} as const
+
+/** 卡内小标题：11px 足够，别跟元数据 label 抢层级。 */
+const metricCardTitleStyle = {
+  fontSize: 11,
+  opacity: 0.55,
+  marginBottom: 5,
+} as const
+
+/** 胶囊组：横向排开，浮层拖窄时折行。 */
+const chipGroupStyle = {
+  display: 'flex',
   flexWrap: 'wrap',
-  gap: 10,
+  gap: 5,
   alignItems: 'center',
+} as const
+
+/**
+ * 一枚胶囊。浅底卡已经有底色，胶囊用纯 `Canvas` 提亮一层，形成「卡中有物」的
+ * 层次；描边 0.3 透明度，别抢过卡片本身。
+ */
+const chipStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '1px 7px',
+  border: '1px solid rgba(127,127,127,0.3)',
+  borderRadius: 5,
+  background: 'Canvas',
+  fontSize: 12,
+  lineHeight: 1.5,
+  whiteSpace: 'nowrap',
+} as const
+
+/** 胶囊里的小标签（IF / JCR / 中科院）。 */
+const chipTagStyle = { opacity: 0.55 } as const
+
+/** 胶囊里的数值。 */
+const chipValueStyle = { fontWeight: 500 } as const
+
+/** 预警项单独用橙色：它说的是投稿风险，不是档次。 */
+const chipWarnStyle = { fontWeight: 500, color: TREE_ORANGE } as const
+
+/** 卡内操作行：外部站点 + 重查 + 说明图标。 */
+const metricActionRowStyle = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 10,
+  marginTop: 7,
+} as const
+
+/** ⓘ 只用图标，靠 hover 出说明；`cursor: help` 是它的通用信号。 */
+const infoIconStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  opacity: 0.45,
+  cursor: 'help',
 } as const
 
 /** 灰色小字：用于「未配置密钥」这类提示，不抢指标本身的注意力。 */
@@ -928,14 +979,6 @@ const mutedHintStyle = {
   fontSize: 11.5,
   opacity: 0.7,
   lineHeight: 1.5,
-} as const
-
-/** 「期刊指标」状态行：一句说明 + 一个重查按钮，浮层拖窄时允许折行。 */
-const journalStatusRowStyle = {
-  display: 'inline-flex',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  gap: 8,
 } as const
 
 /** 橙色小字：查询失败（多半是密钥错），需要用户动手。用色板里的橙，不另起炉灶。 */
@@ -994,3 +1037,30 @@ const attachmentMetaStyle = {
   fontSize: 10.5,
   opacity: 0.55,
 } as const
+
+/**
+ * 说明图标（ⓘ）：圈里一个 i，用细描边跟其它图标同一套笔画。
+ *
+ * 说明走原生 `title`，不做自绘浮层 —— 这段文字是「数据从哪来、要不要配密钥」
+ * 这种一次性告知，原生 tooltip 够用，而在这个已经有三种浮层的面板里再叠一层
+ * 只会互相抢层级。
+ */
+function InfoIcon(): ReactElement {
+  return (
+    <svg
+      width={12}
+      height={12}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden="true"
+      focusable="false"
+      style={{ flexShrink: 0 }}
+    >
+      <circle cx="8" cy="8" r="6.1" />
+      <path d="M8 7.3v3.9" strokeLinecap="round" />
+      <circle cx="8" cy="4.8" r="0.75" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
