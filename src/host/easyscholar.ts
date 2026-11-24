@@ -65,8 +65,14 @@ const MIN_INTERVAL_MS = 550
 
 const CACHE_LIMIT = 300
 
-/** 缓存 6 小时：期刊等级是年度量级的数据，但预警名单会临时变。 */
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000
+/**
+ * 缓存 24 小时。
+ *
+ * 期刊等级是年度量级的数据（JCR 每年 6 月、中科院分区原本 10–11 月更新），
+ * 6 小时太短 —— 用户一天里反复开同一篇文献会白白重复打接口。预警名单确实
+ * 会临时变，但那种变化不是「今天必须知道」的量级。
+ */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 /** 字段值长度上限：正常等级值是 `Q1` / `1区` / `A` 这种，超长一定不是。 */
 const MAX_VALUE_LEN = 40
@@ -151,6 +157,8 @@ interface CacheEntry {
  */
 export function createJournalRanker(): (input: JournalRankInput) => Promise<JournalRankOutcome> {
   const cache = new Map<string, CacheEntry>()
+  /** 正在飞行中的请求：同刊名并发时复用同一个 Promise，避免重复打接口。 */
+  const inflight = new Map<string, Promise<JournalRankOutcome>>()
   /** 下一个可用时间槽（毫秒时间戳）。 */
   let nextSlot = 0
 
@@ -224,8 +232,19 @@ export function createJournalRanker(): (input: JournalRankInput) => Promise<Jour
     const hit = cache.get(key)
     if (hit !== undefined && Date.now() - hit.at < CACHE_TTL_MS) return hit.outcome
 
-    const outcome = await request(key, secretKey)
-    remember(key, outcome)
-    return outcome
+    // 同一刊名并发只发一次：面板重开、快速切条目都可能让两个请求同时进来，
+    // 而缓存要等请求回来才写入，光靠缓存挡不住。
+    const pending = inflight.get(key)
+    if (pending !== undefined) return pending
+
+    const task = request(key, secretKey)
+    inflight.set(key, task)
+    try {
+      const outcome = await task
+      remember(key, outcome)
+      return outcome
+    } finally {
+      inflight.delete(key)
+    }
   }
 }
