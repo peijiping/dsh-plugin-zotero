@@ -1,0 +1,68 @@
+/**
+ * 条目行右键菜单的纯逻辑：按当前选中条目数决定有哪几项。
+ *
+ * 单独拆出来是为了能在 Node 里跑场景验收（local/item-context-menu-scenarios.ts），
+ * 不把 React / DOM 拖进测试。图标只给名字，由 ItemList 映射成 SVG。
+ */
+
+import { isBibliographicItem, MAX_BIBLIOGRAPHY_ITEMS } from '../zotero/bibliography'
+import type { ZoteroItemSummary } from '../zotero/types'
+import { bibliographyStyles } from './bibliography'
+import type { Translate } from './locales'
+
+export type ItemMenuIconName = 'chat' | 'copy' | 'review' | 'text' | 'numbers'
+
+export interface ItemMenuEntry {
+  id: string
+  label: string
+  icon: ItemMenuIconName
+  disabled?: boolean
+  submenu?: { id: string; label: string; icon: ItemMenuIconName }[]
+}
+
+/** 菜单三条固定动作的 id；参考文献样式 id 走 `isBibliographyStyle` 识别。 */
+export const ITEM_MENU_INSERT = 'insert-item'
+export const ITEM_MENU_COPY = 'copy-bibliography'
+export const ITEM_MENU_REVIEW = 'review-items'
+
+/**
+ * 单选：加入对话 + 复制参考文献；多选再补一项综述对比。
+ *
+ * 复制对整批生效：混选了笔记 / 附件时照常给入口，由后端跳过并在结果里说明
+ * （原来多选工具栏就是这么做的）；超过上限才置灰，避免点了没反应。
+ */
+export function itemMenuEntries(
+  t: Translate,
+  items: readonly ZoteroItemSummary[],
+  options: { copying: boolean; canReview: boolean },
+): ItemMenuEntry[] {
+  const entries: ItemMenuEntry[] = [{
+    id: ITEM_MENU_INSERT,
+    label: t('action.insertItem'),
+    icon: 'chat',
+  }]
+
+  if (items.some(({ itemType }) => isBibliographicItem(itemType))) {
+    const tooMany = items.length > MAX_BIBLIOGRAPHY_ITEMS
+    entries.push({
+      id: ITEM_MENU_COPY,
+      label: t('bibliography.copy'),
+      icon: 'copy',
+      disabled: options.copying || tooMany,
+      submenu: tooMany ? undefined : bibliographyStyles(t).map(({ id, label }) => ({
+        id,
+        label,
+        icon: id === 'apa' ? 'text' : 'numbers',
+      })),
+    })
+  }
+
+  if (items.length > 1 && options.canReview) {
+    entries.push({
+      id: ITEM_MENU_REVIEW,
+      label: t('review.action'),
+      icon: 'review',
+    })
+  }
+  return entries
+}

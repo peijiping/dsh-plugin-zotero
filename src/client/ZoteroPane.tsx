@@ -360,7 +360,6 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             onInsertItem={(item) => insertion.insertItem(item.key, item.title, item.itemType)}
             onInsertItems={insertion.insertItems}
             onReviewItems={inputActions === undefined ? undefined : startReview}
-            onInsertCollection={insertion.insertCollection}
           />
         </section>
       </div>

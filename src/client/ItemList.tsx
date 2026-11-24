@@ -2,7 +2,8 @@
  * 右栏：当前选择范围的条目列表。
  *
  * 头部含范围名、条数与搜索框；条目行单击选中、双击才开独立 tab，ctrl / cmd 点选
- * 多选，右上角「引用 N」把选中的每条各插一个胶囊。右键单行仍能直接插该条引用。
+ * 多选。条目的三个动作（加入对话 / 复制参考文献 / 综述对比）统一走右键菜单：
+ * 菜单按整批选中条目生成，单选两项、多选三项，头部不再堆多选按钮。
  * 列表不分页：当前范围的条目一次加载完（与 Zotero 一致），大口库分批追加，
  * 底部只显示加载进度。筛选后为空与本来为空分开提示。
  *
@@ -18,13 +19,20 @@ import { createPortal } from 'react-dom'
 
 import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { isBibliographicItem, isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS, type BibliographyStyle } from '../zotero/bibliography'
+import { isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS, type BibliographyStyle } from '../zotero/bibliography'
 import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary, ZoteroSearchMode } from '../zotero/types'
 import { fetchBibliography } from './api'
 import { bibliographySkipReason, bibliographyStyles, formatBibliography } from './bibliography'
 import { writeClipboard } from './clipboard'
 import { useDismiss } from './dismiss'
 import { ChildKindIcon, childKindLabel, ItemTypeIcon, itemTypeLabel } from './itemType'
+import {
+  ITEM_MENU_INSERT,
+  ITEM_MENU_REVIEW,
+  itemMenuEntries,
+  type ItemMenuEntry,
+  type ItemMenuIconName,
+} from './itemContextMenu'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ItemSort } from './paneStore'
@@ -57,14 +65,13 @@ interface Props {
   /** 点排序图标：原始 → 正序 → 倒序 循环。 */
   onCycleSort(): void
   onOpenItem(key: string, title: string): void
-  /** 单击选中；`append`（ctrl / cmd）时切换该项，支持多选。 */
+  /** 单击选中；`append`（ctrl / cmd）时切换该项，支持多选。右键未选中行时排他选中它。 */
   onSelectItem(key: string, append: boolean): void
   onClearSelection(): void
   onInsertItem(item: ZoteroItemSummary): void
   /** 选中几条插几个条目 chip。 */
   onInsertItems(items: readonly ZoteroItemSummary[]): void
   onReviewItems?(items: readonly ZoteroItemSummary[]): void
-  onInsertCollection(collection: ZoteroCollection): void
 }
 
 function selectionName(t: Translate, libraryName: string, collection: ZoteroCollection | null): string {
@@ -303,16 +310,7 @@ const itemIconStyle: React.CSSProperties = {
   marginTop: 1,
 }
 
-/** 头部引用按钮的紧凑尺寸。 */
-const citeButtonStyle: React.CSSProperties = {
-  flexShrink: 0,
-  height: 20,
-  padding: '0 6px',
-  fontSize: 11,
-  lineHeight: 1.2,
-}
-
-/** 排序图标按钮：与引用按钮同高，只放图标。 */
+/** 排序图标按钮：与列表标题行同高，只放图标。 */
 const sortButtonStyle: React.CSSProperties = {
   flexShrink: 0,
   height: 20,
@@ -403,20 +401,35 @@ const chipRemoveStyle: React.CSSProperties = {
   lineHeight: 1,
 }
 
-const ITEM_MENU_ICON_PATHS = {
+const ITEM_MENU_ICON_PATHS: Record<ItemMenuIconName, string> = {
   chat: 'M18 11h-7l-4 3v-3H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2Z',
   copy: 'M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM3 16V5a2 2 0 0 1 2-2h10',
+  // 左右两份文档并排：与「合并成一篇」的图标区分开，用于「综述对比」。
+  review: 'M4 4h7v16H4zM13 4h7v16h-7zM6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2',
   text: 'M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6',
   numbers: 'M10 6h10m-10 6h10m-10 6h10M3 4h2v4m-2 0h4m-4 3h3a1 1 0 0 1 0 2h-2l-1 2h4',
-} as const
+}
 
-function ItemMenuIcon({ name }: { name: keyof typeof ITEM_MENU_ICON_PATHS }): ReactElement {
+function ItemMenuIcon({ name }: { name: ItemMenuIconName }): ReactElement {
   return (
     <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth={1.65} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
       <path d={ITEM_MENU_ICON_PATHS[name]} />
     </svg>
   )
+}
+
+function toMenuEntry(entry: ItemMenuEntry): MenuEntry {
+  return {
+    id: entry.id,
+    label: entry.label,
+    disabled: entry.disabled,
+    icon: <ItemMenuIcon name={entry.icon} />,
+    submenu: entry.submenu?.map((style) => ({
+      ...style,
+      icon: <ItemMenuIcon name={style.icon} />,
+    })),
+  }
 }
 
 interface MenuPoint {
@@ -474,15 +487,14 @@ function ItemContextMenu({ point, items, onClose, onSelect }: {
   )
 }
 
-function ItemRow({ t, item, selected, onSelect, onOpen, onInsert, onCopy, copying }: {
+function ItemRow({ t, item, selected, onSelect, onOpen, menuItems, onMenuSelect }: {
   t: Translate
   item: ZoteroItemSummary
   selected: boolean
   onSelect(key: string, append: boolean): void
   onOpen(key: string, title: string): void
-  onInsert(item: ZoteroItemSummary): void
-  onCopy(item: ZoteroItemSummary, style: BibliographyStyle): void
-  copying: boolean
+  menuItems: readonly MenuEntry[]
+  onMenuSelect(id: string): void
 }): ReactElement {
   const [menuPoint, setMenuPoint] = useState<MenuPoint | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -498,23 +510,6 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert, onCopy, copyin
   const countTitle = shownKinds
     .map((kind) => `${childKindLabel(t, kind)} ${kindCounts.get(kind)}`)
     .join(' · ')
-  const menuItems: MenuEntry[] = [{
-    id: 'insert-item',
-    label: t('action.insertItem'),
-    icon: <ItemMenuIcon name="chat" />,
-  }]
-  if (isBibliographicItem(item.itemType)) {
-    menuItems.push({
-      id: 'copy-bibliography',
-      label: t('bibliography.copy'),
-      disabled: copying,
-      icon: <ItemMenuIcon name="copy" />,
-      submenu: bibliographyStyles(t).map((style) => ({
-        ...style,
-        icon: <ItemMenuIcon name={style.id === 'apa' ? 'text' : 'numbers'} />,
-      })),
-    })
-  }
   return (
     <div
       className="dsh-zotero-item-shell"
@@ -527,6 +522,8 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert, onCopy, copyin
         onDoubleClick={() => onOpen(item.key, item.title)}
         onContextMenu={(event) => {
           event.preventDefault()
+          // 右键未选中的行先排他选中它：菜单针对整批选中项，不能悄悄混进别的条目。
+          if (!selected) onSelect(item.key, false)
           const { clientX, clientY } = event
           const row = event.currentTarget.getBoundingClientRect()
           const insideRow = clientX >= row.left && clientX <= row.right && clientY >= row.top && clientY <= row.bottom
@@ -591,8 +588,7 @@ function ItemRow({ t, item, selected, onSelect, onOpen, onInsert, onCopy, copyin
           onClose={() => setMenuPoint(null)}
           onSelect={(id) => {
             setMenuPoint(null)
-            if (id === 'insert-item') onInsert(item)
-            else if (isBibliographyStyle(id)) onCopy(item, id)
+            onMenuSelect(id)
           }}
         />
       )}
@@ -644,13 +640,9 @@ export function ItemList(props: Props): ReactElement {
     onInsertItem,
     onInsertItems,
     onReviewItems,
-    onInsertCollection,
   } = props
 
   const name = selectionName(t, libraryName, selectedCollection)
-  const isRealCollection = selectedCollection !== null
-    && selectedCollection.key !== TREE_ROOT_ID
-    && selectedCollection.scope === undefined
   /** 「最近阅读」恒按最后打开时间倒序：不给标题排序入口，省得点了没反应。 */
   const recent = isRecentSelection(selectedCollection)
   const tags = [...selectedTags]
@@ -665,7 +657,6 @@ export function ItemList(props: Props): ReactElement {
     ?? t('list.searchPlaceholder')
   /** 按列表顺序取选中项，插进草稿的 chip 顺序才与眼前一致。 */
   const chosen = items.filter((item) => selectedItemKeys.has(item.key))
-  const [styleMenuOpen, setStyleMenuOpen] = useState(false)
   const [copying, setCopying] = useState(false)
   const [copyResult, setCopyResult] = useState<{
     count: number
@@ -703,6 +694,26 @@ export function ItemList(props: Props): ReactElement {
     }
   }
 
+  /** 右键菜单按整批选中项生成，所有行共用同一份；单选两项、多选三项。 */
+  const menuItems = itemMenuEntries(t, chosen, {
+    copying,
+    canReview: onReviewItems !== undefined,
+  }).map(toMenuEntry)
+
+  function onMenuSelect(id: string): void {
+    if (id === ITEM_MENU_INSERT) {
+      if (chosen.length === 1) onInsertItem(chosen[0])
+      else onInsertItems(chosen)
+      return
+    }
+    if (id === ITEM_MENU_REVIEW) {
+      onReviewItems?.(chosen)
+      return
+    }
+    // 样式 id 才真的复制；「复制参考文献」父项只负责展开子菜单。
+    if (isBibliographyStyle(id)) void copyReferences(chosen, id)
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={headerStyle}>
@@ -712,37 +723,6 @@ export function ItemList(props: Props): ReactElement {
             {tpl(t('list.count'), { n: itemsTotal })}
           </span>
           <div style={{ flex: 1 }} />
-          {chosen.length > 1 && onReviewItems !== undefined && (
-            <Button
-              variant="outline"
-              size="sm"
-              style={citeButtonStyle}
-              onClick={() => onReviewItems(chosen)}
-            >
-              {t('review.action')}
-            </Button>
-          )}
-          {chosen.length > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              title={t('action.insertSelected')}
-              style={citeButtonStyle}
-              onClick={() => onInsertItems(chosen)}
-            >
-              {tpl(t('action.citeCount'), { n: chosen.length })}
-            </Button>
-          ) : isRealCollection && selectedCollection !== null ? (
-            <Button
-              variant="outline"
-              size="sm"
-              title={t('action.insertCollection')}
-              style={citeButtonStyle}
-              onClick={() => onInsertCollection(selectedCollection)}
-            >
-              {t('action.insertItemShort')}
-            </Button>
-          ) : null}
           {!recent && (
             <Button
               variant="ghost"
@@ -768,36 +748,12 @@ export function ItemList(props: Props): ReactElement {
           modeLabel={t('search.modeLabel')}
           onModeChange={onSearchModeChange}
         />
+        {/* 选中数只是状态提示；三个动作已全部收进右键菜单，这里不再放按钮。 */}
         {chosen.length > 1 && (
           <div style={bibliographyBarStyle}>
             <span>{tpl(t('bibliography.selected'), { n: chosen.length })}</span>
-            {selectionTooLarge ? (
+            {selectionTooLarge && (
               <span role="status">{tpl(t('bibliography.limit'), { n: MAX_BIBLIOGRAPHY_ITEMS })}</span>
-            ) : (
-              <Menu
-                open={styleMenuOpen}
-                onClose={() => setStyleMenuOpen(false)}
-                onSelect={(id) => {
-                  setStyleMenuOpen(false)
-                  if (isBibliographyStyle(id)) void copyReferences(chosen, id)
-                }}
-                align="end"
-                portal
-                items={bibliographyStyles(t)}
-                anchor={(
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    style={citeButtonStyle}
-                    disabled={copying}
-                    aria-haspopup="menu"
-                    aria-expanded={styleMenuOpen}
-                    onClick={() => setStyleMenuOpen((open) => !open)}
-                  >
-                    {t(copying ? 'bibliography.loading' : 'bibliography.copy')}
-                  </Button>
-                )}
-              />
             )}
           </div>
         )}
@@ -881,9 +837,8 @@ export function ItemList(props: Props): ReactElement {
                 selected={selectedItemKeys.has(item.key)}
                 onSelect={onSelectItem}
                 onOpen={onOpenItem}
-                onInsert={onInsertItem}
-                onCopy={(item, style) => { void copyReferences([item], style) }}
-                copying={copying}
+                menuItems={menuItems}
+                onMenuSelect={onMenuSelect}
               />
             ))}
             {itemsLoading && items.length > 0 && items.length < itemsTotal && (
