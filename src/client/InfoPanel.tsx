@@ -37,7 +37,7 @@ import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
 import { openJournalUrl } from './api'
 import { readJournalMetrics } from './journalMetrics'
-import { isCjkTitle, journalLinks } from './journalLinks'
+import { journalLinks } from './journalLinks'
 import { showToast } from './paneStore'
 import { ACCENT } from './styles'
 import { estimateTokens } from './tokens'
@@ -231,14 +231,13 @@ export function InfoPanel({
     [detail.extra, detail.tags],
   )
 
-  /** 外部站点入口：ISSN 优先、刊名兜底，站点选择权留给用户。 */
+  /** 外部站点入口。目前只留 easyScholar 一家，见 `journalLinks.ts`。 */
   const journalQueryLinks = useMemo(
     () => journalLinks({
-      issn: detail.issn,
       publicationTitle: detail.publicationTitle,
       journalAbbreviation: detail.journalAbbreviation,
     }),
-    [detail.issn, detail.publicationTitle, detail.journalAbbreviation],
+    [detail.publicationTitle, detail.journalAbbreviation],
   )
 
   async function handleOpenJournalLink(url: string): Promise<void> {
@@ -272,11 +271,8 @@ export function InfoPanel({
     }
   }
   if (journalQueryLinks.length > 0) {
-    // 没有指标时，悬停提示告诉用户「这刊是中文刊，查不到很正常」；有指标时
-    // 说明这些值是从他自己库里读的，不是插件查的。
-    const hint = metrics !== null
-      ? t('detail.metricsHint')
-      : isCjkTitle(detail.publicationTitle) ? t('detail.cjkJournalHint') : undefined
+    // 有指标时说明这些值是从用户自己库里读的，不是插件查的。
+    const hint = metrics !== null ? t('detail.metricsHint') : undefined
     metaRows.push({
       label: t('detail.queryExternal'),
       value: (

@@ -42,6 +42,10 @@ const EMPTY: JournalMetrics = {
  *
  * `if` 这种两字母键只看整键相等，不做前缀匹配：否则 `if-issued` 之类
  * 的 CSL 变量会被误认成影响因子。
+ *
+ * 中文键名对齐 Green Frog（绿青蛙）写进 `extra` 的实际格式 —— 它是 Zotero
+ * 生态里用得最多的期刊指标插件（下载量与 star 数都远超同类），适配它就等于
+ * 覆盖了绝大多数中文用户的库。
  */
 const KEY_MAP: Record<string, keyof JournalMetrics> = {
   'impact factor': 'impactFactor',
@@ -59,6 +63,8 @@ const KEY_MAP: Record<string, keyof JournalMetrics> = {
   'cas quartile': 'casQuartile',
   '中科院': 'casQuartile',
   '中科院分区': 'casQuartile',
+  '中科院分区基础版': 'casQuartile',
+  '中科院分区升级版': 'casQuartile',
   '分区': 'casQuartile',
   'sciup': 'casQuartile',
   'scibase': 'casQuartile',
@@ -67,6 +73,18 @@ const KEY_MAP: Record<string, keyof JournalMetrics> = {
   'citation count': 'citations',
   '被引': 'citations',
   '被引次数': 'citations',
+}
+
+/**
+ * 中科院分区三个键的优先级：升级版 > 通用 > 基础版。
+ *
+ * 2022 年起官方只发升级版（基础版已停），所以两个键同时存在时取升级版才符合
+ * 用户的预期。旧的 Green Frog 会把两版都写进 extra，先到先得会取错。
+ */
+const CAS_RANK: Record<string, number> = {
+  '中科院分区基础版': 1,
+  '中科院分区': 2,
+  '中科院分区升级版': 3,
 }
 
 /** 单行 `键: 值`；中英文冒号都认，键长上限防止把整段话当键。 */
@@ -78,8 +96,15 @@ const IF_VALUE = /^\d{1,3}(?:\.\d{1,3})?$/u
 /** JCR 分区：`Q1`–`Q4`，允许小写。 */
 const QUARTILE_VALUE = /^[Qq]([1-4])$/u
 
-/** 中科院分区：`1区`–`4区`，也接受纯数字 1–4（便于 `CAS: 2` 这种写法）。 */
-const CAS_VALUE = /^(?:([1-4])\s*区|([1-4]))$/u
+/**
+ * 中科院分区。要收的写法比想象中多：
+ * `2区`、`二区`（Green Frog 中文版）、`大类二区` / `小类1区`（升级版分大类小类）、
+ * `2区Top`（Top 期刊标记）。
+ */
+const CAS_VALUE = /^(?:(?:大|小)类)?[一二三四1-4]区(?:[Tt][Oo][Pp])?$/u
+
+/** 裸数字 `3`，补成 `3区`。 */
+const CAS_BARE = /^([1-4])$/u
 
 /** 被引次数：允许千分位逗号。 */
 const COUNT_VALUE = /^\d{1,3}(?:,\d{3})*$|^\d+$/u
@@ -103,9 +128,11 @@ function accept(field: keyof JournalMetrics, raw: string): string {
       return match === null ? '' : `Q${match[1]}`
     }
     case 'casQuartile': {
-      const match = CAS_VALUE.exec(value)
-      if (match === null) return ''
-      return `${match[1] ?? match[2]}区`
+      // 空格只在中英混排时出现（`大类 二区`），去掉再判断，显示时也去掉。
+      const tight = value.replace(/\s+/gu, '')
+      if (CAS_VALUE.test(tight)) return tight
+      const bare = CAS_BARE.exec(tight)
+      return bare === null ? '' : `${bare[1]}区`
     }
     case 'citations':
       return COUNT_VALUE.test(value) ? value : ''
@@ -127,12 +154,25 @@ export function readJournalMetrics(extra: string, tags: readonly string[]): Jour
   const found: JournalMetrics = { ...EMPTY }
 
   // 先按行扫 extra。同一指标出现多次时**先到先得**：用户在文件头写的那条
-  // 通常是他自己核对过的，后面追加的多半是插件批量刷的。
+  // 通常是他自己核对过的，后面追加的多半是插件批量刷的。中科院分区是唯一
+  // 例外 —— 按 CAS_RANK 取优先级最高的那档（升级版压过基础版）。
+  let casRank = 0
   for (const line of extra.split(/\r?\n/u)) {
     const match = LINE.exec(line)
     if (match === null) continue
-    const field = KEY_MAP[normalizeKey(match[1])]
-    if (field === undefined || found[field] !== '') continue
+    const key = normalizeKey(match[1])
+    const field = KEY_MAP[key]
+    if (field === undefined) continue
+    const rank = CAS_RANK[key] ?? 0
+    if (rank !== 0) {
+      if (rank <= casRank) continue
+      const value = accept(field, match[2])
+      if (value === '') continue
+      found.casQuartile = value
+      casRank = rank
+      continue
+    }
+    if (found[field] !== '') continue
     found[field] = accept(field, match[2])
   }
 

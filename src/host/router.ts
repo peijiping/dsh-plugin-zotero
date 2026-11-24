@@ -563,16 +563,16 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
 /**
  * 允许 `open-url` 打开的站点白名单。
  *
+ * 只放 easyScholar 一家：它是国内覆盖面最广的期刊等级服务，也是 Zotero 生态里
+ * 用得最多的 Green Frog 插件的数据源。多一个站就多一份长期维护成本和口径混淆。
+ *
  * 不给「打开任意 URL」的能力：那等于把系统默认浏览器变成可由渲染层驱动的
  * 任意跳转原语 —— 网页里注入一行就能把用户送去钓鱼页。这里只放期刊查询站，
- * 而且是 https + host 精确匹配，不做后缀匹配（`letpub.com.cn.evil.com` 不通过）。
+ * 而且是 https + host 精确匹配，不做后缀匹配（`easyscholar.cc.evil.com` 不通过）。
  */
 const ALLOWED_EXTERNAL_HOSTS = new Set([
-  'letpub.com.cn',
-  'www.letpub.com.cn',
-  'mjl.clarivate.com',
-  'www.scimagojr.com',
-  'www.ablesci.com',
+  'easyscholar.cc',
+  'www.easyscholar.cc',
 ])
 
 /**
