@@ -4,9 +4,12 @@
  * - 行首三角箭头只管开合，且只在有子分类的行出现；点行体选中该范围。
  * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin。
  * - 真实分类与特殊目录（我的出版物 / 未分类条目 / 回收站）右侧显示条目数；
- *   右键真实分类 → 「添加整目录引用」。
+ *   右键真实分类 → 「添加整目录引用」（仅用户文库）。
  * - 「我的文库」根节点是可选中的全库范围；其下挂三个虚拟分类
  *   （我的出版物 / 未分类条目 / 回收站），与 Zotero 左侧栏一致。
+ * - 其后是两个固定区块（与 Zotero 左栏一致，位置随文库区块往下排）：
+ *   「群组文库」—— 每个群组一个蓝色节点，展开时才拉该组的分类树（只读）；
+ *   「已保存搜索」—— 橙色放大镜，选中后列表直接展示 Zotero 求值好的结果。
  * - 顶部筛选框只筛目录名（同 Zotero 左栏）：命中分类保留、非命中的祖先作为
  *   上下文行保留、未命中的子分类隐藏；筛选期间自动展开命中路径。
  * - 展开状态放在 {@link paneStore}：右侧栏切 tab 时正文会被卸载重挂，
@@ -18,13 +21,16 @@ import { useState, type ReactElement, type ReactNode } from 'react'
 
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroItemScope } from '../zotero/types'
+import type { ZoteroCollection, ZoteroGroup, ZoteroItemScope, ZoteroSavedSearch } from '../zotero/types'
+import { ChatIcon } from './actionIcons'
 import type { Translate } from './locales'
 import {
   isVirtualCountScope,
+  toggleGroup,
   toggleTreeNode,
   TREE_ROOT_ID,
   usePaneState,
+  type GroupTreeState,
   type VirtualCountScope,
 } from './paneStore'
 import { TREE_BLUE, TREE_GRAY, TREE_GREEN, TREE_ORANGE, TREE_RED } from './styles'
@@ -65,6 +71,16 @@ const VIRTUAL_NODES: readonly VirtualNode[] = [
   { key: '@trash', scope: 'trash', labelKey: 'tree.trash', icon: 'TRASH' },
 ]
 
+/**
+ * 群组文库下挂的特殊目录。
+ *
+ * 比用户文库少了「我的出版物」与「最近阅读」：群组没有出版物语义，最近阅读
+ * 是本插件的全局记录、不按库拆分；「重复条目」本地 API 不提供。
+ */
+const GROUP_VIRTUAL_NODES: readonly VirtualNode[] = VIRTUAL_NODES.filter(
+  (node) => node.scope !== 'publications',
+)
+
 interface CollectionNode {
   collection: ZoteroCollection
   children: CollectionNode[]
@@ -75,14 +91,18 @@ interface TreeCtx {
   expanded: ReadonlySet<string>
   /** 当前筛选词（已小写）；空串表示不筛选。 */
   filter: string
-  selectedCollectionKey: string | null
+  /** 当前选中的范围（文库 + key 联合身份，见 {@link isSelected}）。 */
+  selected: ZoteroCollection | null
   /** 「最近阅读」可列出的条数。 */
   recentCount: number
   /** 我的出版物 / 未分类条目 / 回收站的条目总数（未取到就不显示）。 */
   virtualCounts: Readonly<Partial<Record<VirtualCountScope, number>>>
+  /** 群组分类树缓存（展开时才取）。 */
+  groupTrees: Readonly<Record<string, GroupTreeState>>
   toggle(nodeId: string): void
   select(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
+  onToggleGroup(group: ZoteroGroup): void
 }
 
 interface Props {
@@ -91,11 +111,19 @@ interface Props {
   collections: ZoteroCollection[]
   /** 分类树筛选词（只筛目录名）。 */
   treeQuery: string
-  selectedCollectionKey: string | null
+  /** 当前选择：文库根 / 真实分类 / 虚拟分类 / 已保存搜索 / 群组节点。 */
+  selectedCollection: ZoteroCollection | null
   /** 「最近阅读」可列出的条数。 */
   recentCount: number
   /** 我的出版物 / 未分类条目 / 回收站的条目总数。 */
   virtualCounts: Readonly<Partial<Record<VirtualCountScope, number>>>
+  /** 用户可访问的群组文库。 */
+  groups: ZoteroGroup[]
+  groupsError: string | null
+  /** 群组分类树缓存。 */
+  groupTrees: Readonly<Record<string, GroupTreeState>>
+  /** 已保存搜索。 */
+  searches: ZoteroSavedSearch[]
   onSelectCollection(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
 }
@@ -103,7 +131,8 @@ interface Props {
 // ---- 图标（内联 SVG，避免依赖宿主图标导出名） -----------------------------
 //
 // 形状与配色对齐 Zotero 客户端左栏：蓝色柱廊 = 文库根、蓝色文件夹 = 分类、
-// 绿色文稿 = 我的出版物、橙色散页 = 未分类条目、红色垃圾桶 = 回收站。
+// 绿色文稿 = 我的出版物、橙色散页 = 未分类条目、红色垃圾桶 = 回收站、
+// 蓝色双人 = 群组文库、橙色放大镜 = 已保存搜索。
 // 图标是固定彩色（不随主题变），这正是 Zotero 原生左栏的样子。
 
 interface TreeIcon {
@@ -165,6 +194,18 @@ const RECENT_ICON: TreeIcon = {
   color: TREE_GRAY,
 }
 
+/** 蓝色双人：群组文库。 */
+const GROUPS_ICON: TreeIcon = {
+  path: 'M6 3.4a2.1 2.1 0 1 1 0 4.2 2.1 2.1 0 0 1 0-4.2M1.8 12.6c0-2.2 1.9-3.8 4.2-3.8s4.2 1.6 4.2 3.8M10.8 4a1.8 1.8 0 1 1 .2 3.6M11.4 8.9c1.6.3 2.8 1.6 2.8 3.4',
+  color: TREE_BLUE,
+}
+
+/** 橙色放大镜：已保存搜索。 */
+const SEARCH_ICON: TreeIcon = {
+  path: 'M7.1 2.6a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9M10.4 10.4l3 3',
+  color: TREE_ORANGE,
+}
+
 /** 虚拟分类的图标（键与 {@link VIRTUAL_NODES.icon} 对应）。 */
 const VIRTUAL_ICON: Record<string, TreeIcon> = {
   RECENT: RECENT_ICON,
@@ -209,6 +250,21 @@ function filterForest(nodes: CollectionNode[], filter: string): CollectionNode[]
     }
   }
   return kept
+}
+
+/**
+ * 选中身份 = 文库 + key（+ scope / searchKey）。
+ *
+ * 群组与用户文库的分类 key 不在同一命名空间，只比 key 会让两个库的同名节点
+ * 同时高亮。
+ */
+function isSelected(ctx: TreeCtx, node: ZoteroCollection): boolean {
+  const selected = ctx.selected
+  return selected !== null
+    && selected.key === node.key
+    && (selected.library ?? '') === (node.library ?? '')
+    && selected.scope === node.scope
+    && selected.searchKey === node.searchKey
 }
 
 // ---- 样式 -------------------------------------------------------------------
@@ -263,6 +319,14 @@ const countStyle: React.CSSProperties = {
   opacity: 0.5,
 }
 
+const sectionStyle: React.CSSProperties = {
+  padding: '10px 8px 3px',
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: 0.2,
+  opacity: 0.55,
+}
+
 // ---- 展开箭头 ---------------------------------------------------------------
 
 function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): ReactElement {
@@ -290,46 +354,58 @@ function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): R
 // ---- 分类节点（扁平化渲染：每行自带缩进，天然成树） -------------------------
 
 function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNode; depth: number }): ReactElement {
-  const nodeId = node.collection.key
+  const collection = node.collection
+  // 群组分类的 key 可能与用户文库撞车，展开状态用「文库/ key」做 id。
+  const nodeId = collection.library === undefined
+    ? collection.key
+    : `${collection.library}/${collection.key}`
   /** 筛选期间命中路径自动展开，折叠箭头暂不可用。 */
   const filtering = ctx.filter !== ''
   const open = filtering || ctx.expanded.has(nodeId)
   const [menuOpen, setMenuOpen] = useState(false)
   /** 没有子分类就不给折叠箭头（只留同宽空位，图标仍对齐）。 */
   const hasChildren = node.children.length > 0
+  /** 群组文库只读：引用解析只认用户文库，群组分类不给「添加整目录引用」。 */
+  const canInsert = collection.library === undefined
+
+  const row = (
+    <div
+      onClick={() => ctx.select(collection)}
+      onContextMenu={canInsert
+        ? (event) => {
+            event.preventDefault()
+            setMenuOpen(true)
+          }
+        : undefined}
+      style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(isSelected(ctx, collection)) }}
+    >
+      {hasChildren && !filtering
+        ? <Chevron open={open} onToggle={() => ctx.toggle(nodeId)} />
+        : <span style={iconBox} />}
+      <span style={iconBox}>{glyph(FOLDER_ICON)}</span>
+      <span style={titleStyle} title={collection.name}>{collection.name}</span>
+      {collection.itemCount !== undefined && (
+        <span style={countStyle}>{collection.itemCount}</span>
+      )}
+    </div>
+  )
 
   return (
     <>
-      <Menu
-        open={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onSelect={(id) => {
-          setMenuOpen(false)
-          if (id === 'insert-collection') ctx.onInsertCollection(node.collection)
-        }}
-        align="end"
-        portal
-        items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection') }]}
-        anchor={(
-          <div
-            onClick={() => ctx.select(node.collection)}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              setMenuOpen(true)
-            }}
-            style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(ctx.selectedCollectionKey === nodeId) }}
-          >
-            {hasChildren && !filtering
-              ? <Chevron open={open} onToggle={() => ctx.toggle(nodeId)} />
-              : <span style={iconBox} />}
-            <span style={iconBox}>{glyph(FOLDER_ICON)}</span>
-            <span style={titleStyle} title={node.collection.name}>{node.collection.name}</span>
-            {node.collection.itemCount !== undefined && (
-              <span style={countStyle}>{node.collection.itemCount}</span>
-            )}
-          </div>
-        )}
-      />
+      {canInsert ? (
+        <Menu
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          onSelect={(id) => {
+            setMenuOpen(false)
+            if (id === 'insert-collection') ctx.onInsertCollection(collection)
+          }}
+          align="end"
+          portal
+          items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection'), icon: <ChatIcon size={15} /> }]}
+          anchor={row}
+        />
+      ) : row}
       {open && node.children.map((child) => (
         <CollectionRows key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
       ))}
@@ -339,31 +415,127 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
 
 // ---- 虚拟分类（我的出版物 / 未分类条目 / 回收站） ---------------------------
 
-function virtualCollection(node: VirtualNode, t: Translate): ZoteroCollection {
-  return { key: node.key, name: t(node.labelKey), parentKey: false, scope: node.scope }
+function virtualCollection(node: VirtualNode, t: Translate, library?: string): ZoteroCollection {
+  return {
+    key: node.key,
+    name: t(node.labelKey),
+    parentKey: false,
+    scope: node.scope,
+    ...(library === undefined ? {} : { library }),
+  }
 }
 
-function VirtualRows({ ctx, node, depth }: { ctx: TreeCtx; node: VirtualNode; depth: number }): ReactElement {
-  const collection = virtualCollection(node, ctx.t)
-  const selected = ctx.selectedCollectionKey === collection.key
+function VirtualRows(
+  { ctx, node, depth, library }: { ctx: TreeCtx; node: VirtualNode; depth: number; library?: string },
+): ReactElement {
+  const collection = virtualCollection(node, ctx.t, library)
   /**
    * 最近阅读读插件自己的进度记录；其余三个特殊目录读后台补的 total。
    * 数量异步返回，没取到时保持不显示，不让数字把树撑变形。
+   * 群组下的特殊目录不显示数量：后台补的是用户文库的 total，套到群组上就是错数。
    */
-  const count = node.scope === 'recent'
-    ? ctx.recentCount
-    : isVirtualCountScope(node.scope)
-      ? ctx.virtualCounts[node.scope]
-      : undefined
+  const count = library !== undefined
+    ? undefined
+    : node.scope === 'recent'
+      ? ctx.recentCount
+      : isVirtualCountScope(node.scope)
+        ? ctx.virtualCounts[node.scope]
+        : undefined
   return (
     <div
       onClick={() => ctx.select(collection)}
-      style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(selected) }}
+      style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(isSelected(ctx, collection)) }}
     >
       <span style={iconBox} />
       <span style={iconBox}>{glyph(VIRTUAL_ICON[node.icon] ?? FOLDER_ICON)}</span>
       <span style={titleStyle} title={collection.name}>{collection.name}</span>
       {count !== undefined && <span style={countStyle}>{count}</span>}
+    </div>
+  )
+}
+
+// ---- 群组文库 ---------------------------------------------------------------
+
+/** 群组节点在筛选下是否可见：组名命中，或它已加载的分类里有命中的。 */
+function groupVisible(
+  group: ZoteroGroup,
+  tree: GroupTreeState | undefined,
+  filter: string,
+): boolean {
+  if (filter === '') return true
+  if (nameMatches(group.name, filter)) return true
+  if (tree === undefined) return false
+  return filterForest(buildForest(tree.collections), filter).length > 0
+}
+
+function GroupRows({ ctx, group, depth }: { ctx: TreeCtx; group: ZoteroGroup; depth: number }): ReactElement {
+  const library = `group:${group.id}`
+  const tree: GroupTreeState | undefined = ctx.groupTrees[group.id]
+  /** 只按用户展开状态渲染：筛选时不去拉没展开过的群组（否则是一串请求 + 空白）。 */
+  const open = ctx.expanded.has(library)
+  const loaded = tree !== undefined && tree.collections.length > 0
+  const root: ZoteroCollection = { key: TREE_ROOT_ID, name: group.name, parentKey: false, library }
+  /** 组名命中筛选时展示它全部内容，否则只展示命中的分类路径。 */
+  const nameHit = ctx.filter === '' || nameMatches(group.name, ctx.filter)
+  const forest = tree === undefined
+    ? []
+    : ctx.filter === '' || nameHit
+      ? buildForest(tree.collections)
+      : filterForest(buildForest(tree.collections), ctx.filter)
+  const virtuals = nameHit
+    ? GROUP_VIRTUAL_NODES
+    : GROUP_VIRTUAL_NODES.filter((node) => nameMatches(ctx.t(node.labelKey), ctx.filter))
+
+  return (
+    <>
+      <div
+        onClick={() => ctx.select(root)}
+        style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(isSelected(ctx, root)) }}
+      >
+        <Chevron open={open} onToggle={() => ctx.onToggleGroup(group)} />
+        <span style={iconBox}>{glyph(GROUPS_ICON)}</span>
+        <span style={titleStyle} title={group.name}>{group.name}</span>
+        {group.itemCount !== undefined && <span style={countStyle}>{group.itemCount}</span>}
+      </div>
+      {open && (tree === undefined || (tree.loading && !loaded) ? (
+        <div style={{ ...hintStyle, paddingLeft: BASE_INDENT + (depth + 1) * INDENT }}>{ctx.t('status.loading')}</div>
+      ) : tree.error !== null ? (
+        <div style={{ ...hintStyle, paddingLeft: BASE_INDENT + (depth + 1) * INDENT, color: '#d29922' }}>
+          {tree.error}
+        </div>
+      ) : (
+        <>
+          {forest.map((node) => (
+            <CollectionRows key={node.collection.key} ctx={ctx} node={node} depth={depth + 1} />
+          ))}
+          {virtuals.map((node) => (
+            <VirtualRows key={node.key} ctx={ctx} node={node} depth={depth + 1} library={library} />
+          ))}
+        </>
+      ))}
+    </>
+  )
+}
+
+// ---- 已保存搜索 -------------------------------------------------------------
+
+function SearchRows(
+  { ctx, search, depth }: { ctx: TreeCtx; search: ZoteroSavedSearch; depth: number },
+): ReactElement {
+  const node: ZoteroCollection = {
+    key: search.key,
+    name: search.name,
+    parentKey: false,
+    searchKey: search.key,
+  }
+  return (
+    <div
+      onClick={() => ctx.select(node)}
+      style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(isSelected(ctx, node)) }}
+    >
+      <span style={iconBox} />
+      <span style={iconBox}>{glyph(SEARCH_ICON)}</span>
+      <span style={titleStyle} title={search.name}>{search.name}</span>
     </div>
   )
 }
@@ -376,9 +548,13 @@ export function CollectionTree(props: Props): ReactElement {
     libraryName,
     collections,
     treeQuery,
-    selectedCollectionKey,
+    selectedCollection,
     recentCount,
     virtualCounts,
+    groups,
+    groupsError,
+    groupTrees,
+    searches,
     onSelectCollection,
     onInsertCollection,
   } = props
@@ -393,29 +569,48 @@ export function CollectionTree(props: Props): ReactElement {
     ? VIRTUAL_NODES.filter((node) => nameMatches(t(node.labelKey), filter))
     : VIRTUAL_NODES
   const recentVisible = !filtering || nameMatches(t(RECENT_NODE.labelKey), filter)
-  const matched = forest.length > 0 || virtuals.length > 0 || recentVisible
+
+  const visibleGroups = filtering
+    ? groups.filter((group) => groupVisible(group, groupTrees[group.id], filter))
+    : groups
+  const visibleSearches = filtering
+    ? searches.filter((search) => nameMatches(search.name, filter))
+    : searches
+  /** 整棵左栏都没有命中时才提示；命中只在群组 / 搜索里也不算「没有匹配」。 */
+  const nothingMatched = filtering
+    && forest.length === 0
+    && virtuals.length === 0
+    && !recentVisible
+    && visibleGroups.length === 0
+    && visibleSearches.length === 0
 
   const ctx: TreeCtx = {
     t,
     expanded,
     filter,
-    selectedCollectionKey,
+    selected: selectedCollection,
     recentCount,
     virtualCounts,
+    groupTrees,
     toggle: toggleTreeNode,
     select: onSelectCollection,
     onInsertCollection,
+    onToggleGroup: toggleGroup,
   }
 
   /** 筛选期间根节点恒为展开，命中结果才有地方显示。 */
   const rootOpen = filtering || expanded.has(TREE_ROOT_ID)
-  const root: ZoteroCollection = { key: TREE_ROOT_ID, name: libraryName === '' ? t('tree.library') : libraryName, parentKey: false }
+  const root: ZoteroCollection = {
+    key: TREE_ROOT_ID,
+    name: libraryName === '' ? t('tree.library') : libraryName,
+    parentKey: false,
+  }
 
   return (
     <div style={{ padding: '8px 6px', display: 'flex', flexDirection: 'column' }}>
       <div
         onClick={() => onSelectCollection(root)}
-        style={{ ...rowStyle, ...rowIndent(0), ...rowBackground(selectedCollectionKey === TREE_ROOT_ID) }}
+        style={{ ...rowStyle, ...rowIndent(0), ...rowBackground(isSelected(ctx, root)) }}
       >
         {filtering
           ? <span style={iconBox} />
@@ -434,9 +629,31 @@ export function CollectionTree(props: Props): ReactElement {
           {virtuals.map((node) => (
             <VirtualRows key={node.key} ctx={ctx} node={node} depth={1} />
           ))}
-          {filtering && !matched && (
+          {nothingMatched && (
             <div style={{ ...hintStyle, paddingLeft: BASE_INDENT + INDENT }}>{t('tree.emptyFiltered')}</div>
           )}
+        </>
+      )}
+
+      {(visibleGroups.length > 0 || (groupsError !== null && !filtering)) && (
+        <>
+          <div style={sectionStyle}>{t('tree.groups')}</div>
+          {visibleGroups.length === 0 ? (
+            <div style={{ ...hintStyle, color: '#d29922' }}>{groupsError}</div>
+          ) : (
+            visibleGroups.map((group) => (
+              <GroupRows key={group.id} ctx={ctx} group={group} depth={0} />
+            ))
+          )}
+        </>
+      )}
+
+      {visibleSearches.length > 0 && (
+        <>
+          <div style={sectionStyle}>{t('tree.searches')}</div>
+          {visibleSearches.map((search) => (
+            <SearchRows key={search.key} ctx={ctx} search={search} depth={0} />
+          ))}
         </>
       )}
     </div>

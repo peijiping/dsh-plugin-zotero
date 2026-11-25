@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url'
 import { anchorAnnotations, type RawAnnotation } from './annotations.js'
 import { isBibliographicItem, type BibliographyStyle, type ZoteroBibliography } from './bibliography.js'
 import {
+  currentGroupId,
+  currentLibrary,
   getSettings,
   libraryBase,
   MCP_CALL_TIMEOUT_MS,
@@ -40,6 +42,7 @@ import type {
   ZoteroChildKind,
   ZoteroCollection,
   ZoteroFulltext,
+  ZoteroGroup,
   ZoteroHealth,
   ZoteroItemDetail,
   ZoteroItemScope,
@@ -47,6 +50,7 @@ import type {
   ZoteroNote,
   ZoteroNoteRaw,
   ZoteroReadPosition,
+  ZoteroSavedSearch,
   ZoteroSearchMode,
   ZoteroTag,
   ZoteroTagRef,
@@ -158,6 +162,19 @@ interface RawItem {
     enclosure?: RawEnclosure
   }
   data?: RawItemData
+}
+
+/** `/groups` 的元素：只有识别信息，没有成员与权限。 */
+interface RawGroup {
+  id?: number
+  meta?: { numItems?: number }
+  data?: { id?: number; name?: string }
+}
+
+/** `/searches` 的元素：只用到 key 与 name。 */
+interface RawSearch {
+  key: string
+  data?: { name?: string }
 }
 
 // ---- 底层请求 ---------------------------------------------------------------
@@ -723,10 +740,78 @@ export async function callMcpTool(
 
 // ---- 文库 -------------------------------------------------------------------
 
-/** 探测文库名（取一条分类或条目上的 `library.name`）。 */
+/**
+ * 探测文库名。
+ *
+ * 用户文库取自条目 / 分类上的 `library.name`；群组文库没有这层元数据，直接问
+ * `/api/groups/<id>`（本地端点只回群组识别信息，足够拿名字）。
+ */
 export async function getLibraryName(): Promise<string> {
+  const groupId = currentGroupId()
+  if (groupId !== null) {
+    const { body } = await requestJson<{ data?: { name?: string } }>(
+      `${getSettings().zoteroBaseUrl}/api/groups/${groupId}`,
+    )
+    const name = body?.data?.name
+    return typeof name === 'string' && name !== '' ? name : '群组文库'
+  }
   const { body } = await requestJson<RawItem[]>(`${libraryBase()}/collections?limit=1`)
   return Array.isArray(body) && body.length > 0 ? libraryNameOf(body) : '我的文库'
+}
+
+/** 当前用户可访问的群组文库（本地 API 只读）。 */
+export async function listGroups(): Promise<ZoteroGroup[]> {
+  const { body } = await requestJson<RawGroup[]>(`${libraryBase()}/groups`)
+  if (!Array.isArray(body)) return []
+  return body.map((raw) => {
+    const data = (raw.data ?? {}) as { id?: number; name?: string }
+    return {
+      id: String(data.id ?? raw.id),
+      name: data.name ?? '(未命名群组)',
+      ...(typeof raw.meta?.numItems === 'number' ? { itemCount: raw.meta.numItems } : {}),
+    }
+  })
+}
+
+/** 当前文库的已保存搜索（本地 API 只给元数据，执行另走 {@link listSavedSearchItems}）。 */
+export async function listSavedSearches(): Promise<ZoteroSavedSearch[]> {
+  const { body } = await requestJson<RawSearch[]>(`${libraryBase()}/searches?limit=1000`)
+  if (!Array.isArray(body)) return []
+  return body
+    .map((raw) => ({
+      key: raw.key,
+      name: (raw.data?.name ?? '').trim() || '(未命名搜索)',
+    }))
+    .filter((search) => search.key !== '')
+}
+
+/**
+ * 执行一条已保存搜索。
+ *
+ * 条件由 Zotero 在本地求值（本地 API 独有的能力，Web API 只能读元数据）；
+ * 结果集上仍支持 `q` / 标签 / 排序 / 分页，与面板其它列表口径一致。
+ */
+export async function listSavedSearchItems(
+  searchKey: string,
+  options: ListItemsOptions,
+): Promise<{ total: number; items: ZoteroItemSummary[] }> {
+  const params = new URLSearchParams({
+    limit: String(options.limit),
+    start: String(options.offset),
+    itemType: '-annotation',
+  })
+  appendItemFilters(params, options)
+  appendItemSort(params, options)
+  const { body, total } = await requestJson<RawItem[]>(
+    `${libraryBase()}/searches/${encode(searchKey)}/items?${params.toString()}`,
+  )
+  const raws = (Array.isArray(body) ? body : []).filter((raw) => raw.data?.itemType !== 'annotation')
+  const tags = (options.tags ?? []).map((tag) => tag.trim()).filter((tag) => tag !== '')
+  const kept = tags.length === 0 ? raws : raws.filter((raw) => itemHasTags(raw, tags, options.tagMode))
+  return {
+    total: tags.length === 0 ? total ?? raws.length : kept.length,
+    items: await toSummaries(kept),
+  }
 }
 
 /** 全量分类（扁平，含 parentCollection 与 numItems）。 */
@@ -745,15 +830,20 @@ export async function listCollections(): Promise<ZoteroCollection[]> {
 }
 
 /** 条目详情里解析分类路径用；60s 内复用，避免每开一条文献都多打一次 Zotero。 */
-let collectionCache: { at: number; collections: ZoteroCollection[] } | null = null
+let collectionCache: { at: number; library: string; collections: ZoteroCollection[] } | null = null
 const COLLECTION_CACHE_MS = 60_000
 
 async function cachedCollections(): Promise<ZoteroCollection[]> {
-  if (collectionCache !== null && Date.now() - collectionCache.at < COLLECTION_CACHE_MS) {
+  const library = currentLibrary()
+  if (
+    collectionCache !== null
+    && collectionCache.library === library
+    && Date.now() - collectionCache.at < COLLECTION_CACHE_MS
+  ) {
     return collectionCache.collections
   }
   const collections = await listCollections()
-  collectionCache = { at: Date.now(), collections }
+  collectionCache = { at: Date.now(), library, collections }
   return collections
 }
 
@@ -943,7 +1033,9 @@ const childStateCache = new Map<string, ChildStateEntry>()
  * 取不到按「无子项、未读」处理——附加信息不能拖垮条目列表。
  */
 async function itemChildState(key: string): Promise<ChildState> {
-  const cached = childStateCache.get(key)
+  // 缓存键带上文库：不同文库的 8 位 key 理论上可能撞车，串用会显示别人的附件。
+  const cacheKey = `${currentLibrary()}/${key}`
+  const cached = childStateCache.get(cacheKey)
   if (cached !== undefined && Date.now() - cached.at < CHILD_STATE_TTL_MS) return cached.state
   try {
     const { body } = await requestJson<RawItem[]>(
@@ -962,7 +1054,7 @@ async function itemChildState(key: string): Promise<ChildState> {
     }
     const state: ChildState = { lastRead, children }
     if (childStateCache.size >= CHILD_STATE_CACHE_MAX) childStateCache.clear()
-    childStateCache.set(key, { at: Date.now(), state })
+    childStateCache.set(cacheKey, { at: Date.now(), state })
     return state
   } catch {
     return NO_CHILD_STATE

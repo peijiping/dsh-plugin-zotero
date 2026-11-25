@@ -32,6 +32,29 @@ export interface ZoteroCollection {
   itemCount?: number
   /** 虚拟分类的范围；真实分类为空。 */
   scope?: ZoteroItemScope
+  /**
+   * 所属文库：缺省 = 用户文库，`group:<id>` = 群组文库。
+   *
+   * 群组与用户文库的分类 key 不在同一命名空间，选中身份必须带上它。
+   */
+  library?: string
+  /** 已保存搜索的 key；仅「已保存搜索」节点有值。 */
+  searchKey?: string
+}
+
+/** 群组文库（本地 API 只给识别信息，成员与权限不暴露）。 */
+export interface ZoteroGroup {
+  /** 群组数字 id（路径里用）。 */
+  id: string
+  name: string
+  /** 组内条目数；取不到时为 undefined。 */
+  itemCount?: number
+}
+
+/** 已保存搜索（只有名字与 key，条件由 Zotero 自己执行）。 */
+export interface ZoteroSavedSearch {
+  key: string
+  name: string
 }
 
 /**
@@ -388,6 +411,8 @@ export interface ZoteroTree {
   libraryName: string
   /** 「最近阅读」当前可列出的条数（上限见 `view-state.RECENT_LIMIT`）。 */
   recentCount: number
+  /** 当前文库的已保存搜索（群组文库同样有自己的搜索）。 */
+  searches?: ZoteroSavedSearch[]
 }
 
 /** 条目列表数据。 */

@@ -5,14 +5,69 @@
  * （异机 / 容器内不可用）。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 /** Zotero 本地 API 根地址。 */
 export const ZOTERO_BASE = 'http://127.0.0.1:23119'
 
 /** 探活端点（响应头带 Zotero-API-Version / Server-ID / Schema-Version）。 */
 export const ZOTERO_PROBE_URL = `${ZOTERO_BASE}/api/`
 
-/** 当前用户文库前缀（群组文库不在 v1 范围）。 */
+/** 用户文库前缀；群组文库由 {@link libraryPrefix} 按请求替换。 */
 export const LIBRARY_PREFIX = '/api/users/0'
+
+/**
+ * 文库标识：`''` = 用户文库，`group:<id>` = 群组文库。
+ *
+ * 群组是只读浏览（本地 API 对群组只暴露识别信息，写权限取决于用户在组里的角色），
+ * 但读路径与用户文库完全同构，所以统一用前缀切换，业务代码不必分支。
+ */
+export type LibraryId = string
+
+/** 用户文库标识（默认值）。 */
+export const USER_LIBRARY: LibraryId = ''
+
+/**
+ * 请求级文库上下文。
+ *
+ * 所有 Zotero 读取都散落在几十个函数里，逐个加参数改动面太大；用 ALS 把「这次
+ * 请求属于哪个文库」隐式带下去，`libraryBase()` 一处读取即可，嵌套调用天然生效。
+ */
+const libraryContext = new AsyncLocalStorage<LibraryId>()
+
+/**
+ * 校验并归一化外部传入的文库标识。
+ *
+ * 只接受 `user`（或空）与 `group:<数字>`，其余一律视为非法（返回 null），
+ * 避免把任意字符串拼进请求路径。
+ */
+export function normalizeLibrary(raw: string | null | undefined): LibraryId | null {
+  if (raw === null || raw === undefined || raw === '' || raw === 'user') return USER_LIBRARY
+  const match = /^group:(\d{1,15})$/u.exec(raw)
+  return match === null ? null : `group:${match[1]}`
+}
+
+/** 在一个文库上下文里执行（路由每进一次请求包一层）。 */
+export function runInLibrary<T>(library: LibraryId, fn: () => Promise<T>): Promise<T> {
+  return libraryContext.run(library, fn)
+}
+
+/** 当前请求所属文库。 */
+export function currentLibrary(): LibraryId {
+  return libraryContext.getStore() ?? USER_LIBRARY
+}
+
+/** 群组文库的数字 id；用户文库返回 null。 */
+export function currentGroupId(): string | null {
+  const library = currentLibrary()
+  return library.startsWith('group:') ? library.slice('group:'.length) : null
+}
+
+/** 当前文库的 API 前缀。 */
+export function libraryPrefix(): string {
+  const groupId = currentGroupId()
+  return groupId === null ? LIBRARY_PREFIX : `/api/groups/${groupId}`
+}
 
 /** Zotero 集成 MCP 的 Streamable HTTP 端点。 */
 export const MCP_URL = 'http://127.0.0.1:23120/mcp'
@@ -211,5 +266,11 @@ export function zoteroProbeUrl(): string {
 
 /** 文库端点前缀（由 `zoteroBaseUrl` 派生）。 */
 export function libraryBase(): string {
-  return `${getSettings().zoteroBaseUrl}${LIBRARY_PREFIX}`
+  return `${getSettings().zoteroBaseUrl}${libraryPrefix()}`
+}
+
+/** 指定文库的端点前缀（不依赖请求上下文，批量取群组数据时用）。 */
+export function baseForLibrary(library: LibraryId): string {
+  const groupId = library.startsWith('group:') ? library.slice('group:'.length) : null
+  return `${getSettings().zoteroBaseUrl}${groupId === null ? LIBRARY_PREFIX : `/api/groups/${groupId}`}`
 }

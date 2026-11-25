@@ -120,6 +120,10 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
     treeQuery,
     recentCount,
     virtualCounts,
+    groups,
+    groupsError,
+    groupTrees,
+    searches,
     tagQuery,
     selectedTags,
     tagMode,
@@ -140,6 +144,18 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
    */
   const recent = isRecentSelection(selectedCollection)
 
+  /**
+   * 标题跟着当前文库走：选中群组内容时显示那个群组的名字，否则是「我的文库」。
+   */
+  const activeGroup = selectedCollection?.library?.startsWith('group:') === true
+    ? selectedCollection.library.slice('group:'.length)
+    : null
+  const title = activeGroup === null
+    ? libraryName
+    : (groups.find((group) => group.id === activeGroup)?.name
+        ?? selectedCollection?.name
+        ?? libraryName)
+
   const insertion = useInsertion(t, sessions, sessionId, inputActions)
   const [review, setReview] = useState<{ sessionId: string | undefined; items: readonly ZoteroItemSummary[] } | null>(null)
 
@@ -148,15 +164,22 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
   }
 
   /**
-   * 跳回 Zotero 主窗口：真实分类带 key 跳到该分类（目录树 + 列表），
-   * 文库根与「最近阅读」等虚拟分类没有 select URL，只唤起主窗口。
+   * 跳回 Zotero 主窗口。
+   *
+   * 真实分类带 key 跳到该分类；已保存搜索跳到搜索结果；文库根 / 群组节点 /
+   * 「最近阅读」等虚拟分类没有对应的 select URL，只唤起主窗口（群组上下文里
+   * Host 会选中那个群组文库）。
    */
   function openCurrentInZotero(): void {
     const collection = selectedCollection
-    const key = collection !== null && collection.key !== TREE_ROOT_ID && collection.scope === undefined
-      ? collection.key
-      : null
-    openInZotero(key === null ? { kind: 'library' } : { kind: 'collection', key }).catch((error: unknown) => {
+    const input = collection === null || collection.key === TREE_ROOT_ID
+      ? { kind: 'library' as const }
+      : collection.searchKey !== undefined
+        ? { kind: 'search' as const, key: collection.searchKey }
+        : collection.scope !== undefined
+          ? { kind: 'library' as const }
+          : { kind: 'collection' as const, key: collection.key }
+    openInZotero(input).catch((error: unknown) => {
       showToast(tpl(t('viewer.openFailed'), { message: errorMessage(error) }))
     })
   }
@@ -211,7 +234,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
           flexShrink: 0,
         }}
       >
-        <SectionTitle>{libraryName === '' ? t('tab.title') : libraryName}</SectionTitle>
+        <SectionTitle>{title === '' ? t('tab.title') : title}</SectionTitle>
         <StatusDot ok={health?.zotero.running === true} label={t(health?.zotero.running === true ? 'status.zoteroOn' : 'status.zoteroOff')} />
         <StatusDot ok={health?.mcp.running === true} label={t(health?.mcp.running === true ? 'status.mcpOn' : 'status.mcpOff')} />
         <div style={{ flex: 1 }} />
@@ -273,9 +296,13 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
                 libraryName={libraryName}
                 collections={collections}
                 treeQuery={treeQuery}
-                selectedCollectionKey={selectedCollection?.key ?? null}
+                selectedCollection={selectedCollection}
                 recentCount={recentCount}
                 virtualCounts={virtualCounts}
+                groups={groups}
+                groupsError={groupsError}
+                groupTrees={groupTrees}
+                searches={searches}
                 onSelectCollection={selectCollection}
                 onInsertCollection={insertion.insertCollection}
               />
@@ -292,7 +319,8 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
               tagMode={tagMode}
               scoped={selectedCollection !== null
                 && selectedCollection.key !== TREE_ROOT_ID
-                && selectedCollection.scope !== 'recent'}
+                && selectedCollection.scope !== 'recent'
+                && selectedCollection.searchKey === undefined}
               tagUsage={tagUsage}
               tagUsageLoading={tagUsageLoading}
               onTagQuery={setTagQuery}
@@ -337,7 +365,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
         <section style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <ItemList
             t={t}
-            libraryName={libraryName}
+            libraryName={title}
             selectedCollection={selectedCollection}
             query={query}
             items={items}

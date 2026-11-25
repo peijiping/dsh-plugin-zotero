@@ -17,13 +17,23 @@ import { useEffect, useState } from 'react'
 
 import type {
   ZoteroCollection,
+  ZoteroGroup,
   ZoteroHealth,
   ZoteroItemScope,
   ZoteroItemSummary,
+  ZoteroSavedSearch,
   ZoteroSearchMode,
   ZoteroTag,
 } from '../zotero/types'
-import { fetchHealth, fetchItems, fetchTagUsage, fetchTags, fetchTree } from './api'
+import {
+  fetchGroups,
+  fetchHealth,
+  fetchItems,
+  fetchLibraryTree,
+  fetchTagUsage,
+  fetchTags,
+} from './api'
+import { rememberItemLibrary, setActiveLibrary } from './library'
 
 /** 搜索防抖时长。 */
 const SEARCH_DEBOUNCE_MS = 250
@@ -111,7 +121,15 @@ function readSearchMode(): ZoteroSearchMode {
  * 头部短暂空一行字。
  */
 interface SavedTreeState {
-  selected: { key: string; name: string; scope?: ZoteroItemScope } | null
+  selected: {
+    key: string
+    name: string
+    scope?: ZoteroItemScope
+    /** 群组文库标识；用户文库不存。 */
+    library?: string
+    /** 已保存搜索的 key；普通目录不存。 */
+    searchKey?: string
+  } | null
   expanded: string[]
 }
 
@@ -127,16 +145,27 @@ function readTreeState(): SavedTreeState {
     const expanded = Array.isArray(record.expanded)
       ? record.expanded.filter((id): id is string => typeof id === 'string')
       : []
-    const saved = record.selected as { key?: unknown; name?: unknown; scope?: unknown } | null | undefined
+    const saved = record.selected as
+      | { key?: unknown; name?: unknown; scope?: unknown; library?: unknown; searchKey?: unknown }
+      | null
+      | undefined
     if (saved === null || typeof saved !== 'object' || typeof saved.key !== 'string' || saved.key === '') {
       return { selected: null, expanded }
     }
     const scope = KNOWN_SCOPES.find((item) => item === saved.scope)
+    const library = typeof saved.library === 'string' && /^group:\d{1,15}$/u.test(saved.library)
+      ? saved.library
+      : undefined
+    const searchKey = typeof saved.searchKey === 'string' && saved.searchKey !== ''
+      ? saved.searchKey
+      : undefined
     return {
       selected: {
         key: saved.key,
         name: typeof saved.name === 'string' ? saved.name : '',
         ...(scope === undefined ? {} : { scope }),
+        ...(library === undefined ? {} : { library }),
+        ...(searchKey === undefined ? {} : { searchKey }),
       },
       expanded,
     }
@@ -149,18 +178,22 @@ function readTreeState(): SavedTreeState {
 /**
  * 把当前选中与展开写盘。
  *
- * 文库根是默认值，不存（存档为空即代表文库根），免得和「没有存档」两种状态打架。
+ * 文库根是默认值，不存（存档为空即代表文库根），免得和「没有存档」两种状态打架；
+ * 群组文库的根节点带 library，必须存，否则刷新后会落回用户文库。
  */
 function saveTreeState(): void {
   const collection = state.selectedCollection
   const saved: SavedTreeState = {
-    selected: collection === null || collection.key === TREE_ROOT_ID
-      ? null
-      : {
-          key: collection.key,
-          name: collection.name,
-          ...(collection.scope === undefined ? {} : { scope: collection.scope }),
-        },
+    selected:
+      collection === null || (collection.key === TREE_ROOT_ID && collection.library === undefined)
+        ? null
+        : {
+            key: collection.key,
+            name: collection.name,
+            ...(collection.scope === undefined ? {} : { scope: collection.scope }),
+            ...(collection.library === undefined ? {} : { library: collection.library }),
+            ...(collection.searchKey === undefined ? {} : { searchKey: collection.searchKey }),
+          },
     expanded: [...state.expanded],
   }
   try {
@@ -183,6 +216,14 @@ function ancestorKeys(collections: ZoteroCollection[], key: string): string[] {
   return chain
 }
 
+/** 一个群组文库的分类树（点击展开时懒加载）。 */
+export interface GroupTreeState {
+  name: string
+  collections: ZoteroCollection[]
+  loading: boolean
+  error: string | null
+}
+
 export interface PaneState {
   health: ZoteroHealth | null
   libraryName: string
@@ -202,6 +243,15 @@ export interface PaneState {
    * 后台异步补齐；未取到时对应键缺失，树里就不显示数字。
    */
   virtualCounts: Readonly<Partial<Record<VirtualCountScope, number>>>
+
+  /** 用户可访问的群组文库（只读）。 */
+  groups: ZoteroGroup[]
+  groupsError: string | null
+  /** 群组分类树，按群组 id 缓存。 */
+  groupTrees: Readonly<Record<string, GroupTreeState>>
+
+  /** 用户文库的已保存搜索（固定区块，与 Zotero 左栏一致）。 */
+  searches: ZoteroSavedSearch[]
 
   /** 当前选择：文库根（key = TREE_ROOT_ID）/ 真实分类 / 虚拟分类。 */
   selectedCollection: ZoteroCollection | null
@@ -252,6 +302,10 @@ function initialState(): PaneState {
     treeQuery: '',
     recentCount: 0,
     virtualCounts: {},
+    groups: [],
+    groupsError: null,
+    groupTrees: {},
+    searches: [],
     selectedCollection: saved.selected === null
       ? null
       : {
@@ -259,6 +313,8 @@ function initialState(): PaneState {
           name: saved.selected.name,
           parentKey: false,
           ...(saved.selected.scope === undefined ? {} : { scope: saved.selected.scope }),
+          ...(saved.selected.library === undefined ? {} : { library: saved.selected.library }),
+          ...(saved.selected.searchKey === undefined ? {} : { searchKey: saved.selected.searchKey }),
         },
     items: [],
     itemsTotal: 0,
@@ -290,6 +346,10 @@ let treeInflight: Promise<void> | null = null
 /** 特殊目录计数的请求序号：刷新后迟到的旧结果不能覆盖新数量。 */
 let virtualCountsSeq = 0
 let tagsInflight: Promise<void> | null = null
+/** 标签请求序号：切文库时丢弃上一个库的迟到响应。 */
+let tagsSeq = 0
+/** 群组分类树的在途请求（按群组 id）。 */
+const groupInflight = new Map<string, Promise<void>>()
 let searchTimer: number | null = null
 let toastTimer: number | null = null
 /** 条目列表请求序号与在途请求。 */
@@ -304,9 +364,9 @@ function patch(next: Partial<PaneState>): void {
   for (const listener of listeners) listener()
 }
 
-/** 文库根节点的伪分类对象。 */
-function libraryRoot(name: string): ZoteroCollection {
-  return { key: TREE_ROOT_ID, name, parentKey: false }
+/** 文库根节点的伪分类对象（群组文库的根带 library）。 */
+function libraryRoot(name: string, library?: string): ZoteroCollection {
+  return { key: TREE_ROOT_ID, name, parentKey: false, ...(library === undefined ? {} : { library }) }
 }
 
 /** 订阅整份面板状态（任一字段变化都会触发重渲染）。 */
@@ -342,15 +402,25 @@ export function showToast(message: string): void {
 
 // ---- 分类树 -----------------------------------------------------------------
 
-/** 当前选择指向的查询范围参数（文库根不带 key/scope）。 */
+/**
+ * 当前选择指向的查询范围参数。
+ *
+ * 文库由选中节点自己带（群组节点/群组分类才有 library），用户文库不传参；
+ * 文库根不带 key/scope；已保存搜索走 searchKey。
+ */
 function selectionQuery(): {
+  library?: string
   scope?: ZoteroItemScope
   collectionKey?: string
+  searchKey?: string
 } {
   const collection = state.selectedCollection
-  if (collection === null || collection.key === TREE_ROOT_ID) return {}
-  if (collection.scope !== undefined) return { scope: collection.scope }
-  return { collectionKey: collection.key }
+  if (collection === null) return {}
+  const base = collection.library === undefined ? {} : { library: collection.library }
+  if (collection.key === TREE_ROOT_ID) return base
+  if (collection.searchKey !== undefined) return { ...base, searchKey: collection.searchKey }
+  if (collection.scope !== undefined) return { ...base, scope: collection.scope }
+  return { ...base, collectionKey: collection.key }
 }
 
 /**
@@ -362,7 +432,8 @@ function selectionQuery(): {
 function loadVirtualCounts(): void {
   const seq = ++virtualCountsSeq
   for (const scope of VIRTUAL_COUNT_SCOPES) {
-    void fetchItems({ scope, limit: 1 })
+    // 这三个目录只显示在「我的文库」下，数量恒按用户文库取，不受当前浏览文库影响。
+    void fetchItems({ library: '', scope, limit: 1 })
       .then((data) => {
         if (seq !== virtualCountsSeq) return
         patch({ virtualCounts: { ...state.virtualCounts, [scope]: data.total } })
@@ -384,16 +455,35 @@ function loadVirtualCounts(): void {
 export function loadTree(force = false): Promise<void> {
   if (treeInflight !== null) return treeInflight
   if (!force && state.loaded) return Promise.resolve()
+  // 存档里的选择决定当前文库：这里先对齐一次，后续标签 / 条目请求才不会打到别的库。
+  setActiveLibrary(state.selectedCollection?.library ?? '')
   patch({ treeLoading: true })
   void loadTags(force)
 
+  const groupsPromise = fetchGroups()
+    .then((list) => ({ list, error: null as string | null }))
+    .catch((error: unknown) => ({ list: [] as ZoteroGroup[], error: errorMessage(error) }))
+
   const run = (async (): Promise<void> => {
     try {
-      const [healthData, tree] = await Promise.all([fetchHealth(), fetchTree()])
+      // 用户文库树恒从用户前缀取；群组树走 {@link loadGroupTree} 懒加载。
+      const [healthData, tree, groupResult] = await Promise.all([
+        fetchHealth(),
+        fetchLibraryTree(''),
+        groupsPromise,
+      ])
       const previous = state.selectedCollection
       let selected: ZoteroCollection = libraryRoot(tree.libraryName)
       if (previous !== null) {
-        if (previous.key === TREE_ROOT_ID) {
+        if (previous.library !== undefined) {
+          // 群组选择：名字与分类都在群组树里，加载完成前原样保留。
+          selected = previous
+        } else if (previous.searchKey !== undefined) {
+          const search = (tree.searches ?? []).find((item) => item.key === previous.searchKey)
+          selected = search === undefined
+            ? libraryRoot(tree.libraryName)
+            : { key: search.key, name: search.name, parentKey: false, searchKey: search.key }
+        } else if (previous.key === TREE_ROOT_ID) {
           selected = libraryRoot(tree.libraryName)
         } else if (previous.scope !== undefined) {
           selected = previous
@@ -406,7 +496,13 @@ export function loadTree(force = false): Promise<void> {
       // 存档里的展开集不含新父级，不补的话刷新后选中项藏在折叠的父级里。
       const expanded = new Set(state.expanded)
       expanded.add(TREE_ROOT_ID)
-      if (selected.key !== TREE_ROOT_ID && selected.scope === undefined) {
+      if (selected.library !== undefined) {
+        expanded.add(selected.library)
+      } else if (
+        selected.key !== TREE_ROOT_ID
+        && selected.scope === undefined
+        && selected.searchKey === undefined
+      ) {
         for (const key of ancestorKeys(tree.collections, selected.key)) expanded.add(key)
       }
       patch({
@@ -414,6 +510,9 @@ export function loadTree(force = false): Promise<void> {
         collections: tree.collections,
         libraryName: tree.libraryName,
         recentCount: tree.recentCount,
+        searches: tree.searches ?? [],
+        groups: groupResult.list,
+        groupsError: groupResult.error,
         treeError: null,
         loaded: true,
         expanded,
@@ -423,6 +522,10 @@ export function loadTree(force = false): Promise<void> {
       loadVirtualCounts()
       // 选中的分类若已被删掉（回落到文库根），把回落结果写回存档。
       saveTreeState()
+      // 选中的是群组内容：把该群的分类树也取回来（展开状态才能画出来）。
+      if (selected.library !== undefined) {
+        void loadGroupTree(selected.library.slice('group:'.length))
+      }
       reloadItems()
       loadTagUsage()
     } catch (error) {
@@ -446,6 +549,91 @@ export function toggleTreeNode(nodeId: string): void {
 }
 
 /**
+ * 群组文库的分类树（懒加载）。
+ *
+ * 群组数量通常不多，但没必要为每个组各打一次请求；只有用户展开某个组时才取，
+ * 取到后按 id 缓存到 {@link PaneState.groupTrees}。
+ */
+export function loadGroupTree(groupId: string, force = false): Promise<void> {
+  const library = `group:${groupId}`
+  const cached: GroupTreeState | undefined = state.groupTrees[groupId]
+  const inflight = groupInflight.get(groupId)
+  if (!force && inflight !== undefined) return inflight
+  // 缓存里只要有一次成功结果就复用（空群组也算成功，不必每次展开都重取）。
+  if (!force && cached !== undefined && cached.error === null) return Promise.resolve()
+  patch({
+    groupTrees: {
+      ...state.groupTrees,
+      [groupId]: {
+        name: cached?.name ?? '',
+        collections: cached?.collections ?? [],
+        loading: true,
+        error: null,
+      },
+    },
+  })
+  const run = (async (): Promise<void> => {
+    try {
+      const tree = await fetchLibraryTree(library)
+      patch({
+        groupTrees: {
+          ...state.groupTrees,
+          [groupId]: {
+            name: tree.libraryName,
+            collections: tree.collections.map((node) => ({ ...node, library })),
+            loading: false,
+            error: null,
+          },
+        },
+      })
+      // 刷新后恢复的是群组里的某个深层分类：把它的祖先一起撑开，否则选中项
+      // 藏在折叠的父级里（群组分类的展开 id 带文库前缀，见 CollectionRows）。
+      const selected = state.selectedCollection
+      if (
+        selected?.library === library
+        && selected.key !== TREE_ROOT_ID
+        && selected.scope === undefined
+        && selected.searchKey === undefined
+      ) {
+        const expanded = new Set(state.expanded)
+        for (const key of ancestorKeys(tree.collections, selected.key)) {
+          expanded.add(`${library}/${key}`)
+        }
+        patch({ expanded })
+      }
+    } catch (error) {
+      patch({
+        groupTrees: {
+          ...state.groupTrees,
+          [groupId]: {
+            name: state.groupTrees[groupId]?.name ?? '',
+            collections: state.groupTrees[groupId]?.collections ?? [],
+            loading: false,
+            error: errorMessage(error),
+          },
+        },
+      })
+    } finally {
+      groupInflight.delete(groupId)
+    }
+  })()
+  groupInflight.set(groupId, run)
+  return run
+}
+
+/** 展开 / 折叠一个群组文库（展开时按需取它的分类树）。 */
+export function toggleGroup(group: ZoteroGroup): void {
+  const nodeId = `group:${group.id}`
+  const expanded = new Set(state.expanded)
+  const open = !expanded.has(nodeId)
+  if (open) expanded.add(nodeId)
+  else expanded.delete(nodeId)
+  patch({ expanded })
+  saveTreeState()
+  if (open) void loadGroupTree(group.id)
+}
+
+/**
  * 分类树名称筛选（纯客户端，参照 Zotero 左栏的目录过滤）。
  *
  * 只筛目录名，不触发条目重新查询；展开状态照旧保留，清空筛选后恢复原样。
@@ -462,11 +650,25 @@ export function setTreeQuery(text: string): void {
  * 否则旧筛选会作用到新目录（多数情况下变成空列表）。
  */
 export function selectCollection(collection: ZoteroCollection): void {
-  const name = collection.key === TREE_ROOT_ID ? state.libraryName : collection.name
+  const library = collection.library ?? ''
+  const name = collection.key === TREE_ROOT_ID
+    ? (library === ''
+        ? (state.libraryName === '' ? '我的文库' : state.libraryName)
+        : collection.name)
+    : collection.name
   const selected = collection.key === TREE_ROOT_ID
-    ? libraryRoot(name === '' ? '我的文库' : name)
+    ? libraryRoot(name, library === '' ? undefined : library)
     : collection
-  if (state.selectedCollection?.key === selected.key) return
+  const previous = state.selectedCollection
+  // 选中身份 = 文库 + key（+ scope / searchKey）：不同文库可能撞 key。
+  const same = previous !== null
+    && previous.key === selected.key
+    && (previous.library ?? '') === library
+    && previous.scope === selected.scope
+    && previous.searchKey === selected.searchKey
+  if (same) return
+  const libraryChanged = (previous?.library ?? '') !== library
+  if (libraryChanged) setActiveLibrary(library)
   patch({
     selectedCollection: selected,
     items: [],
@@ -475,6 +677,7 @@ export function selectCollection(collection: ZoteroCollection): void {
     selectedTags: new Set(),
     tagQuery: '',
   })
+  if (libraryChanged) void loadTags(true)
   saveTreeState()
   reloadItems()
   loadTagUsage()
@@ -520,20 +723,32 @@ export function setSearchMode(mode: ZoteroSearchMode): void {
 
 // ---- 标签 -------------------------------------------------------------------
 
-/** 拉取全库标签；失败只记错误，不影响树与列表。 */
+/**
+ * 拉取当前文库的标签；失败只记错误，不影响树与列表。
+ *
+ * 切文库时会 `force` 重拉，此时可能上一个库的请求还在路上：用序号丢弃迟到结果，
+ * 否则群组标签会被用户文库的旧响应覆盖。
+ */
 export function loadTags(force = false): Promise<void> {
-  if (tagsInflight !== null) return tagsInflight
-  if (!force && state.tags !== null) return Promise.resolve()
+  if (!force) {
+    if (tagsInflight !== null) return tagsInflight
+    if (state.tags !== null) return Promise.resolve()
+  }
+  const seq = ++tagsSeq
   patch({ tagsLoading: true })
   const run = (async (): Promise<void> => {
     try {
       const data = await fetchTags()
+      if (seq !== tagsSeq) return
       patch({ tags: data.tags, tagsError: null })
     } catch (error) {
+      if (seq !== tagsSeq) return
       patch({ tagsError: errorMessage(error) })
     } finally {
-      patch({ tagsLoading: false })
-      tagsInflight = null
+      if (seq === tagsSeq) {
+        patch({ tagsLoading: false })
+        tagsInflight = null
+      }
     }
   })()
   tagsInflight = run
@@ -603,13 +818,19 @@ export function reloadItems(): void {
   const query = state.query.trim()
   const selectedScope = state.selectedCollection?.scope
   // 选中特殊目录且没有搜索/标签筛选时，列表返回的 total 就是树里要显示的数量；
-  // 带筛选的 total 只能代表筛选结果，不能覆盖树上的目录总数。
-  const countScope = query === '' && tags.length === 0 && isVirtualCountScope(selectedScope)
+  // 带筛选的 total 只能代表筛选结果，不能覆盖树上的目录总数。群组下的特殊目录
+  // 不参与（树里显示的是用户文库的计数）。
+  const countScope = query === ''
+    && tags.length === 0
+    && state.selectedCollection?.library === undefined
+    && isVirtualCountScope(selectedScope)
     ? selectedScope
     : null
 
   void (async (): Promise<void> => {
     let loaded: ZoteroItemSummary[] = []
+    // 记住这批条目属于哪个文库：条目详情开在独立 tab 里，之后切库也要取得到。
+    const itemLibrary = state.selectedCollection?.library ?? ''
     try {
       for (let batch = 0; batch < ITEMS_MAX_BATCHES; batch += 1) {
         const data = await fetchItems({
@@ -623,6 +844,7 @@ export function reloadItems(): void {
           offset: loaded.length,
         }, controller.signal)
         if (current !== itemsSeq) return
+        for (const item of data.items) rememberItemLibrary(item.key, itemLibrary)
         const virtualCounts: Partial<Record<VirtualCountScope, number>> = { ...state.virtualCounts }
         if (countScope !== null && batch === 0) virtualCounts[countScope] = data.total
         loaded = loaded.length === 0 ? data.items : [...loaded, ...data.items]
@@ -701,8 +923,13 @@ function loadTagUsage(): void {
   if (usageAbort !== null) usageAbort.abort()
   usageAbort = null
   const collection = state.selectedCollection
-  // 「最近阅读」没有分类范围，标签面板退回全库标签。
-  if (collection === null || collection.key === TREE_ROOT_ID || collection.scope === 'recent') {
+  // 「最近阅读」没有分类范围、已保存搜索也没有分类，标签面板都退回全库标签。
+  if (
+    collection === null
+    || collection.key === TREE_ROOT_ID
+    || collection.scope === 'recent'
+    || collection.searchKey !== undefined
+  ) {
     patch({ tagUsage: null, tagUsageLoading: false })
     return
   }
@@ -714,6 +941,7 @@ function loadTagUsage(): void {
   patch({ tagUsage: null, tagUsageLoading: true })
   fetchTagUsage(
     {
+      ...(collection.library === undefined ? {} : { library: collection.library }),
       ...(scope !== undefined
         ? { scope }
         : { collectionKeys: [collection.key] }),
@@ -744,10 +972,12 @@ export function resetPaneStore(): void {
   toastTimer = null
   treeInflight = null
   tagsInflight = null
+  groupInflight.clear()
   itemsAbort = null
   usageAbort = null
   itemsSeq = 0
   usageSeq = 0
+  tagsSeq = 0
   state = initialState()
   for (const listener of listeners) listener()
 }

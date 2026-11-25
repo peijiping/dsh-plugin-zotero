@@ -118,6 +118,8 @@ const zh: Record<string, string> = {
   'tree.trash': '回收站',
   'tree.filterPlaceholder': '筛选分类',
   'tree.emptyFiltered': '没有匹配的分类',
+  'tree.groups': '群组文库',
+  'tree.searches': '已保存搜索',
 
   'list.searchPlaceholder': '搜索当前范围的标题 / 摘要',
   'search.modeLabel': '搜索范围',
@@ -616,7 +618,7 @@ const zh: Record<string, string> = {
   'annotation.markUnavailable': '这段选区定位不到 PDF 里的位置，无法标注',
   'annotation.commentQuick': '标注时顺带写一句评论',
   'annotation.commentQuickShort': '评论',
-  'annotation.commentQuickPlaceholder': '评论（回车即标黄写入）',
+  'annotation.commentQuickPlaceholder': '评论（回车或点击需要标注的颜色块）',
   'annotation.created': '已写入 Zotero',
   'annotation.createdMany': '已写入 Zotero（{count} 条）',
 
@@ -897,6 +899,8 @@ const en: Record<string, string> = {
   'tree.trash': 'Trash',
   'tree.filterPlaceholder': 'Filter collections',
   'tree.emptyFiltered': 'No collections match',
+  'tree.groups': 'Group Libraries',
+  'tree.searches': 'Saved Searches',
 
   'list.searchPlaceholder': 'Search title / abstract in the current selection',
   'search.modeLabel': 'Search scope',
@@ -1395,7 +1399,7 @@ const en: Record<string, string> = {
   'annotation.markUnavailable': 'This selection has no position in the PDF, so it cannot be marked',
   'annotation.commentQuick': 'Attach a comment to the new annotation',
   'annotation.commentQuickShort': 'Comment',
-  'annotation.commentQuickPlaceholder': 'Comment (Enter marks it in yellow)',
+  'annotation.commentQuickPlaceholder': 'Comment (Enter or click the colour you want)',
   'annotation.created': 'Saved to Zotero',
   'annotation.createdMany': 'Saved {count} annotations to Zotero',
 

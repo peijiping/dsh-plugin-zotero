@@ -21,7 +21,12 @@ import { dirname, extname, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import * as zotero from '../zotero/client.js'
-import { SNAPSHOT_INJECT_MAX_BYTES, SNAPSHOT_ROUTE_PREFIX } from '../zotero/config.js'
+import {
+  normalizeLibrary,
+  runInLibrary,
+  SNAPSHOT_INJECT_MAX_BYTES,
+  SNAPSHOT_ROUTE_PREFIX,
+} from '../zotero/config.js'
 import { isTrusted, KEY_PATTERN } from './router.js'
 
 /** `lib/host/snapshot.js` → 包根 `client/snapshot/runtime.js`。 */
@@ -265,10 +270,16 @@ export function createSnapshotHandler(): (req: IncomingMessage, res: ServerRespo
       fail(res, 404, '未知快照')
       return
     }
+    // 附件 key 属于哪个文库由调用方带来：群组附件的文件路径要从群组前缀取。
+    const library = normalizeLibrary(url.searchParams.get('library'))
+    if (library === null) {
+      fail(res, 404, '未知快照')
+      return
+    }
 
     let file
     try {
-      file = await zotero.getAttachmentFile(target.key)
+      file = await runInLibrary(library, () => zotero.getAttachmentFile(target.key))
     } catch {
       fail(res, 404, '快照不存在')
       return

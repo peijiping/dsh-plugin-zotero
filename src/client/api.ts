@@ -13,6 +13,7 @@ import type {
   ZoteroAttachmentInfo,
   ZoteroAuthResult,
   ZoteroFulltext,
+  ZoteroGroup,
   ZoteroHealth,
   ZoteroItemDetail,
   ZoteroItemScope,
@@ -29,6 +30,7 @@ import type {
   ZoteroWriteRef,
   ZoteroWriteStatus,
 } from '../zotero/types'
+import { getActiveLibrary, itemLibraryQuery, libraryOfItem } from './library'
 
 const BASE = '/dsh-zotero/api'
 
@@ -90,6 +92,22 @@ async function get<T>(action: string, query: Query = {}, signal?: AbortSignal): 
 }
 
 /**
+ * 写端点的文库上下文。
+ *
+ * 带条目 key 的写（笔记 / 标注 / 打开 Zotero）按「条目所在文库」，其余按当前
+ * 浏览的文库 —— 详情 tab 里的写操作可能发生在用户切回别的文库之后。
+ */
+function bodyLibrary(body: unknown): string {
+  const record = body as Record<string, unknown> | null
+  const key = typeof record?.key === 'string'
+    ? record.key
+    : typeof record?.parentItem === 'string'
+      ? record.parentItem
+      : null
+  return key === null ? getActiveLibrary() : libraryOfItem(key)
+}
+
+/**
  * 打写端点。
  *
  * Host 对写请求同时要求 JSON content-type 和自定义头，缺一个就 403 —— 这两样
@@ -98,7 +116,7 @@ async function get<T>(action: string, query: Query = {}, signal?: AbortSignal): 
 async function post<T>(action: string, body: unknown, signal?: AbortSignal): Promise<T> {
   let res: Response
   try {
-    res = await fetch(buildUrl(action), {
+    res = await fetch(buildUrl(action, { library: bodyLibrary(body) }), {
       method: 'POST',
       headers: { 'content-type': 'application/json', [WRITE_HEADER]: '1' },
       body: JSON.stringify(body),
@@ -116,13 +134,27 @@ export function fetchHealth(): Promise<ZoteroHealth> {
 }
 
 export function fetchTree(signal?: AbortSignal): Promise<ZoteroTree> {
-  return get<ZoteroTree>('tree', {}, signal)
+  return get<ZoteroTree>('tree', { library: getActiveLibrary() }, signal)
+}
+
+/** 指定文库的分类树（展开群组节点时懒加载用，不改「当前文库」）。 */
+export function fetchLibraryTree(library: string, signal?: AbortSignal): Promise<ZoteroTree> {
+  return get<ZoteroTree>('tree', { library }, signal)
+}
+
+/** 用户可访问的群组文库（只读）。 */
+export function fetchGroups(signal?: AbortSignal): Promise<ZoteroGroup[]> {
+  return get<ZoteroGroup[]>('groups', {}, signal)
 }
 
 export function fetchItems(
   query: {
+    /** 文库标识；缺省 = 当前浏览的文库。 */
+    library?: string
     scope?: ZoteroItemScope
     collectionKey?: string
+    /** 已保存搜索的 key：与 scope / collectionKey 互斥。 */
+    searchKey?: string
     q?: string
     /** 搜索框左侧三档：标题 / 所有字段与标签 / 所有内容。 */
     qmode?: ZoteroSearchMode
@@ -138,16 +170,21 @@ export function fetchItems(
 ): Promise<ZoteroItems> {
   const { tags, ...rest } = query
   // Host 侧标签参数名是 `tag`（AND 靠重复出现，OR 由 Host 拼成 `A || B`）。
-  return get<ZoteroItems>('items', { ...rest, ...(tags === undefined ? {} : { tag: tags }) }, signal)
+  return get<ZoteroItems>(
+    'items',
+    { library: getActiveLibrary(), ...rest, ...(tags === undefined ? {} : { tag: tags }) },
+    signal,
+  )
 }
 
 export function fetchTags(signal?: AbortSignal): Promise<ZoteroTags> {
-  return get<ZoteroTags>('tags', {}, signal)
+  return get<ZoteroTags>('tags', { library: getActiveLibrary() }, signal)
 }
 
 /** 当前范围（分类子树 / 虚拟分类 + 搜索词）内的标签用量。 */
 export function fetchTagUsage(
   query: {
+    library?: string
     scope?: ZoteroItemScope
     collectionKeys?: readonly string[]
     q?: string
@@ -159,13 +196,17 @@ export function fetchTagUsage(
   // Host 侧参数名是 `collectionKey`（子树靠重复出现传多个 key）。
   return get<ZoteroTags>(
     'tag-usage',
-    { ...rest, ...(collectionKeys === undefined ? {} : { collectionKey: collectionKeys }) },
+    {
+      library: getActiveLibrary(),
+      ...rest,
+      ...(collectionKeys === undefined ? {} : { collectionKey: collectionKeys }),
+    },
     signal,
   )
 }
 
 export function fetchItem(key: string, style = 'apa', signal?: AbortSignal): Promise<ZoteroItemDetail> {
-  return get<ZoteroItemDetail>('item', { key, style }, signal)
+  return get<ZoteroItemDetail>('item', { key, style, ...itemLibraryQuery(key) }, signal)
 }
 
 export function fetchBibliography(
@@ -173,11 +214,16 @@ export function fetchBibliography(
   style: BibliographyStyle,
   signal?: AbortSignal,
 ): Promise<ZoteroBibliography> {
-  return get('bibliography', { key: keys, style }, signal)
+  const first = keys[0]
+  return get('bibliography', {
+    key: keys,
+    style,
+    ...(first === undefined ? { library: getActiveLibrary() } : itemLibraryQuery(first)),
+  }, signal)
 }
 
 export function fetchFulltext(key: string, signal?: AbortSignal): Promise<ZoteroFulltext | null> {
-  return get<ZoteroFulltext | null>('fulltext', { key }, signal)
+  return get<ZoteroFulltext | null>('fulltext', { key, ...itemLibraryQuery(key) }, signal)
 }
 
 export function fetchReviewEvidence(run: string, id: string): Promise<ReviewEvidenceRecord | null> {
@@ -190,7 +236,7 @@ export function saveReviewEvidence(run: string, records: readonly ReviewEvidence
 
 /** 附件文件地址；直接交给 PDF.js / Word 渲染器按 Range 取流。 */
 export function fileUrl(key: string): string {
-  return buildUrl('file', { key })
+  return buildUrl('file', { key, ...itemLibraryQuery(key) })
 }
 
 /**
@@ -200,21 +246,24 @@ export function fileUrl(key: string): string {
  * 无权限 / 没有本地文件）在这个端点里以 `ApiFailure.message` 给出。
  */
 export function fetchAttachmentInfo(key: string, signal?: AbortSignal): Promise<ZoteroAttachmentInfo> {
-  return get<ZoteroAttachmentInfo>('attachment-info', { key }, signal)
+  return get<ZoteroAttachmentInfo>('attachment-info', { key, ...itemLibraryQuery(key) }, signal)
 }
 
 /**
  * 网页快照的目录形地址，直接作为 iframe 的 `src`。
  *
- * 尾斜杠必须在：浏览器按它解析快照里的相对资源。
+ * 尾斜杠必须在：浏览器按它解析快照里的相对资源。`library` 放在斜杠之后
+ * （`/…/<key>/?library=…`），不影响这个相对解析。
  */
 export function snapshotUrl(key: string): string {
-  return `/dsh-zotero/snapshot/${encodeURIComponent(key)}/`
+  const library = libraryOfItem(key)
+  const query = library === '' ? '' : `?library=${encodeURIComponent(library)}`
+  return `/dsh-zotero/snapshot/${encodeURIComponent(key)}/${query}`
 }
 
-/** 用系统 Zotero 打开条目、附件页或分类；`library` 只唤起主窗口。 */
+/** 用系统 Zotero 打开条目、附件页、分类或已保存搜索；`library` 只唤起主窗口。 */
 export type OpenInZoteroInput =
-  | { kind: 'item' | 'collection'; key: string }
+  | { kind: 'item' | 'collection' | 'search'; key: string }
   | { kind: 'attachment'; key: string; page?: number }
   | { kind: 'library' }
 
@@ -308,7 +357,7 @@ export function saveViewState(patch: ViewStatePatch): Promise<{ saved: boolean }
  * 详情里那份 `note.html` 是展示用的：属性被剥过、超长被切过，拿它回写等于毁数据。
  */
 export function fetchNoteRaw(key: string, signal?: AbortSignal): Promise<ZoteroNoteRaw> {
-  return get<ZoteroNoteRaw>('note-raw', { key }, signal)
+  return get<ZoteroNoteRaw>('note-raw', { key, ...itemLibraryQuery(key) }, signal)
 }
 
 /** 在 `parentItem` 下新建一条笔记；`note` 是 HTML。 */

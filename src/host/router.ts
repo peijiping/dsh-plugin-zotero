@@ -19,7 +19,16 @@ import * as zotero from '../zotero/client.js'
 import { ZoteroError } from '../zotero/client.js'
 import { createAnnotations, deleteAnnotation, patchAnnotation } from '../zotero/annotation-writes.js'
 import { isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS } from '../zotero/bibliography.js'
-import { DEFAULT_LIMIT, getSettings, ROUTE_PREFIX, WRITE_HEADER } from '../zotero/config.js'
+import {
+  currentGroupId,
+  DEFAULT_LIMIT,
+  getSettings,
+  normalizeLibrary,
+  ROUTE_PREFIX,
+  runInLibrary,
+  USER_LIBRARY,
+  WRITE_HEADER,
+} from '../zotero/config.js'
 import { createNote, deleteNote, updateNote } from '../zotero/notes.js'
 import { getReviewEvidence, requireReviewEvidenceId, requireReviewRun, saveReviewEvidence } from '../zotero/review-evidence.js'
 import { listRecent, loadPosition, loadViewState, RECENT_LIMIT, savePosition, saveViewState, type ViewStatePatch } from '../zotero/view-state.js'
@@ -200,9 +209,10 @@ async function handleHealth(res: ServerResponse): Promise<void> {
     zotero.probeMcp(),
     zotero.getLibraryName().catch(() => '我的文库'),
   ])
+  const groupId = currentGroupId()
   const data: ZoteroHealth = {
     zotero: zoteroInfo,
-    library: { id: 'users/0', name: libraryName },
+    library: { id: groupId === null ? 'users/0' : `groups/${groupId}`, name: libraryName },
     mcp: { running: mcpRunning },
   }
   ok(res, data)
@@ -240,13 +250,25 @@ async function handleAuthorize(res: ServerResponse): Promise<void> {
 }
 
 async function handleTree(res: ServerResponse): Promise<void> {
-  const [collections, libraryName, recent] = await Promise.all([
+  const [collections, libraryName, recent, searches] = await Promise.all([
     zotero.listCollections(),
     zotero.getLibraryName().catch(() => '我的文库'),
     listRecent().catch(() => []),
+    // 已保存搜索是可选能力：群组文库或旧版 Zotero 上取不到时不该拖垮整棵树。
+    zotero.listSavedSearches().catch(() => []),
   ])
-  const data: ZoteroTree = { collections, libraryName, recentCount: recent.length }
+  const data: ZoteroTree = { collections, libraryName, recentCount: recent.length, searches }
   ok(res, data)
+}
+
+/**
+ * 用户可访问的群组文库。
+ *
+ * 群组列表永远挂在用户文库前缀下（`/api/users/0/groups`），所以这里显式回到
+ * 用户文库上下文执行，避免调用方把 `library` 参数一路带进来时打错地址。
+ */
+async function handleGroups(res: ServerResponse): Promise<void> {
+  ok(res, await runInLibrary(USER_LIBRARY, () => zotero.listGroups()))
 }
 
 /** 合法的条目列表范围（虚拟分类）。 */
@@ -281,6 +303,26 @@ async function handleItems(res: ServerResponse, params: URLSearchParams): Promis
   const sort = params.get('sort') === 'title' ? 'title' as const : undefined
   const limit = clampLimit(params.get('limit'))
   const offset = parseOffset(params.get('offset'))
+  const searchKey = params.get('searchKey')
+  if (searchKey !== null && searchKey !== '') {
+    // 已保存搜索由 Zotero 自己在本地求值（本地 API 独有），结果集上仍能搜索/筛选。
+    if (!KEY_PATTERN.test(searchKey)) {
+      fail(res, 400, 'bad_request', 'searchKey 格式不合法')
+      return
+    }
+    const result = await zotero.listSavedSearchItems(searchKey, {
+      q,
+      qmode,
+      tags,
+      tagMode,
+      sort,
+      direction: sortDirection,
+      limit,
+      offset,
+    })
+    ok(res, { total: result.total, items: result.items })
+    return
+  }
   if (scopeParam === 'recent') {
     // Zotero 本地 API 不含「最近阅读」；这份名单完全来自本插件的阅读进度记录。
     const result = await zotero.listRecentItems(await listRecent(RECENT_LIMIT), {
@@ -542,6 +584,7 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
   const kind = record.kind === 'item'
     || record.kind === 'attachment'
     || record.kind === 'collection'
+    || record.kind === 'search'
     || record.kind === 'library'
     ? record.kind
     : null
@@ -550,7 +593,13 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
     return
   }
   if (kind === 'library') {
-    await activateZotero()
+    // 群组上下文：直接选中那个群组文库，而不是用户文库。
+    const groupId = currentGroupId()
+    if (groupId === null) {
+      await activateZotero()
+    } else {
+      await openExternal(`zotero://select/groups/${groupId}`)
+    }
     ok(res, { opened: true })
     return
   }
@@ -558,13 +607,22 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
     fail(res, 400, 'bad_request', 'key 格式不合法')
     return
   }
+  // 群组与用户文库的 select URL 只差前缀：`groups/<id>` 对 `library`。
+  const groupId = currentGroupId()
+  const libraryPath = groupId === null ? 'library' : `groups/${groupId}`
   if (kind === 'collection') {
     // Zotero 主窗口选中该分类，右侧即为该分类的文献列表。
-    await openExternal(`zotero://select/library/collections/${key}`)
+    await openExternal(`zotero://select/${libraryPath}/collections/${key}`)
     ok(res, { opened: true })
     return
   }
-  let url = `zotero://select/library/items/${key}`
+  if (kind === 'search') {
+    // 已保存搜索同样可以定位：左栏选中它，右侧是搜索结果。
+    await openExternal(`zotero://select/${libraryPath}/searches/${key}`)
+    ok(res, { opened: true })
+    return
+  }
+  let url = `zotero://select/${libraryPath}/items/${key}`
   if (kind === 'attachment') {
     if (
       record.page !== undefined
@@ -576,7 +634,7 @@ async function handleOpenInZotero(req: IncomingMessage, res: ServerResponse): Pr
       fail(res, 400, 'bad_request', 'page 必须是 1–10000 的整数')
       return
     }
-    url = `zotero://open-pdf/library/items/${key}`
+    url = `zotero://open-pdf/${libraryPath}/items/${key}`
     if (record.page !== undefined) url += `?page=${record.page}`
   }
   await openExternal(url)
@@ -990,6 +1048,7 @@ async function handleJournalRank(
 const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['health', 'GET'],
   ['tree', 'GET'],
+  ['groups', 'GET'],
   ['items', 'GET'],
   ['tags', 'GET'],
   ['tag-usage', 'GET'],
@@ -1052,115 +1111,126 @@ export function createHandler(
       fail(res, 403, 'bad_request', '拒绝未带写标记的请求')
       return
     }
+    // 文库上下文：整条请求（含写请求）都在指定的文库前缀下执行。
+    const library = normalizeLibrary(url.searchParams.get('library'))
+    if (library === null) {
+      fail(res, 400, 'bad_request', 'library 参数不合法')
+      return
+    }
 
     try {
-      switch (action) {
-        case 'health':
-          await handleHealth(res)
-          return
-        case 'tree':
-          await handleTree(res)
-          return
-        case 'items':
-          await handleItems(res, url.searchParams)
-          return
-        case 'tags':
-          await handleTags(res)
-          return
-        case 'tag-usage':
-          await handleTagUsage(res, url.searchParams)
-          return
-        case 'item':
-          await handleItem(res, url.searchParams)
-          return
-        case 'bibliography':
-          await handleBibliography(res, url.searchParams)
-          return
-        case 'fulltext':
-          await handleFulltext(res, url.searchParams)
-          return
-        case 'collection-bib':
-          await handleCollectionBib(res, url.searchParams)
-          return
-        case 'file':
-          await handleFile(req, res, url.searchParams)
-          return
-        case 'attachment-info':
-          await handleAttachmentInfo(res, url.searchParams)
-          return
-        case 'open-in-zotero':
-          await handleOpenInZotero(req, res)
-          return
-        case 'open-settings':
-          await handleOpenSettings(req, res)
-          return
-        case 'open-url':
-          await handleOpenUrl(req, res)
-          return
-        case 'mcp-tools':
-          await handleMcpTools(res, deps)
-          return
-        case 'auth-status':
-          await handleAuthStatus(res)
-          return
-        case 'read-position':
-          await handleReadPosition(res, url.searchParams)
-          return
-        case 'view-state':
-          await handleViewState(res)
-          return
-        case 'review-evidence':
-          ok(res, await getReviewEvidence(
-            requireReviewRun(url.searchParams.get('run')),
-            requireReviewEvidenceId(url.searchParams.get('id')),
-          ))
-          return
-        case 'review-evidence-save': {
-          const body = await readJsonBody(req, 16 * 1024 * 1024)
-          await saveReviewEvidence(requireReviewRun(body.run), body.records)
-          ok(res, { saved: true })
-          return
+      await runInLibrary(library, async () => {
+        switch (action) {
+          case 'health':
+            await handleHealth(res)
+            return
+          case 'tree':
+            await handleTree(res)
+            return
+          case 'groups':
+            await handleGroups(res)
+            return
+          case 'items':
+            await handleItems(res, url.searchParams)
+            return
+          case 'tags':
+            await handleTags(res)
+            return
+          case 'tag-usage':
+            await handleTagUsage(res, url.searchParams)
+            return
+          case 'item':
+            await handleItem(res, url.searchParams)
+            return
+          case 'bibliography':
+            await handleBibliography(res, url.searchParams)
+            return
+          case 'fulltext':
+            await handleFulltext(res, url.searchParams)
+            return
+          case 'collection-bib':
+            await handleCollectionBib(res, url.searchParams)
+            return
+          case 'file':
+            await handleFile(req, res, url.searchParams)
+            return
+          case 'attachment-info':
+            await handleAttachmentInfo(res, url.searchParams)
+            return
+          case 'open-in-zotero':
+            await handleOpenInZotero(req, res)
+            return
+          case 'open-settings':
+            await handleOpenSettings(req, res)
+            return
+          case 'open-url':
+            await handleOpenUrl(req, res)
+            return
+          case 'mcp-tools':
+            await handleMcpTools(res, deps)
+            return
+          case 'auth-status':
+            await handleAuthStatus(res)
+            return
+          case 'read-position':
+            await handleReadPosition(res, url.searchParams)
+            return
+          case 'view-state':
+            await handleViewState(res)
+            return
+          case 'review-evidence':
+            ok(res, await getReviewEvidence(
+              requireReviewRun(url.searchParams.get('run')),
+              requireReviewEvidenceId(url.searchParams.get('id')),
+            ))
+            return
+          case 'review-evidence-save': {
+            const body = await readJsonBody(req, 16 * 1024 * 1024)
+            await saveReviewEvidence(requireReviewRun(body.run), body.records)
+            ok(res, { saved: true })
+            return
+          }
+          case 'authorize':
+            await handleAuthorize(res)
+            return
+          case 'note-raw':
+            await handleNoteRaw(res, url.searchParams)
+            return
+          case 'note-create':
+            await handleNoteCreate(req, res)
+            return
+          case 'note-update':
+            await handleNoteUpdate(req, res)
+            return
+          case 'note-delete':
+            await handleNoteDelete(req, res)
+            return
+          case 'annotation-patch':
+            await handleAnnotationPatch(req, res)
+            return
+          case 'annotation-delete':
+            await handleAnnotationDelete(req, res)
+            return
+          case 'annotation-create':
+            await handleAnnotationCreate(req, res)
+            return
+          case 'read-position-save':
+            await handleReadPositionSave(req, res)
+            return
+          case 'view-state-save':
+            await handleViewStateSave(req, res)
+            return
+          case 'translate':
+            await handleTranslate(req, res, deps)
+            return
+          case 'journal-rank':
+            await handleJournalRank(req, res, deps)
+            return
+          default:
+            fail(res, 404, 'bad_request', `未知 action ${action}`)
+            return
         }
-        case 'authorize':
-          await handleAuthorize(res)
-          return
-        case 'note-raw':
-          await handleNoteRaw(res, url.searchParams)
-          return
-        case 'note-create':
-          await handleNoteCreate(req, res)
-          return
-        case 'note-update':
-          await handleNoteUpdate(req, res)
-          return
-        case 'note-delete':
-          await handleNoteDelete(req, res)
-          return
-        case 'annotation-patch':
-          await handleAnnotationPatch(req, res)
-          return
-        case 'annotation-delete':
-          await handleAnnotationDelete(req, res)
-          return
-        case 'annotation-create':
-          await handleAnnotationCreate(req, res)
-          return
-        case 'read-position-save':
-          await handleReadPositionSave(req, res)
-          return
-        case 'view-state-save':
-          await handleViewStateSave(req, res)
-          return
-        case 'translate':
-          await handleTranslate(req, res, deps)
-          return
-        case 'journal-rank':
-          await handleJournalRank(req, res, deps)
-          return
-        default:
-          fail(res, 404, 'bad_request', `未知 action ${action}`)
-          return
-      }
+      })
     } catch (error) {
       const { status, error: apiError } = toApiError(error)
       fail(res, status, apiError.code, apiError.message, apiError.fix)
