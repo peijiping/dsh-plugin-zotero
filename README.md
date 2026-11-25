@@ -2,29 +2,38 @@
 
 **把 Zotero 文献库搬进 DSH：用 AI 检索、精读、整理文献，让原文与模型直接对话。**
 
-插件把 Zotero 的分类、标签、条目元数据、PDF 全文、笔记与标注接进 DSH，让「检索 — 精读 — 摘录 — 讨论 — 成稿」在同一条工作流里完成：右侧栏浏览文库，双击条目打开独立阅读页，划词摘录 / 翻译 / 框图，一键写成引用胶囊送进会话草稿，模型随即基于原文接续作答。模型侧还能检索、精读、新建分类、导入论文、回挂译文——凡 Zotero 本地接口与集成 MCP 能做的，都能交给它。
+插件把 Zotero 的个人文库与群组文库、分类、已保存搜索、标签、条目元数据、期刊指标、PDF 全文、笔记与标注接进 DSH，让「检索 — 精读 — 摘录 — 讨论 — 成稿」在同一条工作流里完成：右侧栏浏览文库，双击条目打开独立阅读页，划词摘录 / 翻译 / 框图，一键写成引用胶囊送进会话草稿，模型随即基于原文接续作答。条目右键还能复制 APA / GB/T 7714 参考文献，或把多篇文献排成综述对比。模型侧还能检索、精读、新建分类、导入论文、回挂译文——凡 Zotero 本地接口与集成 MCP 能做的，都能交给它。
 
 不用写代码、不用记命令。第一次使用照着[安装与设置](#安装与设置)点 5 步即可，都是一次性的，以后打开 Zotero 和 DSH 直接用。完整交互与错误对照见 [插件使用说明](docs/插件使用说明/dsh-plugin-zotero使用说明.zh.md)。
 
 ## 截图
 
-[![DSH 右侧栏中的 Zotero 文献库面板](docs/images/zotero-pane.png)](docs/images/zotero-pane.png)
+[![DSH 右侧栏中的 Zotero 文献库面板与条目右键菜单](docs/images/zotero-pane.png)](docs/images/zotero-pane.png)
 
-<sub>右侧栏「Zotero 文献库」面板：分类树 + 标签面板 + 条目列表；双击条目单开阅读标签页，PDF 整页渲染、高亮原位叠加。</sub>
+<sub>右侧栏「Zotero 文献库」面板：分类树 + 标签面板 + 条目列表；多选条目后右键即可加入对话、复制参考文献或发起综述对比。</sub>
 
-[![在 DSH 内边读 PDF 边与 AI 交互](docs/images/zotero-reading-with-ai.png)](docs/images/zotero-reading-with-ai.png)
+[![综述对比结果与原文证据定位](docs/images/zotero-reading-with-ai.png)](docs/images/zotero-reading-with-ai.png)
 
-<sub>阅读现场：译文附件与原文可切换，点高亮弹出标注卡片，选中的原文已作为引用写入左侧会话草稿。</sub>
+<sub>综述对比现场：左侧会话给出结论与原文证据，右侧 PDF 自动定位到对应段落；对比前可逐篇选择全文、章节或仅书目。</sub>
 
 ## 它能替你做的事
 
-- **找文献**：按标题、年份、全文关键词检索，也能跨库搜高亮和批注；右侧栏按分类、标签、标题 / 摘要逐层缩小范围。
-- **读文献**：双击就在 DSH 内开独立阅读页，PDF 基于 pdf.js 官方 Viewer 连续滚动、高亮原位叠加，原文与译本附件随时切换。左上角一份目录统一收拢 PDF 书签、网页快照与笔记标题，并随当前页面自动高亮定位。划选可摘录、翻译（左右对照、自动判向、可临时换模型精翻）或写高亮 / 下划线（跨页自动拆条、带评论，改色 / 改页码 / 加标签 / 互转 / 删除都在一处，有评论的标注另显示注释图标）；笔记可新建、编辑、删除。开启写权限后改动直接进 Zotero 库，不是副本。
-- **整理文库 / 帮你入库**：新建、重命名、移动、删除分类，批量归类，导入本地论文，把译文回挂到条目——说一句「把这几篇归到『待读』」它就照做。人侧面板的分类只读，整理交给模型。
-- **带进对话**：单条目、列表多选、单 / 多标签、整目录、划词摘录、标注、笔记、翻译与截图，全部以引用胶囊写进当前草稿（不自动发送、不抢焦点），发送那一刻才展开全文，发出后历史里仍是胶囊，悬停预览、点击看全文。独立笔记自动改插正文，不给模型一个只剩标题的空壳。公式、图表这类没法划选的内容，用左上角「截图加入对话」框一块正文——一张图片附件加一段出处说明（文献身份、页码、章节、区域文字）同条发出。
-- **安全可控**：写能力默认全关——不开「Zotero 写权限」面板就是纯只读，模型也看不到任何写工具。开启后写操作优先走集成 MCP（在 Zotero 进程内执行，不弹本地 API 授权框），标注 / 笔记这两类 MCP 覆盖不到的才走本地 API，需一次性点「始终允许」；每个模型工具都能单独开关。
+- **找文献**：三档搜索（标题 / 创建者 / 年份、所有字段和标签、含附件全文），叠加分类、标签与摘要筛选。
+- **群组与搜索**：左栏固定「群组文库」（按组浏览共享文献，只读）与「已保存搜索」（直接看 Zotero 求值结果）。
+- **最近阅读**：按最后打开时间排序；读过的条目图标与标题淡化，悬停可看最后阅读时间。
+- **独立阅读页**：双击开 tab，PDF 用 pdf.js 连续滚动、高亮原位叠加；网页快照与文本附件也能读，原文 / 译本随时切换。
+- **目录与续读**：左上角目录收拢 PDF 书签、快照标题、笔记标题并随页高亮；PDF 自动记住页码，下次打开接着读。
+- **划选即用**：摘录、翻译、高亮 / 下划线；跨页自动拆条，评论、改色、改页码、加标签、互转、删除都在一处。
+- **笔记**：就地新建 / 编辑 / 删除，正文原样保存；独立笔记可直接引用正文进对话。
+- **期刊指标**：读 `extra` 与标签里的 IF、JCR / 中科院分区、知网 CIF / AIF、核心收录与被引；配 easyScholar 密钥可补查，另给 WoS MJL / LetPub / Scimago 入口。
+- **参考文献**：右键按 APA 7 或 GB/T 7714-2025 批量复制，单次最多 50 条。
+- **综述对比**：多选右键进入，逐篇选全文 / 章节 / 字符区间 / 仅书目，预览用量后一次进草稿。
+- **带进对话**：条目、多选、标签、整目录、摘录、标注、笔记、翻译、全文片段都写成胶囊；发送时才展开，历史可回溯原文。
+- **截图**：框选 PDF / 网页正文，图片 + 出处说明（文献、页码、章节、区域文字）同条发出。
+- **让 AI 整理**：新建 / 重命名 / 移动 / 删除分类，批量归类，导入本地论文，回挂译文；群组文库只读，写操作到 Zotero 里做。
+- **安全可控**：默认纯只读；开启写权限并授权后才能改库，标注 / 笔记走本地 API，其余写操作优先走集成 MCP，模型工具可逐个开关。
 
-面板布局与 Zotero 本体一致：顶部状态栏显示连接状态、提供刷新与跳回 Zotero 的入口，左侧分类树与可拖高、可折叠的标签面板，右侧条目列表（附件数统一显示在副标题最右，读过的条目图标与标题淡化）。分隔条宽度、选中分类与展开状态按本机记住；列表带「最近阅读」入口，单击选中、`Ctrl` / `Cmd` 多选、双击开详情标签页，边读边摘、边问边改。
+面板布局与 Zotero 本体一致：顶部状态栏显示连接状态、提供刷新与跳回 Zotero 的入口，左侧分类树（「我的文库」+「群组文库」「已保存搜索」两个固定区块）与可拖高、可折叠的标签面板，右侧条目列表（附件数统一显示在副标题最右，读过的条目图标与标题淡化）。条目动作收进右键菜单（加入对话 / 复制参考文献 / 多选综述对比），列表头不再堆按钮。分隔条宽度、选中范围与展开状态按本机记住（含当前文库与已保存搜索，刷新后回到原位）；列表带「最近阅读」入口，单击选中、`Ctrl` / `Cmd` 多选、双击开详情标签页，边读边摘、边问边改。
 
 > 面向使用者的完整说明（入口、交互、toast 与错误对照表）见 [插件使用说明](docs/插件使用说明/dsh-plugin-zotero使用说明.zh.md)。
 
@@ -94,7 +103,7 @@ Zotero → **设置** → **高级** → 勾选「**允许此计算机上的其�
 
 ### 第 4 步：回到 DSH 确认已经连上
 
-打开 DSH 的「**设置**」，点左侧列表里的「**Zotero文献库**」。这一页就是本插件的全部设置，从上到下四块：**Zotero 写权限**、**API 设置**、**MCP 设置**（含下方的 MCP 工具清单）、**划词翻译**。
+打开 DSH 的「**设置**」，点左侧列表里的「**Zotero文献库**」。这一页就是本插件的全部设置，从上到下五块：**Zotero 写权限**、**API 设置**、**MCP 设置**（含下方的 MCP 工具清单）、**划词翻译**、**期刊指标**。
 
 - 正常情况**一个字都不用改**，默认值就是对的。每一项的含义见[设置项说明](#设置项说明设置--zotero文献库)。
 - 回到会话，打开右侧栏的「Zotero 文献库」：顶部状态栏显示连接状态，左边应该已经列出你在 Zotero 里的分类。看到分类树就说明整条链路通了。
@@ -179,6 +188,19 @@ Zotero → **设置** → **高级** → 勾选「**允许此计算机上的其�
 - **隐私**：选中的文字会发给所选服务（Bing 即微软的翻译接口，DeepSeek 走你的账号模型）。涉密材料不要用划词翻译。
 - <sub>对应配置字段名：`translateProvider`、`translateTarget`。</sub>
 
+### 期刊指标
+
+最后一块只放一个「**easyScholar 密钥**」输入框（默认遮文，点右侧眼睛才看明文）。它决定「文献信息 → 期刊指标」能不能在库里没有数据时就地补查。
+
+| 界面上的名字 | 默认值 | 说人话 | 什么时候才需要改 |
+|---|---|---|---|
+| **easyScholar 密钥** | 空 | easyScholar 开放接口的 SecretKey，填了才能联网查询期刊等级 | 想在读文献时直接看到影响因子 / 分区 / 核心收录；到 easyScholar 注册后从「用户信息 → 开放接口」复制 |
+
+- **不填也能用**：期刊指标先读条目自己的 `extra` 与标签（Zotero Citation Counts Manager、Green Frog、知网等导入的数据都在这里），读不到就不显示，也不发任何网络请求。
+- **填了之后**：条目里缺指标时，打开文献信息会自动查一次 easyScholar；同一刊名 24 小时内走缓存，结果只显示、不写回 Zotero。
+- **数据口径**：远程结果属第三方转抄、未经官方核验，仅供参考。投稿前建议用 WoS MJL 核验是否仍被 SCIE / SSCI 收录，LetPub 看审稿周期，Scimago 看 SJR / CiteScore。
+- <sub>对应配置字段名：`easyScholarKey`。</sub>
+
 ## 常见问题
 
 | 你看到的 | 大概率原因 | 怎么办 |
@@ -191,6 +213,10 @@ Zotero → **设置** → **高级** → 勾选「**允许此计算机上的其�
 | 授权按钮灰着点不动 | 上面的开关还没打开，或改动还没自动保存 | 先打开「允许写入 Zotero」，等「正在自动保存…」消失 |
 | 让 AI 新建分类，报「写操作已禁用」 | Zotero 里那个 MCP 小插件没开写操作 | 到 Zotero 的 MCP 插件设置里勾选「允许写操作」，重试即可，不用重启 DSH |
 | 提示「Zotero 里这条已经变了」 | 你（或 AI）在 Zotero 里同时改了同一条 | 刷新后重试；插件宁可报错也不覆盖你的新改动 |
+| 群组文库里的分类、条目改不了 | 群组按只读浏览，面板不提供群组写入口，也不给「整目录引用」 | 到 Zotero 里由有权限的成员操作；阅读、摘录、引用单条不受影响 |
+| 「期刊指标」整块不显示，或提示未配置密钥 | 条目 `extra` 与标签里没有指标，且没填 easyScholar 密钥 | 在「设置 → Zotero文献库 → 期刊指标」填密钥；或点卡片里的外部入口自己核验 |
+| 右键菜单里没有「复制参考文献」 | 选中的是笔记 / 附件等非书目条目，或所选超过 50 项 | 复制参考文献只对书目条目生效、一次最多 50 项；综述对比需要多选 |
+| 已保存搜索里是空的 | Zotero 里这个搜索条件当前没有命中，或搜索保存在别的文库 | 回 Zotero 左栏确认搜索结果；群组文库的搜索需要在对应群组里保存 |
 | 草稿里的引用胶囊发送失败，说找不到来源 | 插件被禁用或卸载了，胶囊没人展开 | 重新启用插件，或把胶囊删掉再发 |
 | 改了设置好像没生效 | 自动保存失败（顶部有红字） | 按红字提示再改一次任意字段触发重试；仍失败就看是不是被更高优先级配置覆盖 |
 | 译文浮层提示「翻译服务还没启动：请重启一次 DSH」 | 升级后宿主 `lib/` 还是旧进程，路由表里没有翻译端点 | 完全退出并重开 DSH（**刷新页面没用**）；重启前面板其余功能不受影响 |
@@ -211,7 +237,7 @@ Zotero → **设置** → **高级** → 勾选「**允许此计算机上的其�
 
 | 半边 | 能力 | 通道 |
 |---|---|---|
-| **人侧面板** | 在 DSH 右侧栏浏览 Zotero 文库（分类树 / 标签面板 / 条目列表 / 搜索 / 条目详情 / 笔记 / 标注 / PDF 阅读），把条目（含多选批量）、摘录、标注、笔记、标签或整目录引用写进会话草稿；开启写权限后还能就地新建 / 修改 / 删除高亮、划线与笔记 | 插件在宿主 web server 自注册的 `/dsh-zotero/api/*` 路由（写 action 另需自定义写头） |
+| **人侧面板** | 在 DSH 右侧栏浏览 Zotero 个人文库 / 群组文库 / 已保存搜索（分类树 / 标签面板 / 条目列表 / 三档搜索 / 条目详情 / 期刊指标 / 笔记 / 标注 / PDF 阅读），把条目（含多选批量）、参考文献、摘录、标注、笔记、标签、整目录或综述对比写进会话草稿；开启写权限后还能就地新建 / 修改 / 删除高亮、划线与笔记 | 插件在宿主 web server 自注册的 `/dsh-zotero/api/*` 路由（写 action 另需自定义写头） |
 | **模型侧** | 检索、精读、按需操作文库；条目 / 分类 / 标签 / 标识符的写走集成 MCP，标注与笔记的写走插件自带的 `zotero_*` 工具 | 插件**自持**连接本机 Zotero 集成 MCP，工具以 `mcp__zotero__*` 注册给模型 |
 
 MCP 没起，面板照常可用；Zotero 没开，模型工具自然也不可用。
@@ -230,8 +256,9 @@ MCP 没起，面板照常可用；Zotero 没开，模型工具自然也不可用
 模型侧  启动 / 设置页打开 ──sync──▶ 集成 MCP（127.0.0.1:23120）──注册──▶ dsh 工具表（mcp__zotero__*）
 ```
 
-- Host 路由为 `GET /dsh-zotero/api/<action>`，action 有 `health` / `tree` / `items` / `tags` / `item` / `collection-bib` / `mcp-tools`。`items` 支持 `tag`（重复出现为 AND，`A || B` 为 OR）与 `q` 组合过滤。
-- Host 侧带信任栅栏：仅接受 GET，拒绝 `sec-fetch-site: cross-site`，且 `Host` 必须是回环地址（防 DNS rebinding）。
+- Host 路由为 `GET /dsh-zotero/api/<action>`（写 action 走 `POST`），读侧主要 action 有 `health` / `tree` / `groups` / `items` / `tags` / `tag-usage` / `item` / `bibliography` / `fulltext` / `file` / `attachment-info` / `journal-rank` / `mcp-tools`。`items` 支持 `library`（`group:<id>` 切群组文库）、`searchKey`（已保存搜索）、`q` / `qmode`（三档搜索口径）与 `tag`（重复出现为 AND，`A || B` 为 OR）组合过滤。
+- 请求级文库上下文用 `AsyncLocalStorage` 承载：路由解析一次 `library` 参数，后续 Zotero 读取自动落到 `/api/users/0` 或 `/api/groups/<id>`；群组分类树在展开时才拉取，详情 / PDF / 笔记 / 快照按条目所属文库取数。
+- Host 侧带信任栅栏：读请求仅接受 `GET`，拒绝 `sec-fetch-site: cross-site`，且 `Host` 必须是回环地址（防 DNS rebinding）。
 - 响应统一信封 `{ok:true,data}` / `{ok:false,error:{code,message}}`，错误码见 [src/zotero/types.ts](src/zotero/types.ts)。
 - 条目详情里的笔记由 Host 侧从 `itemType: "note"` 子条目提取并清洗 HTML（剥离脚本、事件属性与冗余 `data-*`，图片限宽），Client 只负责折叠展示。
 - 面板正文会被每个会话各挂一份，因此分类树 / 条目列表 / 标签选中 / 搜索词等状态放在 [src/client/paneStore.ts](src/client/paneStore.ts) 的模块级单例里，各会话看到的是同一块面板；右侧栏的展开状态与 tab 则**按会话**持久。条目详情的取数状态在各自 tab 组件内，互不干扰。
@@ -243,38 +270,49 @@ MCP 没起，面板照常可用；Zotero 没开，模型工具自然也不可用
 src/                      # 插件源码（主包，ESM / NodeNext / strict）
 ├── index.ts              # Host 半入口：Config schema、HTTP 路由、MCP 桥接与写工具注册
 ├── host/
-│   ├── router.ts         # HTTP 路由 /dsh-zotero/api/<action>，含回环 + 写头栅栏
+│   ├── router.ts         # HTTP 路由 /dsh-zotero/api/<action>，含回环 + 写头栅栏 + 文库上下文
 │   ├── mcp-bridge.ts     # 自持集成 MCP 连接 + 按开关过滤注册模型工具
 │   ├── write-tools.ts    # 模型侧标注 / 笔记写工具（writeEnabled 关时不注册）
+│   ├── easyscholar.ts    # easyScholar 期刊等级查询 + 24 小时缓存
+│   ├── snapshot.ts       # 网页快照注入与 CSP
 │   └── static.ts         # pdf.js 资源
 ├── zotero/
 │   ├── client.ts         # Zotero 本地 API 读取 + 笔记提取清洗 + 集成 MCP JSON-RPC
 │   ├── write.ts          # 本地 API 写通道：授权复用、版本前置条件
 │   ├── key-store.ts      # 写权限凭证落盘（0600）+ 从 Zotero 密钥库导入「始终允许」
 │   ├── annotation-writes.ts / notes.ts   # 标注与笔记的增改删语义校验
+│   ├── bibliography.ts   # APA 7 / GB/T 7714-2025 参考文献导出
+│   ├── review-evidence.ts # 综述证据索引的落盘与清理
 │   ├── palette.ts        # 从真实库里枚举出的 Zotero 标注色板
-│   ├── config.ts         # 端点 / 超时 / 截断阈值 + 运行时设置读取器
+│   ├── config.ts         # 端点 / 超时 / 截断阈值 + 文库上下文 + 运行时设置读取器
 │   └── types.ts          # Host ↔ Client 数据契约
 └── client/               # Client 半（浏览器）
     ├── index.ts          # 注册右侧栏 tab（面板 + 条目详情）、面板正文与「设置」独立页
-    ├── ZoteroCard.tsx    # 设置页正文（写权限 / API 设置 / MCP 设置 / 工具开关，防抖自动保存）
+    ├── ZoteroCard.tsx    # 设置页正文（写权限 / API / MCP / 翻译 / 期刊指标，防抖自动保存）
     ├── ZoteroPane.tsx    # 面板容器：状态栏 + 分类树 / 标签面板 + 条目列表
-    ├── CollectionTree.tsx / TagPanel.tsx / ItemList.tsx
+    ├── CollectionTree.tsx  # 我的文库 / 群组文库 / 已保存搜索三段式分类树
+    ├── TagPanel.tsx / ItemList.tsx / itemContextMenu.ts  # 标签面板、条目列表与右键菜单
+    ├── library.ts        # 当前文库与条目所属文库
     ├── SearchField.tsx   # 目录筛选 / 条目搜索 / 标签筛选共用的紧凑搜索框
     ├── itemType.tsx / readState.tsx       # 文献类型图标与已读标记
     ├── ZoteroItemPane.tsx  # 条目详情 tab 的正文与标题
     ├── ItemDetail.tsx    # 文档优先详情：选附件 / 跨附件定位 / 打开 Zotero
-    ├── InfoPanel.tsx     # 左上角悬浮信息面板（可分块折叠）
+    ├── InfoPanel.tsx     # 左上角悬浮信息面板（文献信息 / 期刊指标 / 标注 / 笔记 / 附件 / 参考文献）
+    ├── journalMetrics.ts / journalLinks.ts  # 从 extra / 标签读指标、外部核验入口
+    ├── ReviewDialog.tsx  # 多篇文献综述对比：逐篇选范围、预览与用量估算
+    ├── fulltextScope.tsx / fulltextPlan.ts / fulltextRange.ts  # 全文按章节 / 字符区间截取
     ├── OutlinePanel.tsx  # 左上角目录浮层，随页面高亮当前章节
     ├── NoteEditor.tsx    # 笔记阅读 / 编辑共用的 contenteditable 编辑器
     ├── viewer/           # 渲染器注册表 + pdf.js 官方 Viewer / 文本回退 / 标注叠加与几何换算
     ├── viewer/shot/      # 截图加入对话：状态机 / 定格遮罩 / 裁切水印 / PDF、DOM、iframe 三种采集适配器
     ├── AnnotationList.tsx / NoteList.tsx    # 标注与笔记列表
+    ├── bibliography.ts   # 参考文献样式下拉与剪贴板格式化
     ├── Toast.tsx         # 插入结果等轻提示
     ├── reference.ts / cite.ts  # 引用胶囊的 ref 编码与提交时的文本展开
+    ├── evidence.ts / reviewEvidence.ts  # 原文证据链接的编解码与回溯
     ├── useInsertion.ts / inline.ts        # 往会话草稿插入引用胶囊
     ├── styles.ts         # 强调色等共用样式常量
-    ├── paneStore.ts      # 跨会话共享的面板状态
+    ├── paneStore.ts      # 跨会话共享的面板状态（含群组树与搜索选中）
     ├── compose.ts        # 插入文本模板
     ├── api.ts            # 调 Host 端点
     └── locales.ts        # zh / en 文案
@@ -338,7 +376,7 @@ dsh --profile demo                 # 启动
 - 入口是「设置」对话框的 `settings.section` 席位（section id `zotero`，`order: 30`），仅当 Host 服务本插件的 settings 命名空间时才注册。命名空间 id `dsh-plugin-zotero` 必须与 [cordis.patch.yml](cordis.patch.yml) 的 insert 行 id 同步。
 - **表单没有保存按钮**：最后一次改动后防抖 600ms 落盘；离开页面时合法草稿立刻冲盘、非法草稿直接丢弃；写盘失败**不自动重试**（否则每 600ms 打一次后端），等用户下一次编辑。
 - 落盘目标是 profile 的 patch 层 `~/.dsh/profiles/<profile>/cordis.patch.yml`。所有字段走 Schemastery `.volatile()`，只提交新值并唤醒引用，**无需重启**即时生效。「已覆盖」表示该值来自 patch 层而非默认值，「恢复默认」清掉覆盖；若被更高优先级的 patch 层覆盖，保存会报「被覆盖」错误。
-- 表单露出六个字段（`zoteroBaseUrl`、`requestTimeoutMs`、`fulltextMaxBytes`、`defaultLimit`、`mcpUrl`、`mcpProbeTimeoutMs`），另有两个不以文本框露出的字段：`writeEnabled`（写权限总开关）、`disabledMcpTools`（被停用的 MCP 工具**原始名**，由「MCP 工具」区开关维护，模型侧据此过滤注册）。实现见 [src/index.ts](src/index.ts)、[src/zotero/config.ts](src/zotero/config.ts)、[src/client/ZoteroCard.tsx](src/client/ZoteroCard.tsx)。
+- 表单露出九个字段（`zoteroBaseUrl`、`requestTimeoutMs`、`fulltextMaxBytes`、`defaultLimit`、`mcpUrl`、`mcpProbeTimeoutMs`、`translateProvider`、`translateTarget`、`easyScholarKey`），另有两个不以输入框露出的字段：`writeEnabled`（写权限总开关）、`disabledMcpTools`（被停用的 MCP 工具**原始名**，由「MCP 工具」区开关维护，模型侧据此过滤注册）。实现见 [src/index.ts](src/index.ts)、[src/zotero/config.ts](src/zotero/config.ts)、[src/client/ZoteroCard.tsx](src/client/ZoteroCard.tsx)。
 
 ### 模型侧 MCP 与权限边界
 
