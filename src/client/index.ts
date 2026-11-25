@@ -297,6 +297,7 @@ export function apply(ctx: ClientContext): void {
       sessionId: props.sessionId,
       // 只透传「取数函数」，不在 apply 闭包里缓存服务实例（服务此时尚未 ACTIVE）。
       conversation: () => ctx.get?.('conversation'),
+      onOpenItem: openItem,
     })
 
   /**

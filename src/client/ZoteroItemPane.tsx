@@ -46,6 +46,8 @@ interface Props {
   sessionId?: string
   /** 惰性取宿主 conversation 服务（图片附件通道）；缺失时截图按钮仍可点但插入会提示。 */
   conversation?: () => unknown
+  /** 打开另一条条目的 tab（信息浮层里的「相关」）；缺失时相关行只展示。 */
+  onOpenItem?(key: string, title?: string): void
 }
 
 /**
@@ -77,7 +79,7 @@ function errorMessage(error: unknown): string {
 const hintStyle: React.CSSProperties = { padding: '14px 12px', opacity: 0.6, fontSize: 12.5 }
 
 export function ZoteroItemPane(props: Props): ReactElement {
-  const { t, useTabInfo, inputActions, sessions, sessionId, conversation } = props
+  const { t, useTabInfo, inputActions, sessions, sessionId, conversation, onOpenItem } = props
   const info = useTabInfo()
   const itemKey = parseItemKey(info)
   const signal = info.tab.signal
@@ -181,6 +183,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
           onInsertShot={(png, meta) => insertShot(png, meta)}
           onChanged={() => void refresh()}
           onRefresh={() => refresh('manual')}
+          onOpenItem={onOpenItem}
         />
       )}
       <Toast />

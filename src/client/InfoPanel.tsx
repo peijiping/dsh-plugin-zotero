@@ -1,5 +1,5 @@
 /**
- * 左上角的悬浮信息菜单：文献信息 / 摘要 / 标注 / 笔记 / 附件 / 参考文献。
+ * 左上角的悬浮信息菜单：文献信息 / 摘要 / 标注 / 笔记 / 附件 / 标签 / 相关 / 参考文献。
  *
  * 文档占满整版面，元数据类内容收进这个按钮背后的浮层，每块都可折叠。
  * 「加入对话」是这一行里的独立按钮（`i` 右侧），不放浮层里：它是每次读文献都要点的
@@ -78,6 +78,8 @@ interface Props {
   /** 确认插入全文（range 表达式 + 人读范围标注由选择器产出）。 */
   onInsertFulltext(source: AttachmentCitation, scope: string): void
   onSelectAttachment(key: string): void
+  /** 打开「相关」里另一条条目的 tab；缺失时相关行只展示、不可点。 */
+  onOpenItem?(key: string, title: string): void
   onLocateAnnotation(annotation: ZoteroAnnotation): void
   onInsertAnnotation(annotation: ZoteroAnnotation): void
   onInsertNote(note: ZoteroNote): void
@@ -270,6 +272,7 @@ export function InfoPanel({
   outline,
   onInsertFulltext,
   onSelectAttachment,
+  onOpenItem,
   onLocateAnnotation,
   onInsertAnnotation,
   onInsertNote,
@@ -574,7 +577,8 @@ export function InfoPanel({
   if (detail.collectionNames.length > 0) {
     metaRows.push({ label: t('detail.collections'), value: detail.collectionNames.join(' / ') })
   }
-  if (detail.tags.length > 0) metaRows.push({ label: t('detail.tags'), value: detail.tags.join('、') })
+  // 标签与相关各自成块（与 Zotero 信息栏一致），不再挤进元数据行。
+  const related = detail.related ?? []
 
   const selfNote = detail.itemType === 'note'
   const notes = detail.notes
@@ -776,6 +780,44 @@ export function InfoPanel({
                     </button>
                   )
                 })}
+              </Block>
+            )}
+
+            {detail.tags.length > 0 && (
+              <Block
+                t={t}
+                label={t('detail.tags')}
+                hint={String(detail.tags.length)}
+                open={sections.tags}
+                onToggle={() => toggle('tags')}
+              >
+                <div style={tagRowStyle}>
+                  {detail.tags.map((tag) => <span key={tag} style={tagChipStyle}>{tag}</span>)}
+                </div>
+              </Block>
+            )}
+
+            {related.length > 0 && (
+              <Block
+                t={t}
+                label={t('detail.related')}
+                hint={String(related.length)}
+                open={sections.related}
+                onToggle={() => toggle('related')}
+              >
+                {related.map((entry) => (
+                  <button
+                    key={entry.key}
+                    type="button"
+                    disabled={onOpenItem === undefined}
+                    onClick={() => onOpenItem?.(entry.key, entry.title)}
+                    title={onOpenItem === undefined ? undefined : t('detail.relatedOpen')}
+                    style={{ ...relatedRowStyle, cursor: onOpenItem === undefined ? 'default' : 'pointer' }}
+                  >
+                    <span style={{ flex: 1, textAlign: 'left', wordBreak: 'break-word' }}>{entry.title}</span>
+                    <span style={attachmentMetaStyle}>{itemTypeLabel(t, entry.itemType)}</span>
+                  </button>
+                ))}
               </Block>
             )}
 
@@ -1280,6 +1322,38 @@ const attachmentMetaStyle = {
   flexShrink: 0,
   fontSize: 10.5,
   opacity: 0.55,
+} as const
+
+/** 标签块：横向胶囊，浮层拖窄时折行（与期刊指标卡同一套形态）。 */
+const tagRowStyle = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 4,
+  padding: '2px 0',
+} as const
+
+const tagChipStyle = {
+  padding: '1px 7px',
+  border: '1px solid rgba(127,127,127,0.3)',
+  borderRadius: 5,
+  fontSize: 12,
+  lineHeight: 1.5,
+  wordBreak: 'break-word',
+} as const
+
+/** 相关条目：一行一条，点开就是那条的详情 tab。 */
+const relatedRowStyle = {
+  display: 'flex',
+  gap: 6,
+  alignItems: 'baseline',
+  width: '100%',
+  padding: '4px 0',
+  fontSize: 12,
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px solid rgba(127,127,127,0.14)',
+  color: 'inherit',
+  textAlign: 'left',
 } as const
 
 /**

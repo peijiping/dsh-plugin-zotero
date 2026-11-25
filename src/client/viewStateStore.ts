@@ -28,6 +28,8 @@ export type InfoSectionId =
   | 'annotations'
   | 'notes'
   | 'attachments'
+  | 'tags'
+  | 'related'
   | 'bib'
 
 export type InfoSections = Record<InfoSectionId, boolean>
@@ -39,6 +41,8 @@ const DEFAULTS: InfoSections = {
   annotations: true,
   notes: false,
   attachments: true,
+  tags: true,
+  related: true,
   bib: false,
 }
 

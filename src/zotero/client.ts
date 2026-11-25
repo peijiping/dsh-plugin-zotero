@@ -50,6 +50,7 @@ import type {
   ZoteroNote,
   ZoteroNoteRaw,
   ZoteroReadPosition,
+  ZoteroRelatedItem,
   ZoteroSavedSearch,
   ZoteroSearchMode,
   ZoteroTag,
@@ -131,6 +132,8 @@ interface RawItemData {
   parentItem?: string | false
   /** 附件最后阅读时间（Unix 秒）；本地 API 在附件 JSON 里直接给出。 */
   lastRead?: number
+  /** 关联关系：谓词 → 条目 URI（`dc:relation` 即信息栏的「相关」）。 */
+  relations?: Record<string, string[] | string>
   annotationType?: string
   annotationText?: string
   annotationComment?: string
@@ -296,6 +299,62 @@ function itemFieldMap(data: RawItemData): Record<string, string> {
 
 function attachmentTitle(raw: RawItem): string {
   return raw.data?.title || raw.data?.filename || '(无标题附件)'
+}
+
+/** 单次解析的相关条目上限：本地 API 一次 `itemKey` 查询最多 50 个 key。 */
+const RELATED_MAX = 20
+
+/** 条目 URI 尾部的 key（`http://zotero.org/users/1/items/ABCD2345`）。 */
+const ITEM_URI_KEY = /\/items\/([A-Z0-9]{8})(?:$|[/?#])/u
+
+/**
+ * `data.relations` 里 `dc:relation` 指向的条目 key。
+ *
+ * 只认这一个谓词：`owl:sameAs` 之类是别的语义（同一文献在别库的副本），
+ * 混进来会让「相关」冒出用户没建过的条目。
+ */
+function relatedItemKeys(relations: RawItemData['relations']): string[] {
+  const uris = relations?.['dc:relation']
+  const list = typeof uris === 'string' ? [uris] : Array.isArray(uris) ? uris : []
+  const keys = new Set<string>()
+  for (const uri of list) {
+    if (typeof uri !== 'string') continue
+    const match = ITEM_URI_KEY.exec(uri)
+    if (match !== null) keys.add(match[1])
+  }
+  return [...keys].slice(0, RELATED_MAX)
+}
+
+/**
+ * 相关条目：只取标题与类型，够面板列一行。
+ *
+ * `/items?itemKey=` 会把命中条目的子条目（附件 / 标注 / 笔记）一并带出来，
+ * 所以必须按 key 回查、只保留请求的那几条。查不到的（别库条目 / 已删除）
+ * 静默跳过：相关只是附加信息，不能因为它拖垮整份详情。
+ */
+async function getRelatedItems(relations: RawItemData['relations'], selfKey: string): Promise<ZoteroRelatedItem[]> {
+  const keys = relatedItemKeys(relations).filter((key) => key !== selfKey)
+  if (keys.length === 0) return []
+  try {
+    const { body } = await requestJson<RawItem[]>(
+      `${libraryBase()}/items?itemKey=${keys.join(',')}&includeTrashed=1&limit=100`,
+    )
+    const found = new Map((Array.isArray(body) ? body : []).map((raw) => [raw.key, raw] as const))
+    const out: ZoteroRelatedItem[] = []
+    for (const key of keys) {
+      const raw = found.get(key)
+      if (raw === undefined) continue
+      const itemType = raw.data?.itemType ?? ''
+      out.push({
+        key,
+        title: raw.data?.title || (itemType === 'note' ? noteTitle(raw.data?.note ?? '') : attachmentTitle(raw)),
+        itemType,
+      })
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 function toAttachment(raw: RawItem): ZoteroAttachment {
@@ -1800,10 +1859,11 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
   const isAttachment = itemType === 'attachment'
 
   // 顶层条目可能是附件本身（直接导入的 PDF），此时把自己也算作附件。
-  const [children, rawAnnotations, collections] = await Promise.all([
+  const [children, rawAnnotations, collections, related] = await Promise.all([
     isAttachment ? Promise.resolve<RawItem[]>([]) : getItemChildren(key),
     itemType === 'note' ? Promise.resolve<RawAnnotation[]>([]) : getItemAnnotations(key),
     cachedCollections().catch(() => [] as ZoteroCollection[]),
+    getRelatedItems(data.relations, raw.key),
   ])
   const childAttachments = children.filter((c) => c.data?.itemType === 'attachment')
   const attachments =
@@ -1865,6 +1925,7 @@ export async function getItemDetail(key: string, style: string): Promise<ZoteroI
     abstract: data.abstractNote ?? '',
     fields: itemFieldMap(data),
     tags: (data.tags ?? []).map((tag) => tag.tag ?? '').filter((tag) => tag !== ''),
+    related,
     collections: data.collections ?? [],
     collectionNames: collectionPaths(collections, data.collections ?? []),
     attachments,

@@ -56,6 +56,8 @@ interface Props {
   onInsertNote(note: ZoteroNote): void
   /** 面板里写成功后重取详情（静默，不打断当前阅读位置）。 */
   onChanged(): void
+  /** 打开「相关」里另一条条目的 tab；缺失时相关条目只展示标题。 */
+  onOpenItem?(key: string, title: string): void
   /** 阅读器工具条上的页面级刷新：重取整份详情，返回 Promise 供按钮显示进行中。 */
   onRefresh(): Promise<void>
   /** 截图插入（图片附件 + `shot:` chip）；缺失时截图按钮仍可点，插入给出明确提示。 */
@@ -118,7 +120,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   return source
 }
 
-export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onRefresh, onInsertShot }: Props): ReactElement {
+export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onOpenItem, onRefresh, onInsertShot }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
@@ -528,6 +530,7 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
         outline={outlineItems}
         onInsertFulltext={onInsertFulltext}
         onSelectAttachment={selectAttachment}
+        onOpenItem={onOpenItem}
         onLocateAnnotation={locateAnnotation}
         onInsertAnnotation={onInsertAnnotation}
         onInsertNote={onInsertNote}

@@ -102,6 +102,19 @@ export interface ZoteroAttachment {
   size: number
 }
 
+/**
+ * 「相关」区里的一条：Zotero `data.relations` 的 `dc:relation` 指向的条目。
+ *
+ * 只给识别信息 —— 面板里是一行标题，点开才取那条的整份详情，不需要在这里
+ * 把元数据一起搬过来。
+ */
+export interface ZoteroRelatedItem {
+  key: string
+  /** 标题；笔记与无标题附件由 Host 从正文 / 文件名兜底。 */
+  title: string
+  itemType: string
+}
+
 /** Host 侧解析出的附件文件（路径只来自 Zotero 条目 JSON）。 */
 export interface ZoteroAttachmentFile {
   key: string
@@ -345,6 +358,13 @@ export interface ZoteroItemDetail {
    */
   fields?: Record<string, string>
   tags: string[]
+  /**
+   * 「相关」条目（`data.relations` 的 `dc:relation`），按 Zotero 信息栏的次序。
+   *
+   * 可选：只重建 client 没重启 Host 时这份数据还不存在，读取方一律 `?? []`。
+   * 只在当前文库能解析到的条目才在列表里（别库 / 已删除的关联静默跳过）。
+   */
+  related?: ZoteroRelatedItem[]
   /** 所属分类 key 列表。 */
   collections: string[]
   /** 所属分类的完整路径（如「博士论文 / 方法」），由 Host 解析好。 */
@@ -518,7 +538,7 @@ export interface ZoteroItemBoxes {
  * 本插件的「视图状态」。
  *
  * 和 `read-positions.json` 时代一样，全部本地留存、与 Zotero 无关：`sections` 是
- * 信息浮层六块的开合（全局一份），`boxes` 是每个条目上浮层被拖到哪、拉多大。
+ * 信息浮层各区块的开合（全局一份），`boxes` 是每个条目上浮层被拖到哪、拉多大。
  */
 export interface ZoteroViewState {
   sections: Record<string, boolean>
