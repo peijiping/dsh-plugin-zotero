@@ -12,10 +12,13 @@
 import { useState, type ReactElement } from 'react'
 
 import { ANNOTATION_COLORS } from '../../zotero/palette'
+import { ChatIcon, CopyIcon, TranslateIcon } from '../actionIcons'
 import { writeClipboard } from '../clipboard'
 import { showToast } from '../paneStore'
 import { type Translate } from '../locales'
 import {
+  NEUTRAL_BUTTON_CLASS,
+  NEUTRAL_BUTTON_STYLE,
   SOFT_BUTTON_ACTIVE_STYLE,
   SOFT_BUTTON_CLASS,
   SOFT_BUTTON_STYLE,
@@ -135,21 +138,23 @@ export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate, tra
         </div>
       )}
       <div style={groupStyle}>
-        <button type="button" className={SOFT_BUTTON_CLASS} onClick={copy} style={buttonStyle}>
+        <button type="button" className={NEUTRAL_BUTTON_CLASS} onClick={copy} style={toolButtonStyle}>
+          <CopyIcon />
           {t('action.copy')}
         </button>
         {translate !== undefined && (
           <button
             type="button"
-            className={SOFT_BUTTON_CLASS}
+            className={NEUTRAL_BUTTON_CLASS}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               translate.onTranslate(text, x, y)
               // 浮条与译文框都贴着选区，留着会互相压住：点完就收。
               finish()
             }}
-            style={buttonStyle}
+            style={toolButtonStyle}
           >
+            <TranslateIcon />
             {t('action.translate')}
           </button>
         )}
@@ -161,8 +166,9 @@ export function SelectionBar({ t, text, x, y, onInsert, onDismiss, annotate, tra
             onInsert(text)
             finish()
           }}
-          style={buttonStyle}
+          style={iconButtonStyle}
         >
+          <ChatIcon size={12} />
           {t('action.insertItemShort')}
         </button>
       </div>
@@ -178,15 +184,19 @@ const barStyle = {
   alignItems: 'center',
   gap: 3,
   zIndex: 8,
+  // 宽度只按内容撑：绝对定位的 shrink-to-fit 会被「left 到容器右缘」的剩余宽度压低，
+  // 靠近右边缘时按钮就被挤成两行（评论单独掉下去）。max-content 把这层约束摘掉。
+  width: 'max-content',
 } as const
 
 const groupStyle = {
   display: 'flex',
-  flexWrap: 'wrap',
+  flexWrap: 'nowrap',
   alignItems: 'center',
   justifyContent: 'center',
   gap: 3,
   overflow: 'hidden',
+  width: 'max-content',
   borderRadius: 6,
   border: '1px solid rgba(127,127,127,0.35)',
   background: 'Canvas',
@@ -205,6 +215,23 @@ const buttonStyle = {
   font: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+} as const
+
+/** 带图标的动作按钮（加入对话）：图标与文字基线对齐。 */
+const iconButtonStyle = {
+  ...buttonStyle,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+} as const
+
+/** 复制 / 翻译：中性灰底，与上面蓝色的标注按钮区分开。 */
+const toolButtonStyle = {
+  ...buttonStyle,
+  ...NEUTRAL_BUTTON_STYLE,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
 } as const
 
 const chipStyle = {

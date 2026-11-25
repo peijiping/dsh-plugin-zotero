@@ -22,6 +22,7 @@ import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS, type BibliographyStyle } from '../zotero/bibliography'
 import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary, ZoteroSearchMode } from '../zotero/types'
 import { fetchBibliography } from './api'
+import { CHAT_ICON_PATH } from './actionIcons'
 import { bibliographySkipReason, bibliographyStyles, formatBibliography } from './bibliography'
 import { writeClipboard } from './clipboard'
 import { useDismiss } from './dismiss'
@@ -402,7 +403,7 @@ const chipRemoveStyle: React.CSSProperties = {
 }
 
 const ITEM_MENU_ICON_PATHS: Record<ItemMenuIconName, string> = {
-  chat: 'M18 11h-7l-4 3v-3H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2Z',
+  chat: CHAT_ICON_PATH,
   copy: 'M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM3 16V5a2 2 0 0 1 2-2h10',
   // 左右两份文档并排：与「合并成一篇」的图标区分开，用于「综述对比」。
   review: 'M4 4h7v16H4zM13 4h7v16h-7zM6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2',

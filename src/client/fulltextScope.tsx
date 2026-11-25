@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import type { ZoteroItemDetail } from '../zotero/types'
+import { ChatIcon } from './actionIcons'
 import type { DocumentOutlineItem, OutlineTarget } from './viewer/types'
 import { parseMarkdownHeadings } from './viewer/outline'
 import { useDismiss } from './dismiss'
@@ -331,6 +332,8 @@ export function FulltextScope({
             ...(!canConfirm ? { opacity: 0.45, cursor: 'not-allowed' as const } : {}),
           }}
         >
+          {/* 只有落地为「加入对话」时才配聊天气泡；「插入整篇 / 确认估算范围」是另一层语义。 */}
+          {!(estimated || (fallbackAll && activeMode !== 'chapter')) && <ChatIcon size={12} />}
           {fallbackAll && activeMode !== 'chapter' ? t('fulltext.confirmAll') : t(estimated ? 'fulltext.confirmEstimate' : 'fulltext.confirm')}
         </button>
       </div>
@@ -420,4 +423,5 @@ const tokenStyle = { fontSize: 10.5, opacity: 0.5, fontVariantNumeric: 'tabular-
 const confirmStyle = {
   height: 26, padding: '0 12px', fontSize: 11.5, lineHeight: 1,
   borderRadius: 13, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 4,
 } as const

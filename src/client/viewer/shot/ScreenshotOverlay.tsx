@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactElement } from 'react'
 
 import type { Translate } from '../../locales'
+import { ChatIcon } from '../../actionIcons'
 import { SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from '../../styles'
 import type { ClientRect } from './types'
 import { MIN_SELECTION_SIZE } from './types'
@@ -156,11 +157,12 @@ export function ScreenshotOverlay({
           <button
             type="button"
             className={SOFT_BUTTON_CLASS}
-            style={{ ...buttonStyle, ...SOFT_BUTTON_STYLE }}
+            style={{ ...buttonStyle, ...SOFT_BUTTON_STYLE, ...iconButtonStyle }}
             onMouseDown={(event) => event.preventDefault()}
             onClick={onConfirm}
             disabled={busy}
           >
+            <ChatIcon size={12} />
             {t('action.insertItemShort')}
           </button>
         </div>
@@ -244,4 +246,11 @@ const buttonStyle = {
   whiteSpace: 'nowrap',
   borderRadius: 5,
   cursor: 'pointer',
+} as const
+
+/** 「加入对话」带图标：图标与文字居中排一行。 */
+const iconButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
 } as const

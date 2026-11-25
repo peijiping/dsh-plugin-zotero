@@ -20,6 +20,7 @@ import type { ZoteroAnnotation, ZoteroAnnotationPatch } from '../../zotero/types
 import { commentForEditor, hasComment, parseComment } from '../annotationComment'
 import { annotationColor } from '../annotationRuns'
 import { deleteAnnotation, patchAnnotation } from '../api'
+import { ChatIcon } from '../actionIcons'
 import { tpl, type Translate } from '../locales'
 import { showToast } from '../paneStore'
 import { ACCENT, SOFT_BUTTON_STYLE } from '../styles'
@@ -242,7 +243,8 @@ export function AnnotationCard({
       )}
 
       <div style={footStyle}>
-        <button type="button" onClick={() => onInsert(annotation)} style={smallButtonStyle}>
+        <button type="button" onClick={() => onInsert(annotation)} style={labeledButtonStyle}>
+          <ChatIcon size={12} />
           {t('action.insertItemShort')}
         </button>
         <button type="button" onClick={onOpenInZotero} style={zoteroButtonStyle}>
@@ -404,13 +406,15 @@ const smallButtonStyle = {
   whiteSpace: 'nowrap',
 } as const
 
-/** 只有跳 Zotero 这个按钮带图标：单独补 flex 对齐，不动卡片里其它纯文字按钮。 */
-const zoteroButtonStyle = {
+/** 带图标的文字按钮（加入对话 / 打开 Zotero）：单独补 flex 对齐，不动卡片里其它纯文字按钮。 */
+const labeledButtonStyle = {
   ...smallButtonStyle,
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
 } as const
+
+const zoteroButtonStyle = labeledButtonStyle
 
 /** 删除的二次确认态：只换描边与文字色，不铺红底（深色主题下红底会糊成一块）。 */
 const dangerStyle = {

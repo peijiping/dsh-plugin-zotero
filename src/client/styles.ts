@@ -52,6 +52,23 @@ export const SOFT_BUTTON_ACTIVE_STYLE: CSSProperties = {
 
 /** 所有「浅底 + 描边」按钮共用的 class（primary 实心主操作不加）。 */
 export const SOFT_BUTTON_CLASS = 'dsh-zp-soft-btn'
+
+/**
+ * 中性灰按钮：选区浮条上的「复制 / 翻译」用。
+ *
+ * 与蓝色的标注类按钮（高亮 / 划线 / 评论）刻意分开——它们是工具动作，不是写标注，
+ * 铺一层灰底就能和旁边那排「会改文档」的按钮拉开层次。
+ */
+export const NEUTRAL_BUTTON_STYLE: CSSProperties = {
+  color: 'var(--dsw-alias-label-primary, CanvasText)',
+  background: 'rgba(127,127,127,0.12)',
+  border: '1px solid rgba(127,127,127,0.40)',
+  boxShadow: 'none',
+  boxSizing: 'border-box',
+}
+
+/** 中性灰按钮的专属 class，供 THEME_CSS 写 hover / active（内联 style 写不了伪类）。 */
+export const NEUTRAL_BUTTON_CLASS = 'dsh-zp-neutral-btn'
 /**
  * 「使用帮助」按钮：实心蓝底 + 白字，刻意比旁边的浅底描边按钮醒目。
  *
@@ -203,6 +220,17 @@ export const THEME_CSS = `
 .dsh-zp-soft-btn:disabled {
   opacity: 0.55 !important;
   cursor: default;
+}
+/* 中性灰按钮（复制 / 翻译）：hover / active 只加深灰底，不掺蓝。 */
+.dsh-zp-neutral-btn {
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.dsh-zp-neutral-btn:hover:not(:disabled) {
+  background-color: rgba(127, 127, 127, 0.22) !important;
+  border-color: rgba(127, 127, 127, 0.60) !important;
+}
+.dsh-zp-neutral-btn:active:not(:disabled) {
+  background-color: rgba(127, 127, 127, 0.30) !important;
 }
 /* 插入方式菜单项：默认透明底，hover 与键盘聚焦同一套底色，pointer 与 Tab 走哪个都看得见。
    底色必须写在 class 里而不是内联 style —— 内联会盖掉下面这两条伪类规则。 */

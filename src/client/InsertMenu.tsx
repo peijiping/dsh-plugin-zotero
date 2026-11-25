@@ -23,6 +23,7 @@ import { useDismiss } from './dismiss'
 import { WINDOW_DRAG_EXCLUDE } from './floatingBox'
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import { ChatIcon } from './actionIcons'
 import { ACCENT, MENU_ITEM_CLASS, SOFT_BUTTON_CLASS, SOFT_BUTTON_STYLE } from './styles'
 
 /**
@@ -274,6 +275,7 @@ export function InsertMenu({
           title={selfNote ? t('action.insertNote') : t('action.insertItem')}
           style={mainStyle}
         >
+          <ChatIcon size={12} />
           {t('action.insertItemShort')}
         </button>
         <span style={dividerStyle} aria-hidden="true" />
@@ -508,6 +510,7 @@ const groupStyle = {
 const mainStyle = {
   display: 'inline-flex',
   alignItems: 'center',
+  gap: 4,
   height: 20,
   padding: '0 9px',
   border: 'none',

@@ -24,6 +24,7 @@ import {
 } from 'react'
 
 import { writeClipboard } from '../clipboard'
+import { ChatIcon } from '../actionIcons'
 import { useDismiss } from '../dismiss'
 import { WINDOW_DRAG_EXCLUDE } from '../floatingBox'
 import { type Translate } from '../locales'
@@ -305,8 +306,9 @@ export function TranslationCard(
           className={SOFT_BUTTON_CLASS}
           onClick={insert}
           disabled={view.status !== 'done'}
-          style={buttonStyle}
+          style={insertButtonStyle}
         >
+          <ChatIcon size={12} />
           {t('action.insertItemShort')}
         </button>
       </div>
@@ -648,4 +650,12 @@ const buttonStyle = {
   font: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+} as const
+
+/** 「加入对话」带图标：图标与文字居中排一行。 */
+const insertButtonStyle = {
+  ...buttonStyle,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
 } as const

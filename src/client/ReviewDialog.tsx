@@ -4,6 +4,7 @@ import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ZoteroFulltext, ZoteroItemDetail, ZoteroItemSummary } from '../zotero/types'
 import { ApiFailure, fetchFulltext, fetchItem } from './api'
+import { ChatIcon } from './actionIcons'
 import { reviewEvidenceSource, reviewSourceText, reviewText, type ReviewSource } from './cite'
 import { createReviewRun, displayReviewEvidence } from './reviewEvidence'
 import { planChapters, type ChapterPlan } from './fulltextPlan'
@@ -191,7 +192,7 @@ export function ReviewDialog({ t, items, onClose, onConfirm }: Props): ReactElem
               {tpl(t('review.bodyTokens'), { n: bodyTokens.toLocaleString() })}
             </span>}
           </small>
-          <Button type="button" variant="primary" size="sm" disabled={!canConfirm} onClick={confirm} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+          <Button type="button" variant="primary" size="sm" disabled={!canConfirm} onClick={confirm} style={{ flexShrink: 0, whiteSpace: 'nowrap' }} icon={<ChatIcon size={13} />}>
             {t('fulltext.confirm')}
           </Button>
         </div>

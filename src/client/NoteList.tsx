@@ -27,6 +27,7 @@ import { Button } from './ui'
 
 import type { ZoteroNote } from '../zotero/types'
 import { ApiFailure, createNote, deleteNote, fetchNoteRaw, updateNote } from './api'
+import { ChatIcon } from './actionIcons'
 import { NoteEditor, type NoteEditorHandle } from './NoteEditor'
 import { tpl, type Translate } from './locales'
 import { showToast } from './paneStore'
@@ -349,6 +350,7 @@ function NoteItem({
           onClick={() => onInsert(note)}
           title={t('action.insertToChat')}
           style={insertButtonStyle}
+          icon={<ChatIcon size={12} />}
         >
           {t('action.insertItemShort')}
         </Button>

@@ -23,6 +23,7 @@ import { Button } from './ui'
 import type { ZoteroAnnotation, ZoteroAnnotationPatch } from '../zotero/types'
 import { ANNOTATION_COLORS } from '../zotero/palette'
 import { deleteAnnotation, patchAnnotation } from './api'
+import { ChatIcon } from './actionIcons'
 import { commentForEditor, hasComment, parseComment } from './annotationComment'
 import {
   annotationColor,
@@ -539,6 +540,7 @@ export function AnnotationList({
                   onClick={() => onInsert(annotation)}
                   title={t('action.insertToChat')}
                   style={insertButtonStyle}
+                  icon={<ChatIcon size={12} />}
                 >
                   {t('action.insertItemShort')}
                 </Button>

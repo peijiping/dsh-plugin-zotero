@@ -12,6 +12,7 @@
 import { useRef, useState, type ReactElement } from 'react'
 
 import { Button, SectionTitle } from './ui'
+import { ChatIcon } from './actionIcons'
 
 import type { ZoteroTag } from '../zotero/types'
 import type { Translate } from './locales'
@@ -346,6 +347,7 @@ export function TagPanel(props: Props): ReactElement {
                 title={tooMany ? tpl(t('error.tooManyTags'), { n: MAX_TAG_REFERENCE }) : t('tags.citeSelected')}
                 style={{ flexShrink: 0, height: 20, padding: '0 6px', fontSize: 11, lineHeight: 1.2 }}
                 onClick={citeSelected}
+                icon={<ChatIcon size={11} />}
               >
                 {t('tags.citeSelected')}
               </Button>
