@@ -6,8 +6,9 @@
  * `persist: false`——它是面板级的，没有真实 itemKey，几何只在本会话内存里，
  * 绝不往 view-state 写假条目键。
  *
- * 内容分 5 个 tab：快速上手 / 精读与理解 / 笔记整理 / 文库管理 / 截图与标注。
- * 每条示例给出入口提示与一段可一键复制的提示词，文案全走 locales.ts（zh/en）。
+ * 内容分 6 个 tab：快速上手 / 精读与理解 / 笔记整理 / 文库管理 / 截图与标注 /
+ * 界面与阅读。每条示例给出入口提示与一段可一键复制的提示词，纯界面操作只给
+ * 入口说明、不给「复制」；文案全走 locales.ts（zh/en）。
  *
  * 面板根必须挂 `{...box.panelProps}`（WINDOW_DRAG_EXCLUDE）：macOS 宿主把整行
  * chrome 当几何拖拽区，浮层压住那行就会变成拖整个 DSH 窗口。
@@ -40,13 +41,13 @@ interface Props {
 
 /** 假 key：`persist: false` 时只作 effect 依赖，不参与几何读写。 */
 const HELP_BOX_KEY = '__help__'
-const PANEL_WIDTH = 460
-const PANEL_MIN_WIDTH = 340
-const PANEL_MIN_HEIGHT = 280
+const PANEL_WIDTH = 620
+const PANEL_MIN_WIDTH = 420
+const PANEL_MIN_HEIGHT = 300
 /** 「已复制」显示多久后复位。 */
 const COPIED_FEEDBACK_MS = 1400
 
-type TabId = 'start' | 'reading' | 'notes' | 'library' | 'shots'
+type TabId = 'start' | 'reading' | 'notes' | 'library' | 'shots' | 'page'
 
 interface TabSpec {
   id: TabId
@@ -54,15 +55,27 @@ interface TabSpec {
   count: number
   /** 快速上手需要给每条示例标出入口。 */
   withHint: boolean
+  /** 其它 tab 里少数需要标出入口的条目编号。 */
+  hintItems?: readonly number[]
+  /** 纯界面操作：只显示入口说明，不提供「复制」与提示词。 */
+  tipItems?: readonly number[]
   footnoteKey?: string
 }
 
 const TABS: TabSpec[] = [
-  { id: 'start', count: 7, withHint: true, footnoteKey: 'help.start.footnote' },
-  { id: 'reading', count: 5, withHint: false },
-  { id: 'notes', count: 3, withHint: false },
-  { id: 'library', count: 4, withHint: false },
-  { id: 'shots', count: 3, withHint: false },
+  { id: 'start', count: 9, withHint: true, footnoteKey: 'help.start.footnote' },
+  { id: 'reading', count: 6, withHint: false, hintItems: [4, 6] },
+  { id: 'notes', count: 4, withHint: false, hintItems: [4] },
+  {
+    id: 'library',
+    count: 9,
+    withHint: false,
+    hintItems: [1, 2, 3, 6, 8, 9],
+    tipItems: [7],
+    footnoteKey: 'help.library.footnote',
+  },
+  { id: 'shots', count: 5, withHint: false, tipItems: [4, 5], footnoteKey: 'help.shots.footnote' },
+  { id: 'page', count: 6, withHint: false, tipItems: [1, 2, 3, 4, 5, 6] },
 ]
 
 export function HelpWindow({ t, open, anchorRef, triggerRef, onClose }: Props): ReactElement {
@@ -177,27 +190,31 @@ export function HelpWindow({ t, open, anchorRef, triggerRef, onClose }: Props): 
             {Array.from({ length: tab.count }, (_, index) => index + 1).map((n) => {
               const key = `help.ex.${tab.id}.${n}`
               const copied = copiedKey === `${tab.id}-${n}`
-              const hint = tab.withHint ? t(`${key}.hint`) : ''
+              const tipOnly = tab.tipItems?.includes(n) ?? false
+              const showHint = tipOnly || tab.withHint || (tab.hintItems?.includes(n) ?? false)
+              const hint = showHint ? t(`${key}.hint`) : ''
               return (
                 <div key={key} style={exampleStyle}>
                   <div style={exampleHeadStyle}>
                     <span style={exampleLabelStyle}>{t(`${key}.label`)}</span>
-                    <button
-                      type="button"
-                      className={SOFT_BUTTON_CLASS}
-                      onClick={() => copyPrompt(`${tab.id}-${n}`, t(`${key}.prompt`))}
-                      style={{
-                        ...SOFT_BUTTON_STYLE,
-                        ...(copied ? SOFT_BUTTON_ACTIVE_STYLE : null),
-                        ...copyButtonStyle,
-                        color: copied ? ACCENT : 'var(--dsw-alias-label-primary, CanvasText)',
-                      }}
-                    >
-                      {copied ? t('toast.copied') : t('help.copy')}
-                    </button>
+                    {!tipOnly && (
+                      <button
+                        type="button"
+                        className={SOFT_BUTTON_CLASS}
+                        onClick={() => copyPrompt(`${tab.id}-${n}`, t(`${key}.prompt`))}
+                        style={{
+                          ...SOFT_BUTTON_STYLE,
+                          ...(copied ? SOFT_BUTTON_ACTIVE_STYLE : null),
+                          ...copyButtonStyle,
+                          color: copied ? ACCENT : 'var(--dsw-alias-label-primary, CanvasText)',
+                        }}
+                      >
+                        {copied ? t('toast.copied') : t('help.copy')}
+                      </button>
+                    )}
                   </div>
                   {hint !== '' && <div style={hintStyle}>{hint}</div>}
-                  <div style={promptStyle}>{t(`${key}.prompt`)}</div>
+                  {!tipOnly && <div style={promptStyle}>{t(`${key}.prompt`)}</div>}
                 </div>
               )
             })}
