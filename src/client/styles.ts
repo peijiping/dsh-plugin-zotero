@@ -171,6 +171,28 @@ export function childKindIconClass(kind: ZoteroChildKind, read = false): string 
 
 /** 全局主题样式：只在入口注入一次，portal / 浮层里的按钮同样生效。 */
 export const THEME_CSS = `
+.dsh-zp-history-chip {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  max-width: 100%;
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  text-align: inherit;
+  color: var(--dsw-alias-link, LinkText);
+  cursor: pointer;
+}
+.dsh-zp-history-chip > [data-ref-chip] {
+  margin: 0;
+  color: inherit;
+}
+.dsh-zp-history-chip:hover,
+.dsh-zp-history-chip:focus-visible {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
 .dsh-zp-history-modal[role="dialog"] {
   width: min(720px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);

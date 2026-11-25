@@ -13,7 +13,7 @@
  * 老会话里的引用块也能显示。
  */
 
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties, type MouseEvent } from 'react'
 
 import { HoverCard, Modal, ReferenceChip } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -148,6 +148,22 @@ export function createHistoryRefNode(
   return function ZoteroHistoryRef({ node, raw, interactive }: HistoryRefNodeProps) {
     const [open, setOpen] = useState(false)
     const label = node.data.label ?? chipLabel(citationBody(raw))
+    // 悬停卡片会展示全文，原生 title 气泡会与其重叠。
+    const chip = <ReferenceChip appearance="file" label={label} title="" />
+
+    function openChip(event: MouseEvent<HTMLButtonElement>): void {
+      if (event.detail > 1) return
+      const button = event.currentTarget
+      const selection = button.ownerDocument.getSelection()
+      // 阅读器定位证据时会保留选区。只有划选经过当前胶囊才拦截鼠标点击。
+      if (event.detail !== 0 && selection !== null && !selection.isCollapsed) {
+        for (let i = 0; i < selection.rangeCount; i += 1) {
+          if (selection.getRangeAt(i).intersectsNode(button)) return
+        }
+      }
+      setOpen(true)
+    }
+
     const body = citationBody(raw)
     const itemKey = itemKeyOf(body)
     const evidence = evidenceIn(body)
@@ -216,15 +232,11 @@ export function createHistoryRefNode(
           inline
           grouped
           openDelayMs={350}
-          anchor={(
-            <ReferenceChip
-              appearance="file"
-              label={label}
-              // 悬停卡片会展示全文，原生 title 气泡会与其重叠，这里留空。
-              title=""
-              {...(interactive === true ? { onActivate: () => setOpen(true) } : {})}
-            />
-          )}
+          anchor={interactive === true ? (
+            <button type="button" className="dsh-zp-history-chip" onClick={openChip}>
+              {chip}
+            </button>
+          ) : chip}
           content={(
             <div style={HOVER_CARD_STYLE}>
               <div style={HOVER_BODY_STYLE}>{displayText}</div>
