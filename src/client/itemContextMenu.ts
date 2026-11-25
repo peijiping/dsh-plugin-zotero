@@ -63,7 +63,10 @@ export function itemMenuEntries(
     })
   }
 
-  if (items.length > 0) {
+  // 单条独立笔记不给汇总：它没有标注，汇总出来的只有它自己的正文，
+  // 与「把条目加入对话」是同一个动作（详情页的插入菜单也是这么处理的）。
+  const noteOnly = items.length === 1 && items[0]?.itemType === 'note'
+  if (items.length > 0 && !noteOnly) {
     entries.push({
       id: ITEM_MENU_DIGEST,
       label: t('digest.action'),

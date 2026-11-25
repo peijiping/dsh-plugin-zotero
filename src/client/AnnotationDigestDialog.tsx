@@ -441,8 +441,9 @@ export function AnnotationDigestDialog({ t, items, onClose, onInsert }: Props): 
                               date: row.note.dateModified.slice(0, 10),
                             })}
                           </span>
-                          <span style={quoteStyle}>{row.note.title || row.note.key}</span>
-                          <span style={commentStyle}>{body.slice(0, 120)}</span>
+                          {/* 笔记标题是 Host 从正文首段抽的，再单起一行会与正文首行重复；
+                              正文本身已经包含它，这里只给正文。 */}
+                          <span style={quoteStyle}>{body}</span>
                         </span>
                       </label>
                     )
@@ -574,9 +575,17 @@ const swatchStyle: CSSProperties = {
   flexShrink: 0,
 }
 
+/**
+ * 原文预览：最多两行。
+ *
+ * `-webkit-line-clamp` 仍留着（老引擎按它画省略号），但**不能只靠它**：
+ * Chrome 158 已把 `display: -webkit-box` 算成 `flow-root`，省略号不再出现。
+ * 所以同时用 `max-height` 把高度钉死 —— 2 行 × 1.55 = 3.1em，多出来的直接裁掉。
+ */
 const quoteStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.55,
+  maxHeight: '3.1em',
   overflow: 'hidden',
   display: '-webkit-box',
   WebkitLineClamp: 2,
@@ -588,6 +597,7 @@ const quoteStyle: CSSProperties = {
 const commentStyle: CSSProperties = {
   fontSize: 11.5,
   lineHeight: 1.5,
+  maxHeight: '1.5em',
   opacity: 0.75,
   paddingLeft: 7,
   borderLeft: '2px solid rgba(127,127,127,0.35)',
