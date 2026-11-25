@@ -28,6 +28,7 @@ import { writeClipboard } from './clipboard'
 import { useDismiss } from './dismiss'
 import { ChildKindIcon, childKindLabel, ItemTypeIcon, itemTypeLabel } from './itemType'
 import {
+  ITEM_MENU_DIGEST,
   ITEM_MENU_INSERT,
   ITEM_MENU_REVIEW,
   itemMenuEntries,
@@ -73,6 +74,8 @@ interface Props {
   /** 选中几条插几个条目 chip。 */
   onInsertItems(items: readonly ZoteroItemSummary[]): void
   onReviewItems?(items: readonly ZoteroItemSummary[]): void
+  /** 汇总笔记与标注：打开确认弹层（不直插，篇级入口要先看清条数）。 */
+  onDigestItems?(items: readonly ZoteroItemSummary[]): void
 }
 
 function selectionName(t: Translate, libraryName: string, collection: ZoteroCollection | null): string {
@@ -407,6 +410,8 @@ const ITEM_MENU_ICON_PATHS: Record<ItemMenuIconName, string> = {
   copy: 'M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM3 16V5a2 2 0 0 1 2-2h10',
   // 左右两份文档并排：与「合并成一篇」的图标区分开，用于「综述对比」。
   review: 'M4 4h7v16H4zM13 4h7v16h-7zM6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2',
+  // 横线加勾：与「整篇全文」的纯横线区分，表示「挑出其中有内容的那些」。
+  digest: 'M3 6h9M3 11h9M3 16h5M15.5 12.5l2 2 3.5-4',
   text: 'M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6',
   numbers: 'M10 6h10m-10 6h10m-10 6h10M3 4h2v4m-2 0h4m-4 3h3a1 1 0 0 1 0 2h-2l-1 2h4',
 }
@@ -641,6 +646,7 @@ export function ItemList(props: Props): ReactElement {
     onInsertItem,
     onInsertItems,
     onReviewItems,
+    onDigestItems,
   } = props
 
   const name = selectionName(t, libraryName, selectedCollection)
@@ -695,16 +701,21 @@ export function ItemList(props: Props): ReactElement {
     }
   }
 
-  /** 右键菜单按整批选中项生成，所有行共用同一份；单选两项、多选三项。 */
+  /** 右键菜单按整批选中项生成，所有行共用同一份；单选三项、多选四项。 */
   const menuItems = itemMenuEntries(t, chosen, {
     copying,
     canReview: onReviewItems !== undefined,
+    canDigest: onDigestItems !== undefined,
   }).map(toMenuEntry)
 
   function onMenuSelect(id: string): void {
     if (id === ITEM_MENU_INSERT) {
       if (chosen.length === 1) onInsertItem(chosen[0])
       else onInsertItems(chosen)
+      return
+    }
+    if (id === ITEM_MENU_DIGEST) {
+      onDigestItems?.(chosen)
       return
     }
     if (id === ITEM_MENU_REVIEW) {

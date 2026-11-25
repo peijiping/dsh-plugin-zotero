@@ -9,7 +9,9 @@ import type { Translate } from './locales'
 import { tpl } from './locales'
 import type { ShotMeta } from './viewer/shot/types'
 import type { FulltextSlice } from './fulltextRange'
+import type { DigestBatch, DigestPaper } from './annotationDigest'
 import { commentPlain } from './annotationComment'
+import { evidenceLink, makeEvidence } from './evidence'
 import type {
   ZoteroAnnotation,
   ZoteroCollection,
@@ -402,4 +404,181 @@ export function tagSetChipLabel(t: Translate, names: readonly string[], mode: 'a
   return chars.length > CHIP_LABEL_LIMIT
     ? `${chars.slice(0, CHIP_LABEL_LIMIT).join('')}…`
     : label
+}
+
+/**
+ * 一批笔记 / 标注的汇总文本。
+ *
+ * 与单条引用不同，这里一个 chip 承载一整批（多篇、多条），因此：
+ *
+ * - 头部先写「第几批 / 共几批 + 本次合计 + 本批小计」，模型才知道自己拿到的是
+ *   一份材料的一部分，不会把第 2 批当成另一项研究；
+ * - 任务说明只写在**第 1 批**开头，多批重复写会把每批的正文往后推；
+ * - 同一篇被拆到两批时，续批的篇头标「（续）」、段头写「续，本篇共 N 条」——
+ *   缺了这个标记，模型会把同一项研究的前后两段当成两项。
+ * - 提交时被删的条目用 ⚠️ 独立行写明；一行轻描淡写的括号会被模型当噪音跳过。
+ */
+export interface AnnotationSetOverall {
+  /** 有内容、实际进入批次的篇数（「共 N 篇」）。 */
+  papers: number
+  annotations: number
+  notes: number
+  chars: number
+  /** 提交时已不在文库的条目数（标注 + 笔记）。 */
+  missingItems: number
+  /** 提交时已不在文库的篇数。 */
+  missingPapers: number
+}
+
+export interface AnnotationSetContext {
+  /** 本批序号，1 基。 */
+  index: number
+  total: number
+  /** 本批覆盖第几篇到第几篇（1 基，按传入顺序）。 */
+  from: number
+  to: number
+  overall: AnnotationSetOverall
+}
+
+/** 汇总 chip 的标签：`笔记与标注 1/3 · 5 篇`。 */
+export function annotationSetChipLabel(
+  t: Translate,
+  index: number,
+  total: number,
+  papers: number,
+): string {
+  return tpl(t('digest.chip'), { i: index, n: total, p: papers })
+}
+
+/** 标注类型的展示名；未知类型原样给出（与列表口径一致）。 */
+function annotationTypeLabel(t: Translate, type: string): string {
+  const key = `annotation.type.${type}`
+  const label = t(key)
+  return label === key ? type : label
+}
+
+/** 一条标注的页码：优先印刷页码，其次 PDF 文件页。 */
+function annotationPage(annotation: ZoteroAnnotation): string {
+  if (annotation.pageLabel !== '') return annotation.pageLabel
+  return annotation.position === null ? '' : String(annotation.position.pageIndex + 1)
+}
+
+/**
+ * 分段的「续」后缀。
+ *
+ * 只有本篇被拆开时才出现：读者（模型）必须知道这一段的上下文与总数，
+ * 否则会把「第 2 段 8 条」当成这一篇的全部。
+ */
+function sectionPart(t: Translate, continued: boolean, hasMore: boolean, total: number): string {
+  if (!continued && !hasMore) return ''
+  if (continued && hasMore) return tpl(t('digest.cmp.partBoth'), { n: total })
+  if (continued) return tpl(t('digest.cmp.partContinued'), { n: total })
+  return tpl(t('digest.cmp.partMore'), { n: total })
+}
+
+/** 一篇的块头 + 标注段 + 笔记段。 */
+function digestPaperText(t: Translate, paper: DigestPaper): { text: string; warnings: string[] } {
+  const warnings: string[] = []
+  const head = tpl(t('digest.cmp.paper'), {
+    title: paper.title,
+    key: paper.key,
+    creators: paper.creators,
+    year: paper.year,
+  })
+  const lines = [paper.continued ? head + t('digest.cmp.continuedMark') : head]
+
+  const commented = paper.annotations.filter((annotation) => commentPlain(annotation.comment) !== '').length
+  if (paper.annotations.length > 0) {
+    lines.push(tpl(t('digest.cmp.annLine'), {
+      n: paper.annotations.length,
+      m: commented,
+      part: sectionPart(t, paper.continued, paper.hasMore, paper.annotationTotal),
+    }))
+    for (const annotation of paper.annotations) {
+      const page = annotationPage(annotation)
+      const type = annotationTypeLabel(t, annotation.type)
+      const quote = tidyAnnotation(annotation.text)
+      const comment = commentPlain(annotation.comment)
+      const prefix = page === ''
+        ? tpl(t('digest.cmp.lineNoPage'), { type })
+        : tpl(t('digest.cmp.line'), { page, type })
+      lines.push(prefix + (quote !== '' ? quote : comment !== '' ? comment : '（无原文）'))
+      if (comment !== '' && quote !== comment) {
+        lines.push(`  ${tpl(t('digest.cmp.comment'), { value: comment })}`)
+      }
+      const target = makeEvidence(paper.key, {
+        attachmentKey: annotation.attachmentKey,
+        annotationKey: annotation.key,
+        page: annotation.position === null ? undefined : annotation.position.pageIndex + 1,
+        pageLabel: annotation.pageLabel || undefined,
+      })
+      lines.push(`  ${tpl(t('digest.cmp.evidence'), {
+        link: evidenceLink(target),
+        page: page === '' ? '' : tpl(t('digest.cmp.evidencePage'), { page }),
+      })}`)
+    }
+  }
+
+  if (paper.notes.length > 0) {
+    lines.push(tpl(t('digest.cmp.noteLine'), {
+      n: paper.notes.length,
+      part: sectionPart(t, paper.continued, paper.hasMore, paper.noteTotal),
+    }))
+    for (const note of paper.notes) {
+      const body = noteHtmlToText(note.html)
+      const date = note.dateModified.slice(0, 10)
+      lines.push(tpl(t('digest.cmp.noteMeta'), {
+        title: note.title || note.key,
+        chars: Array.from(body).length,
+        date,
+        key: note.key,
+      }))
+      lines.push(`  ${tpl(t('digest.cmp.noteBody'), { value: body })}`)
+      if (note.truncated) {
+        warnings.push(tpl(t('digest.cmp.noteTruncated'), { title: note.title || note.key }))
+      }
+    }
+  }
+
+  return { text: lines.join('\n'), warnings }
+}
+
+export function annotationSetText(
+  t: Translate,
+  batch: DigestBatch,
+  ctx: AnnotationSetContext,
+): string {
+  const blocks: string[] = []
+  if (ctx.index === 1) blocks.push(t('digest.cmp.instructions'))
+
+  blocks.push([
+    tpl(t('digest.cmp.header'), { i: ctx.index, n: ctx.total, a: ctx.from, b: ctx.to, p: ctx.overall.papers }),
+    tpl(t('digest.cmp.subtotal'), {
+      a: ctx.overall.annotations,
+      n: ctx.overall.notes,
+      chars: ctx.overall.chars.toLocaleString(),
+      ba: batch.annotations,
+      bn: batch.notes,
+    }),
+  ].join('\n'))
+
+  const warnings: string[] = []
+  for (const paper of batch.papers) {
+    const compiled = digestPaperText(t, paper)
+    blocks.push(compiled.text)
+    warnings.push(...compiled.warnings)
+  }
+
+  // 全局口径只写在第 1 批：多批重复会稀释正文，而覆盖范围是「整组」的信息。
+  if (ctx.index === 1) {
+    if (ctx.overall.missingPapers > 0) {
+      warnings.push(tpl(t('digest.cmp.missingPapers'), { n: ctx.overall.missingPapers }))
+    }
+    if (ctx.overall.missingItems > 0) {
+      warnings.push(tpl(t('digest.cmp.missingItems'), { n: ctx.overall.missingItems }))
+    }
+  }
+
+  if (warnings.length > 0) blocks.push(warnings.map((warning) => `⚠️ ${warning}`).join('\n'))
+  return blocks.join('\n\n')
 }

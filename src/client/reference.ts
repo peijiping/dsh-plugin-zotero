@@ -22,6 +22,7 @@ import { makeEvidence, type EvidenceLocation } from './evidence'
 import type { InsertionSpan } from './inline'
 import {
   annotationCitation,
+  annotationSetCitation,
   attachmentCitation,
   type AttachmentCitation,
   collectionCitation,
@@ -63,6 +64,18 @@ const ITEM_PREFIX = 'item:'
 const COLLECTION_PREFIX = 'col:'
 const NOTE_PREFIX = 'note:'
 const ANNOTATION_PREFIX = 'ann:'
+/**
+ * 一批笔记 / 标注的汇总：`annset:<编码后的 JSON>`。
+ *
+ * 与 `full:` 不同，ref 存的是**用户勾选的条目 key 清单**，而不是范围：弹层里
+ * 逐条勾选之后，「这篇 12 条里不要第 3、7 条」这种减法没法用范围表达式表达。
+ * 内容本身仍然在提交时现取（key 找不到就记一笔），所以草稿放几天也不会
+ * 把旧文本发给模型。
+ *
+ * 一个 chip 只装一批：分批在插入时切好（见 `annotationDigest.packBatches`），
+ * 因为「分几枚 chip」必须插入那一刻就定下来，而 codec 只能在提交时被调用。
+ */
+const ANNSET_PREFIX = 'annset:'
 /**
  * 全文引用：`full:<编码后的 itemKey>:<范围表达式>`。
  *
@@ -174,6 +187,7 @@ export function citationForRef(t: Translate, ref: string, signal: AbortSignal): 
   if (ref.startsWith(FULLTEXT_PREFIX)) return fulltextCitation(t, ref.slice(FULLTEXT_PREFIX.length), signal)
   if (ref.startsWith(COLLECTION_PREFIX)) return collectionCitation(t, ref.slice(COLLECTION_PREFIX.length), signal)
   if (ref.startsWith(NOTE_PREFIX)) return noteCitation(t, ref.slice(NOTE_PREFIX.length), signal)
+  if (ref.startsWith(ANNSET_PREFIX)) return annotationSetCitation(t, ref.slice(ANNSET_PREFIX.length), signal)
   if (ref.startsWith(ANNOTATION_PREFIX)) {
     return annotationCitation(t, ref.slice(ANNOTATION_PREFIX.length), signal)
   }
@@ -270,6 +284,60 @@ export function annotationReference(parentKey: string, annotationKey: string, la
   const evidence = makeEvidence(parentKey, { ...location, annotationKey })
   const id = `${annotationKey}:${encodeURIComponent(JSON.stringify(evidence))}`
   return reference(childPrefix(ANNOTATION_PREFIX, parentKey), id, label, 'file')
+}
+
+/**
+ * 一批笔记 / 标注的汇总引用。
+ *
+ * `papers[].anns` / `notes` 是用户勾选的子条目 key：只有这些会进投递包，
+ * 其余即便库里新增也不会混进来（勾选是意图，不能被后续写入覆盖）。
+ */
+export interface AnnotationSetRef {
+  v: 2
+  papers: {
+    key: string
+    /** 标注 key，按页序。 */
+    anns: string[]
+    /** 笔记 key，按更新时间倒序。 */
+    notes: string[]
+    /** 本篇被选中的总数（跨批），供续批写「本篇共 N 条」。 */
+    annTotal?: number
+    noteTotal?: number
+  }[]
+  /** 本批序号 / 总批数，1 基。 */
+  batch: [number, number]
+  /** 本批覆盖第几篇到第几篇（1 基，按整组的顺序）。 */
+  range: [number, number]
+  /** 整组规模：有内容篇数、标注数、笔记数、字符数。 */
+  total: [number, number, number, number]
+  /** 本批里属于「上一篇的续」的条目 key。 */
+  continued?: string[]
+  /** 本批之后还有内容的条目 key（供文本写「其余见下批」）。 */
+  more?: string[]
+}
+
+/**
+ * ref body 的编解码：JSON → base64url。
+ *
+ * 不用 `encodeURIComponent`：它会把 JSON 的 `{}[]",:` 全部转义成 `%XX`，
+ * 400 条的清单从 4.6KB 涨到 11KB，草稿里三枚 chip 就三十多 KB。base64url 只膨胀
+ * 1/3，且同样无空格、无 `:`，不会影响 chip 的偏移校验。
+ */
+function encodeRefBody(value: unknown): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(value))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '')
+}
+
+export function decodeRefBody(body: string): unknown {
+  const binary = atob(body.replace(/-/gu, '+').replace(/_/gu, '/'))
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+export function annotationSetReference(body: AnnotationSetRef, label: string): ReferenceInsert {
+  return reference(ANNSET_PREFIX, encodeRefBody(body), label, 'file')
 }
 
 /**

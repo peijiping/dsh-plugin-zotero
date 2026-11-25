@@ -44,6 +44,7 @@ import {
   usePaneState,
 } from './paneStore'
 import { reviewReference, type SessionsFace } from './reference'
+import { AnnotationDigestDialog } from './AnnotationDigestDialog'
 import { ReviewDialog } from './ReviewDialog'
 import { SearchField } from './SearchField'
 import { HELP_BUTTON_CLASS, HELP_PRIMARY_STYLE } from './styles'
@@ -158,9 +159,15 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
 
   const insertion = useInsertion(t, sessions, sessionId, inputActions)
   const [review, setReview] = useState<{ sessionId: string | undefined; items: readonly ZoteroItemSummary[] } | null>(null)
+  /** 汇总弹层：记下发起时的会话，切会话后不往新草稿里插（与综述同一处理）。 */
+  const [digest, setDigest] = useState<{ sessionId: string | undefined; items: readonly ZoteroItemSummary[] } | null>(null)
 
   function startReview(items: readonly ZoteroItemSummary[]): void {
     setReview({ sessionId, items })
+  }
+
+  function startDigest(items: readonly ZoteroItemSummary[]): void {
+    setDigest({ sessionId, items })
   }
 
   /**
@@ -388,6 +395,7 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             onInsertItem={(item) => insertion.insertItem(item.key, item.title, item.itemType)}
             onInsertItems={insertion.insertItems}
             onReviewItems={inputActions === undefined ? undefined : startReview}
+            onDigestItems={inputActions === undefined ? undefined : startDigest}
           />
         </section>
       </div>
@@ -408,6 +416,14 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
             const label = tpl(t('review.label'), { count: sources.length })
             if (insertion.insertReference(reviewReference(sources, label, run))) setReview(null)
           }}
+        />
+      )}
+      {digest !== null && digest.sessionId === sessionId && (
+        <AnnotationDigestDialog
+          t={t}
+          items={digest.items.map(({ key, title }) => ({ key, title }))}
+          onClose={() => setDigest(null)}
+          onInsert={insertion.insertAnnotationSet}
         />
       )}
       <Toast />

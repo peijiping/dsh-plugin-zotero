@@ -10,7 +10,7 @@ import type { ZoteroItemSummary } from '../zotero/types'
 import { bibliographyStyles } from './bibliography'
 import type { Translate } from './locales'
 
-export type ItemMenuIconName = 'chat' | 'copy' | 'review' | 'text' | 'numbers'
+export type ItemMenuIconName = 'chat' | 'copy' | 'review' | 'text' | 'numbers' | 'digest'
 
 export interface ItemMenuEntry {
   id: string
@@ -20,21 +20,27 @@ export interface ItemMenuEntry {
   submenu?: { id: string; label: string; icon: ItemMenuIconName }[]
 }
 
-/** 菜单三条固定动作的 id；参考文献样式 id 走 `isBibliographyStyle` 识别。 */
+/** 菜单固定动作的 id；参考文献样式 id 走 `isBibliographyStyle` 识别。 */
 export const ITEM_MENU_INSERT = 'insert-item'
 export const ITEM_MENU_COPY = 'copy-bibliography'
+/** 汇总笔记与标注：单选、多选同一项，文案不带篇数。 */
+export const ITEM_MENU_DIGEST = 'digest-annotations'
 export const ITEM_MENU_REVIEW = 'review-items'
 
 /**
- * 单选：加入对话 + 复制参考文献；多选再补一项综述对比。
+ * 单选：加入对话 + 复制参考文献 + 汇总笔记与标注；多选再补一项综述对比。
  *
  * 复制对整批生效：混选了笔记 / 附件时照常给入口，由后端跳过并在结果里说明
  * （原来多选工具栏就是这么做的）；超过上限才置灰，避免点了没反应。
+ *
+ * 汇总项的单选 / 多选文案相同、**不带篇数**：篇数在弹层第一屏就有，菜单里那点
+ * 字数省下来让四项排得齐；没有会话上下文时置灰而不是消失（消失会让人以为
+ * 这个功能只对多选开放）。
  */
 export function itemMenuEntries(
   t: Translate,
   items: readonly ZoteroItemSummary[],
-  options: { copying: boolean; canReview: boolean },
+  options: { copying: boolean; canReview: boolean; canDigest: boolean },
 ): ItemMenuEntry[] {
   const entries: ItemMenuEntry[] = [{
     id: ITEM_MENU_INSERT,
@@ -54,6 +60,15 @@ export function itemMenuEntries(
         label,
         icon: id === 'apa' ? 'text' : 'numbers',
       })),
+    })
+  }
+
+  if (items.length > 0) {
+    entries.push({
+      id: ITEM_MENU_DIGEST,
+      label: t('digest.action'),
+      icon: 'digest',
+      disabled: !options.canDigest,
     })
   }
 

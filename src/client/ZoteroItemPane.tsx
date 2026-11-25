@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { Button } from './ui'
 
 import type { ZoteroItemDetail } from '../zotero/types'
+import { AnnotationDigestDialog } from './AnnotationDigestDialog'
 import { fetchItem } from './api'
 import type { EvidenceTarget } from './evidence'
 import type { InputActions } from './inline'
@@ -89,6 +90,8 @@ export function ZoteroItemPane(props: Props): ReactElement {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
+  /** 「汇总笔记与标注」弹层：只有一篇，弹层里仍给两类开关与分批预览。 */
+  const [digestOpen, setDigestOpen] = useState(false)
   const seq = useRef(0)
 
   useEffect(() => {
@@ -153,6 +156,7 @@ export function ZoteroItemPane(props: Props): ReactElement {
     insertTranslation,
     insertAnnotation,
     insertNote,
+    insertAnnotationSet,
     insertShot,
   } = useInsertion(t, sessions, sessionId, inputActions, conversation)
 
@@ -184,6 +188,15 @@ export function ZoteroItemPane(props: Props): ReactElement {
           onChanged={() => void refresh()}
           onRefresh={() => refresh('manual')}
           onOpenItem={onOpenItem}
+          onDigest={() => setDigestOpen(true)}
+        />
+      )}
+      {digestOpen && detail !== null && (
+        <AnnotationDigestDialog
+          t={t}
+          items={[{ key: detail.key, title: detail.title }]}
+          onClose={() => setDigestOpen(false)}
+          onInsert={insertAnnotationSet}
         />
       )}
       <Toast />

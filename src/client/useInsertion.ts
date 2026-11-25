@@ -58,6 +58,13 @@ export interface InsertionActions {
   insertTranslation(target: ZoteroItemDetail, quote: string, translated: string, location?: EvidenceLocation): void
   insertAnnotation(target: ZoteroItemDetail, annotation: ZoteroAnnotation): void
   insertNote(target: ZoteroItemDetail, note: ZoteroNote): void
+  /**
+   * 一批笔记 / 标注汇总：按批插多枚 `annset:` chip，返回实际插入的枚数。
+   *
+   * 与 {@link insertItems} 同一套循环：每插一枚草稿版本就变，必须重新 capture；
+   * 中途被挡住就停在已插入的那几枚，由调用方按「已插入 n/m 批」提示。
+   */
+  insertAnnotationSet(references: readonly ReferenceInsert[]): number
   insertCollection(collection: ZoteroCollection): void
   /** 选中几条插几个条目 chip（每条一个胶囊）；草稿中途变化就停在已插入的那条。 */
   insertItems(items: readonly { key: string; title: string; itemType?: string }[]): void
@@ -220,6 +227,24 @@ export function useInsertion(
     insertReference(noteReference(target.key, note.key, note.title))
   }, [insertReference])
 
+  const insertAnnotationSet = useCallback((references: readonly ReferenceInsert[]): number => {
+    if (!inputActions) {
+      report('no-editor')
+      return 0
+    }
+    if (references.length === 0) {
+      showToast(t('error.empty'))
+      return 0
+    }
+    let inserted = 0
+    for (const reference of references) {
+      if (!insertChip(sessions, sessionId, reference, inputActions.captureInsertion())) break
+      inserted += 1
+    }
+    if (inserted === 0) report('draft-changed')
+    return inserted
+  }, [inputActions, report, sessionId, sessions, t])
+
   const insertCollection = useCallback((collection: ZoteroCollection): void => {
     insertReference(collectionReference(collection.key, collection.name))
   }, [insertReference])
@@ -263,6 +288,7 @@ export function useInsertion(
     insertTranslation,
     insertAnnotation,
     insertNote,
+    insertAnnotationSet,
     insertCollection,
     insertItems,
     insertTag,

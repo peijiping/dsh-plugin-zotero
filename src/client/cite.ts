@@ -11,12 +11,15 @@
  */
 
 import type { ReviewEvidenceRecord } from '../zotero/review-evidence-types'
-import type { ZoteroFulltext } from '../zotero/types'
+import type { ZoteroFulltext, ZoteroItemDetail } from '../zotero/types'
 import type { Translate } from './locales'
 import { tpl } from './locales'
 import { ApiFailure, fetchFulltext, fetchItem, fetchItems, fetchTags, fetchTree, saveReviewEvidence } from './api'
+import type { DigestBatch, DigestPaper } from './annotationDigest'
+import { annotationChars, noteChars } from './annotationDigest'
 import {
   COLLECTION_PREVIEW_LIMIT,
+  annotationSetText,
   annotationText,
   collectionText,
   excerptText,
@@ -28,6 +31,7 @@ import {
   tagText,
   translationText,
 } from './compose'
+import { decodeRefBody, type AnnotationSetRef } from './reference'
 import type { ShotMeta } from './viewer/shot/types'
 import { evidenceLine, makeEvidence, type EvidenceTarget } from './evidence'
 import { parseFulltextRange, sliceFulltext } from './fulltextRange'
@@ -448,4 +452,130 @@ export async function tagSetCitation(
     return tpl(t('cmp.missing.tagSet'), { names: names.join('、') })
   }
   return tagSetText(t, names, mode, counts, missing, data.items, data.total)
+}
+
+/**
+ * 解析 `annset:` 的 body（v2：勾选清单）。
+ *
+ * 字段缺一个就抛：结构坏了说明这个 chip 不是本插件写的（或者被手改过），
+ * 让宿主还原草稿，别把半份材料发给模型 —— 「以为读了 9 篇实际读 3 篇」比发送失败糟。
+ * 旧版（v1，只存范围）从未发布，直接不认，提示重新插入。
+ */
+function parseAnnotationSetRef(body: string): AnnotationSetRef {
+  let value: unknown
+  try {
+    value = decodeRefBody(body)
+  } catch {
+    throw new Error(`无法识别的 Zotero 汇总引用：${body.slice(0, 80)}`)
+  }
+  const ref = value as Partial<AnnotationSetRef> & { v?: number }
+  if (ref.v !== 2) {
+    throw new Error('汇总引用版本过旧，请删除该引用后重新插入')
+  }
+  const numbers = (input: unknown, length: number): boolean =>
+    Array.isArray(input) && input.length === length
+    && input.every((item) => Number.isSafeInteger(item) && (item as number) >= 0)
+  const strings = (input: unknown): boolean =>
+    Array.isArray(input) && input.every((item) => typeof item === 'string' && item !== '')
+  const papersOk = Array.isArray(ref.papers) && ref.papers.length > 0
+    && ref.papers.every((paper) => typeof paper?.key === 'string' && paper.key !== ''
+      && strings(paper.anns) && strings(paper.notes))
+  const optionalOk = [ref.continued, ref.more].every((list) => list === undefined || strings(list))
+  const valid = papersOk && optionalOk
+    && numbers(ref.batch, 2) && numbers(ref.range, 2) && numbers(ref.total, 4)
+  if (!valid) throw new Error('无法识别的 Zotero 汇总引用：字段不完整')
+  return ref as AnnotationSetRef
+}
+
+/** 按 ref 里的 key 顺序取对象；找不到的跳过，由调用方计数。 */
+function pickByKeys<T extends { key: string }>(keys: readonly string[], byKey: ReadonlyMap<string, T>): T[] {
+  const out: T[] = []
+  for (const key of keys) {
+    const found = byKey.get(key)
+    if (found !== undefined) out.push(found)
+  }
+  return out
+}
+
+/**
+ * 一批笔记 / 标注的汇总文本。
+ *
+ * 取数口径与单条引用一致：逐篇 `fetchItem`（每 4 篇并发）。区别是**只交付 ref 里
+ * 记下的那些 key** —— 用户勾选就是意图，插入之后库里新增的标注不该自动混进来。
+ * 被删掉的条目/子条目逐类计数，写在 ⚠️ 行里，不阻断发送。
+ */
+export async function annotationSetCitation(
+  t: Translate,
+  body: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const ref = parseAnnotationSetRef(body)
+  const loaded = new Map<string, ZoteroItemDetail>()
+  let missingPapers = 0
+  let missingItems = 0
+
+  for (let start = 0; start < ref.papers.length; start += 4) {
+    const group = ref.papers.slice(start, start + 4)
+    const results = await Promise.all(group.map(async (paper) => {
+      try {
+        return { key: paper.key, detail: await fetchItem(paper.key, 'apa', signal) }
+      } catch (error) {
+        if (isMissing(error)) return { key: paper.key, detail: null }
+        throw error
+      }
+    }))
+    for (const result of results) {
+      if (result.detail === null) missingPapers += 1
+      else loaded.set(result.key, result.detail)
+    }
+  }
+
+  const papers: DigestPaper[] = []
+  for (const entry of ref.papers) {
+    const detail = loaded.get(entry.key)
+    if (detail === undefined) continue
+    const annotations = pickByKeys(entry.anns, new Map(detail.annotations.map((item) => [item.key, item])))
+    const notes = pickByKeys(entry.notes, new Map(detail.notes.map((item) => [item.key, item])))
+    missingItems += entry.anns.length - annotations.length
+    missingItems += entry.notes.length - notes.length
+    papers.push({
+      key: detail.key,
+      title: detail.title,
+      creators: detail.creators.join('、'),
+      year: detail.year,
+      annotations,
+      notes,
+      annotationTotal: entry.annTotal ?? annotations.length,
+      noteTotal: entry.noteTotal ?? notes.length,
+      continued: ref.continued?.includes(entry.key) === true,
+      hasMore: ref.more?.includes(entry.key) === true,
+      chars: annotations.reduce((sum, item) => sum + annotationChars(item), 0)
+        + notes.reduce((sum, item) => sum + noteChars(item), 0),
+      missing: false,
+    })
+  }
+
+  if (papers.length === 0) return t('digest.cmp.empty')
+
+  const batch: DigestBatch = {
+    papers,
+    chars: papers.reduce((sum, paper) => sum + paper.chars, 0),
+    annotations: papers.reduce((sum, paper) => sum + paper.annotations.length, 0),
+    notes: papers.reduce((sum, paper) => sum + paper.notes.length, 0),
+  }
+
+  return annotationSetText(t, batch, {
+    index: ref.batch[0],
+    total: ref.batch[1],
+    from: ref.range[0],
+    to: ref.range[1],
+    overall: {
+      papers: ref.total[0],
+      annotations: ref.total[1],
+      notes: ref.total[2],
+      chars: ref.total[3],
+      missingItems,
+      missingPapers,
+    },
+  })
 }

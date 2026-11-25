@@ -62,6 +62,8 @@ interface Props {
   onRefresh(): Promise<void>
   /** 截图插入（图片附件 + `shot:` chip）；缺失时截图按钮仍可点，插入给出明确提示。 */
   onInsertShot?(png: Blob, meta: ShotMeta): InsertOutcome
+  /** 「汇总笔记与标注」：交给上层打开确认弹层（弹层要能取数、要能插 chip）。 */
+  onDigest(): void
 }
 
 /** 定位重试：渲染器刚就绪时页面占位可能还没提交，最多试几次。 */
@@ -120,7 +122,7 @@ function attachmentSource(attachment: ZoteroItemDetail['attachments'][number]): 
   return source
 }
 
-export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onOpenItem, onRefresh, onInsertShot }: Props): ReactElement {
+export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt, onInsertFulltext, onInsertTranslation, onInsertAnnotation, onInsertNote, onChanged, onOpenItem, onRefresh, onInsertShot, onDigest }: Props): ReactElement {
   const [infoOpen, setInfoOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [outline, setOutline] = useState<OutlineState>({ documentKey: '', items: null })
@@ -540,6 +542,11 @@ export function ItemDetail({ t, detail, evidence, onInsertItem, onInsertExcerpt,
         onScreenshot={startScreenshot}
         screenshotAvailable={shot.available}
         screenshotReason={shot.unavailableReason}
+        onDigest={onDigest}
+        digestHint={tpl(t('digest.menu.hint'), {
+          a: readingDetail.annotations.length,
+          n: readingDetail.notes.length,
+        })}
         onRowWidth={handleRowWidth}
       />
     </div>

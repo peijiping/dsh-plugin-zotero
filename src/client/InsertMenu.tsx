@@ -101,6 +101,15 @@ interface Props {
   onScreenshot(): void
   screenshotAvailable: boolean
   screenshotReason: string
+  /**
+   * 「汇总笔记与标注」：打开确认弹层（不直插）。
+   *
+   * 与截图 / 全文并列放在最后：都属于「把当前文献的某部分搬进对话」，
+   * 但它是唯一一个「先看一眼再决定」的动作，所以进弹层而不是直接插。
+   */
+  onDigest(): void
+  /** 行尾提示：`12 标注 · 3 笔记`，进弹层前就能判断值不值得点。 */
+  digestHint?: string
   /** 菜单开合：InfoPanel 据此收起信息浮层，避免两块浮层打架。 */
   onMenuOpenChange?(open: boolean): void
   /** 顺手交给全文浮层当 `triggerRef`：点它不该被算成「点外面」。 */
@@ -123,6 +132,8 @@ export function InsertMenu({
   onScreenshot,
   screenshotAvailable,
   screenshotReason,
+  onDigest,
+  digestHint,
   onMenuOpenChange,
   triggerRef,
 }: Props): ReactElement {
@@ -359,6 +370,17 @@ export function InsertMenu({
             onTip={showTip}
             onSelect={run(onScreenshot)}
           />
+          {/* 独立笔记：主按钮已经插的是笔记正文，再给一个汇总入口是同一个动作。 */}
+          {!selfNote && (
+            <MenuItem
+              icon={<DigestIcon />}
+              label={t('digest.action')}
+              hint={digestHint}
+              tip={t('digest.tip')}
+              onTip={showTip}
+              onSelect={run(onDigest)}
+            />
+          )}
           {tip !== null && (
             <div role="tooltip" {...WINDOW_DRAG_EXCLUDE} style={{ ...tipStyle, left: tip.left, top: tip.top }}>
               {tip.text}
@@ -469,6 +491,18 @@ function RangeIcon(): ReactElement {
       <g stroke="currentColor" strokeWidth="1.05" strokeLinecap="round">
         <path d="M4 2.4v7.2M8 2.4v7.2" />
         <path d="M5.6 6h.8" strokeWidth="1.2" />
+      </g>
+    </svg>
+  )
+}
+
+/** 清单带勾：与「整篇全文」（纯横线）和「按章节」（横线递减）区分开。 */
+function DigestIcon(): ReactElement {
+  return (
+    <svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round">
+        <path d="M2 3.2h5M2 6h5M2 8.8h3" />
+        <path d="M9.1 6.1l1 1 1.6-2" strokeLinejoin="round" />
       </g>
     </svg>
   )

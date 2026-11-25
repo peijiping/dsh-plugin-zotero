@@ -92,6 +92,10 @@ interface Props {
   /** 当前渲染器是否支持截图；不支持时按钮置灰并给出原因。 */
   screenshotAvailable: boolean
   screenshotReason: string
+  /** 「汇总笔记与标注」：交给上层打开确认弹层（这一层不取数、不插 chip）。 */
+  onDigest(): void
+  /** 汇总项行尾提示：`12 标注 · 3 笔记`。 */
+  digestHint: string
   /** 量出悬浮按钮行宽度，供工具条的 `paddingLeft` 让位（语言/文案会改变宽度）。 */
   onRowWidth?(width: number): void
 }
@@ -282,6 +286,8 @@ export function InfoPanel({
   onScreenshot,
   screenshotAvailable,
   screenshotReason,
+  onDigest,
+  digestHint,
   onRowWidth,
 }: Props): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -624,6 +630,8 @@ export function InfoPanel({
           onScreenshot={onScreenshot}
           screenshotAvailable={screenshotAvailable}
           screenshotReason={screenshotReason}
+          onDigest={onDigest}
+          digestHint={digestHint}
           onMenuOpenChange={handleMenuOpenChange}
           triggerRef={insertTriggerRef}
         />
