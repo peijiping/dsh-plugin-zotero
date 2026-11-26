@@ -4,7 +4,9 @@
  * - 行首三角箭头只管开合，且只在有子分类的行出现；点行体选中该范围。
  * - 缩进按层级一次性算出（`depth * INDENT`），不再逐层叠加 margin。
  * - 真实分类与特殊目录（我的出版物 / 未分类条目 / 回收站）右侧显示条目数；
- *   右键真实分类 → 「添加整目录引用」（仅用户文库）。
+ *   右键真实分类 → 与条目列表同款的批量动作（复制参考文献 / 汇总笔记与标注 /
+ *   综述对比），等价于选中该目录下全部条目；用户文库另加「把整目录加入对话」，
+ *   群组分类没有这一项（引用只认用户文库）。
  * - 「我的文库」根节点是可选中的全库范围；其下挂三个虚拟分类
  *   （我的出版物 / 未分类条目 / 回收站），与 Zotero 左侧栏一致。
  * - 其后是两个固定区块（与 Zotero 左栏一致，位置随文库区块往下排）：
@@ -17,15 +19,38 @@
  *   页面刷新后也能回到上次的位置。
  */
 
-import { useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 
-import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { ZoteroCollection, ZoteroGroup, ZoteroItemScope, ZoteroSavedSearch } from '../zotero/types'
-import { ChatIcon } from './actionIcons'
+import { isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS, type BibliographyStyle } from '../zotero/bibliography'
+import type {
+  ZoteroCollection,
+  ZoteroGroup,
+  ZoteroItemScope,
+  ZoteroItemSummary,
+  ZoteroSavedSearch,
+} from '../zotero/types'
+import { ItemMenuIcon } from './actionIcons'
+import { fetchItems } from './api'
+import { copyBibliography } from './copyBibliography'
+import { rememberItemLibrary } from './library'
 import type { Translate } from './locales'
+import { tpl } from './locales'
+import {
+  COLLECTION_MENU_INSERT,
+  ITEM_MENU_COPY,
+  ITEM_MENU_COPY_LIMIT,
+  ITEM_MENU_DIGEST,
+  ITEM_MENU_INSERT,
+  ITEM_MENU_LOADING,
+  ITEM_MENU_REVIEW,
+  itemMenuEntries,
+  type ItemMenuEntry,
+} from './itemContextMenu'
 import {
   isVirtualCountScope,
+  showToast,
   toggleGroup,
   toggleTreeNode,
   TREE_ROOT_ID,
@@ -33,6 +58,7 @@ import {
   type GroupTreeState,
   type VirtualCountScope,
 } from './paneStore'
+import { MenuAtPoint, type MenuPoint } from './pointMenu'
 import { TREE_BLUE, TREE_GRAY, TREE_GREEN, TREE_ORANGE, TREE_RED } from './styles'
 
 /** 每层缩进量（px）。 */
@@ -102,6 +128,9 @@ interface TreeCtx {
   toggle(nodeId: string): void
   select(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
+  /** 目录右键菜单按整目录批量操作：与条目列表的右键菜单共用一个回调。 */
+  onReviewItems?: (items: readonly ZoteroItemSummary[]) => void
+  onDigestItems?: (items: readonly ZoteroItemSummary[]) => void
   onToggleGroup(group: ZoteroGroup): void
 }
 
@@ -126,6 +155,8 @@ interface Props {
   searches: ZoteroSavedSearch[]
   onSelectCollection(collection: ZoteroCollection): void
   onInsertCollection(collection: ZoteroCollection): void
+  onReviewItems?: (items: readonly ZoteroItemSummary[]) => void
+  onDigestItems?: (items: readonly ZoteroItemSummary[]) => void
 }
 
 // ---- 图标（内联 SVG，避免依赖宿主图标导出名） -----------------------------
@@ -351,6 +382,162 @@ function Chevron({ open, onToggle }: { open: boolean; onToggle: () => void }): R
   )
 }
 
+// ---- 目录右键菜单 -----------------------------------------------------------
+//
+// 与条目列表共用一套动作：复制参考文献 / 汇总笔记与标注 / 综述对比，外加已有的
+// 「把整目录加入对话」。区别是目录要先把自己名下的全部顶层条目取回来，等价于
+// 「选中该目录下的所有条目」再点这些动作。
+
+function toMenuEntry(entry: ItemMenuEntry): MenuEntry {
+  return {
+    id: entry.id,
+    label: entry.label,
+    disabled: entry.disabled,
+    icon: entry.icon === undefined ? undefined : <ItemMenuIcon name={entry.icon} />,
+    submenu: entry.submenu?.map((style) => ({
+      ...style,
+      icon: <ItemMenuIcon name={style.icon} />,
+    })),
+  }
+}
+
+/**
+ * 取某个目录的全部顶层条目（分批取满 total）。
+ *
+ * 右键菜单一打开就开始取；条数多时菜单先给占位项，取完再换成正式动作。
+ * 群组目录也要记住条目所属文库：综述 / 汇总弹层后续按 key 取详情时靠它。
+ */
+function useCollectionItems(collection: ZoteroCollection): {
+  items: ZoteroItemSummary[] | null
+  failed: boolean
+} {
+  const [items, setItems] = useState<ZoteroItemSummary[] | null>(null)
+  const [failed, setFailed] = useState(false)
+  const library = collection.library ?? ''
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void (async (): Promise<void> => {
+      const all: ZoteroItemSummary[] = []
+      try {
+        for (;;) {
+          const data = await fetchItems({
+            library,
+            collectionKey: collection.key,
+            offset: all.length,
+          }, controller.signal)
+          for (const item of data.items) rememberItemLibrary(item.key, library)
+          all.push(...data.items)
+          if (data.items.length === 0 || all.length >= data.total) break
+        }
+        if (!controller.signal.aborted) setItems(all)
+      } catch {
+        if (!controller.signal.aborted) setFailed(true)
+      }
+    })()
+    return () => controller.abort()
+  }, [collection.key, library])
+
+  return { items, failed }
+}
+
+function collectionMenuEntries(
+  t: Translate,
+  collection: ZoteroCollection,
+  items: ZoteroItemSummary[] | null,
+  failed: boolean,
+  canReview: boolean,
+  canDigest: boolean,
+): MenuEntry[] {
+  const entries: ItemMenuEntry[] = []
+  // 群组文库的整目录引用无法解析（引用只认用户文库），那里不给首项。
+  if (collection.library === undefined) {
+    entries.push({ id: COLLECTION_MENU_INSERT, label: t('action.insertCollection'), icon: 'chat' })
+  }
+  if (items === null) {
+    entries.push({
+      id: ITEM_MENU_LOADING,
+      label: t(failed ? 'tree.menuLoadFailed' : 'tree.menuLoading'),
+      disabled: true,
+    })
+  } else {
+    entries.push(...itemMenuEntries(t, items, { copying: false, canReview, canDigest })
+      .filter((entry) => entry.id !== ITEM_MENU_INSERT))
+    if (items.length > MAX_BIBLIOGRAPHY_ITEMS && entries.some(({ id }) => id === ITEM_MENU_COPY)) {
+      entries.push({
+        id: ITEM_MENU_COPY_LIMIT,
+        label: tpl(t('tree.copyLimit'), { n: MAX_BIBLIOGRAPHY_ITEMS }),
+        disabled: true,
+      })
+    }
+  }
+  return entries.map(toMenuEntry)
+}
+
+async function copyCollectionReferences(
+  t: Translate,
+  items: readonly ZoteroItemSummary[],
+  style: BibliographyStyle,
+): Promise<void> {
+  const outcome = await copyBibliography(items, style)
+  if (!outcome.ok) {
+    showToast(outcome.reason === 'clipboard'
+      ? t('toast.copyFailed')
+      : tpl(t('bibliography.failed'), { message: outcome.message }))
+    return
+  }
+  const skipped = outcome.skipped.length
+  showToast(outcome.count === 0
+    ? tpl(t('bibliography.empty'), { n: 0, skipped })
+    : skipped > 0
+      ? tpl(t('bibliography.partial'), { n: outcome.count, skipped })
+      : tpl(t('bibliography.copied'), { n: outcome.count }))
+}
+
+function CollectionContextMenu({ ctx, collection, point, onClose }: {
+  ctx: TreeCtx
+  collection: ZoteroCollection
+  point: MenuPoint
+  onClose(): void
+}): ReactElement {
+  const { items, failed } = useCollectionItems(collection)
+  const entries = collectionMenuEntries(
+    ctx.t,
+    collection,
+    items,
+    failed,
+    ctx.onReviewItems !== undefined,
+    ctx.onDigestItems !== undefined,
+  )
+
+  function select(id: string): void {
+    onClose()
+    if (id === COLLECTION_MENU_INSERT) {
+      ctx.onInsertCollection(collection)
+      return
+    }
+    if (items === null) return
+    if (id === ITEM_MENU_DIGEST) {
+      ctx.onDigestItems?.(items)
+      return
+    }
+    if (id === ITEM_MENU_REVIEW) {
+      ctx.onReviewItems?.(items)
+      return
+    }
+    if (isBibliographyStyle(id)) void copyCollectionReferences(ctx.t, items, id)
+  }
+
+  return (
+    <MenuAtPoint
+      point={point}
+      onClose={onClose}
+      onSelect={select}
+      items={entries}
+    />
+  )
+}
+
 // ---- 分类节点（扁平化渲染：每行自带缩进，天然成树） -------------------------
 
 function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNode; depth: number }): ReactElement {
@@ -362,21 +549,25 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
   /** 筛选期间命中路径自动展开，折叠箭头暂不可用。 */
   const filtering = ctx.filter !== ''
   const open = filtering || ctx.expanded.has(nodeId)
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuPoint, setMenuPoint] = useState<MenuPoint | null>(null)
   /** 没有子分类就不给折叠箭头（只留同宽空位，图标仍对齐）。 */
   const hasChildren = node.children.length > 0
-  /** 群组文库只读：引用解析只认用户文库，群组分类不给「添加整目录引用」。 */
-  const canInsert = collection.library === undefined
 
   const row = (
     <div
       onClick={() => ctx.select(collection)}
-      onContextMenu={canInsert
-        ? (event) => {
-            event.preventDefault()
-            setMenuOpen(true)
-          }
-        : undefined}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        // 右键先选中该目录：菜单动作按整目录生成，右侧列表也同步切到它，
+        // 避免「高亮 / 列表还停在上一个目录」的错觉。
+        ctx.select(collection)
+        const { clientX, clientY } = event
+        const rect = event.currentTarget.getBoundingClientRect()
+        const inside = clientX >= rect.left && clientX <= rect.right
+          && clientY >= rect.top && clientY <= rect.bottom
+        // 正常右键落在行内；键盘触发（没有指针坐标）时贴到行尾。
+        setMenuPoint(inside ? { x: clientX, y: clientY } : { x: rect.left, y: rect.bottom })
+      }}
       style={{ ...rowStyle, ...rowIndent(depth), ...rowBackground(isSelected(ctx, collection)) }}
     >
       {hasChildren && !filtering
@@ -392,20 +583,15 @@ function CollectionRows({ ctx, node, depth }: { ctx: TreeCtx; node: CollectionNo
 
   return (
     <>
-      {canInsert ? (
-        <Menu
-          open={menuOpen}
-          onClose={() => setMenuOpen(false)}
-          onSelect={(id) => {
-            setMenuOpen(false)
-            if (id === 'insert-collection') ctx.onInsertCollection(collection)
-          }}
-          align="end"
-          portal
-          items={[{ id: 'insert-collection', label: ctx.t('action.insertCollection'), icon: <ChatIcon size={15} /> }]}
-          anchor={row}
+      {row}
+      {menuPoint !== null && (
+        <CollectionContextMenu
+          ctx={ctx}
+          collection={collection}
+          point={menuPoint}
+          onClose={() => setMenuPoint(null)}
         />
-      ) : row}
+      )}
       {open && node.children.map((child) => (
         <CollectionRows key={child.collection.key} ctx={ctx} node={child} depth={depth + 1} />
       ))}
@@ -557,6 +743,8 @@ export function CollectionTree(props: Props): ReactElement {
     searches,
     onSelectCollection,
     onInsertCollection,
+    onReviewItems,
+    onDigestItems,
   } = props
 
   /** 展开集合在 store 里（默认展开根节点），重挂面板后原样恢复。 */
@@ -595,6 +783,8 @@ export function CollectionTree(props: Props): ReactElement {
     toggle: toggleTreeNode,
     select: onSelectCollection,
     onInsertCollection,
+    onReviewItems,
+    onDigestItems,
     onToggleGroup: toggleGroup,
   }
 

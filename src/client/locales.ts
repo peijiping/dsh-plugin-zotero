@@ -120,6 +120,9 @@ const zh: Record<string, string> = {
   'tree.emptyFiltered': '没有匹配的分类',
   'tree.groups': '群组文库',
   'tree.searches': '已保存搜索',
+  'tree.menuLoading': '正在读取目录条目…',
+  'tree.menuLoadFailed': '读取目录条目失败',
+  'tree.copyLimit': '目录条目超过 {n} 条，暂不能复制参考文献',
 
   'list.searchPlaceholder': '搜索当前范围的标题 / 摘要',
   'search.modeLabel': '搜索范围',
@@ -1006,6 +1009,9 @@ const en: Record<string, string> = {
   'tree.emptyFiltered': 'No collections match',
   'tree.groups': 'Group Libraries',
   'tree.searches': 'Saved Searches',
+  'tree.menuLoading': 'Loading collection items…',
+  'tree.menuLoadFailed': 'Failed to load collection items',
+  'tree.copyLimit': 'More than {n} items in this collection; copying references is unavailable',
 
   'list.searchPlaceholder': 'Search title / abstract in the current selection',
   'search.modeLabel': 'Search scope',

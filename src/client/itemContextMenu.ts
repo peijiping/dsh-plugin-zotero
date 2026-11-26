@@ -15,7 +15,7 @@ export type ItemMenuIconName = 'chat' | 'copy' | 'review' | 'text' | 'numbers' |
 export interface ItemMenuEntry {
   id: string
   label: string
-  icon: ItemMenuIconName
+  icon?: ItemMenuIconName
   disabled?: boolean
   submenu?: { id: string; label: string; icon: ItemMenuIconName }[]
 }
@@ -26,6 +26,12 @@ export const ITEM_MENU_COPY = 'copy-bibliography'
 /** 汇总笔记与标注：单选、多选同一项，文案不带篇数。 */
 export const ITEM_MENU_DIGEST = 'digest-annotations'
 export const ITEM_MENU_REVIEW = 'review-items'
+/** 树目录右键菜单里的首项：整目录加入对话（与条目菜单的「把条目加入对话」对应）。 */
+export const COLLECTION_MENU_INSERT = 'insert-collection'
+/** 树目录右键菜单读取目录条目时的占位项（置灰，不进回调）。 */
+export const ITEM_MENU_LOADING = 'menu-loading'
+/** 条目数超过复制上限时的说明项（置灰）。 */
+export const ITEM_MENU_COPY_LIMIT = 'copy-limit'
 
 /**
  * 单选：加入对话 + 复制参考文献 + 汇总笔记与标注；多选再补一项综述对比。

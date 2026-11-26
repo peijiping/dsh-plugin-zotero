@@ -312,6 +312,8 @@ export function ZoteroPane({ t, inputActions, sessions, sessionId, onOpenItem }:
                 searches={searches}
                 onSelectCollection={selectCollection}
                 onInsertCollection={insertion.insertCollection}
+                onReviewItems={inputActions === undefined ? undefined : startReview}
+                onDigestItems={inputActions === undefined ? undefined : startDigest}
               />
             )}
           </div>

@@ -14,26 +14,23 @@
  * 行与行之间用一条浅色细线分隔。
  */
 
-import { useLayoutEffect, useRef, useState, type ReactElement } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, type ReactElement } from 'react'
 
-import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import { isBibliographyStyle, MAX_BIBLIOGRAPHY_ITEMS, type BibliographyStyle } from '../zotero/bibliography'
 import type { ZoteroChildKind, ZoteroCollection, ZoteroItemSummary, ZoteroSearchMode } from '../zotero/types'
-import { fetchBibliography } from './api'
-import { CHAT_ICON_PATH } from './actionIcons'
-import { bibliographySkipReason, bibliographyStyles, formatBibliography } from './bibliography'
-import { writeClipboard } from './clipboard'
-import { useDismiss } from './dismiss'
+import { ItemMenuIcon } from './actionIcons'
+import { bibliographySkipReason, bibliographyStyles } from './bibliography'
+import { copyBibliography } from './copyBibliography'
 import { ChildKindIcon, childKindLabel, ItemTypeIcon, itemTypeLabel } from './itemType'
+import { MenuAtPoint, type MenuPoint } from './pointMenu'
 import {
   ITEM_MENU_DIGEST,
   ITEM_MENU_INSERT,
   ITEM_MENU_REVIEW,
   itemMenuEntries,
   type ItemMenuEntry,
-  type ItemMenuIconName,
 } from './itemContextMenu'
 import type { Translate } from './locales'
 import { tpl } from './locales'
@@ -149,14 +146,7 @@ const ITEM_CSS = [
   '.dsh-zotero-item-shell:hover{background:rgba(127,127,127,0.08)}',
   '.dsh-zotero-disclosure:hover{opacity:0.8}',
   '.dsh-zotero-child-row:hover{background:rgba(127,127,127,0.1)}',
-  '.dsh-zotero-item-context [role="menu"]:not([role="menu"] [role="menu"]){position:absolute;inset:0 auto auto 0;position-area:none;margin:0}',
-  '.dsh-zotero-context-open-left [role="menu"] [role="menu"]{left:auto;right:calc(100% + 10px)}',
-  '.dsh-zotero-context-open-left [role="menu"] [role="menu"]::before{left:auto;right:-10px}',
 ].join('')
-
-const ITEM_MENU_GUTTER = 8
-/** 给包含国标样式全称的子菜单留出横向空间。 */
-const ITEM_SUBMENU_SPACE = 250
 
 /** 选中行底色：整行（外壳）通栏染色，色值与列表 chip 同一支蓝。 */
 const ITEM_SELECTED_BG = 'rgba(80,140,255,0.16)'
@@ -405,92 +395,17 @@ const chipRemoveStyle: React.CSSProperties = {
   lineHeight: 1,
 }
 
-const ITEM_MENU_ICON_PATHS: Record<ItemMenuIconName, string> = {
-  chat: CHAT_ICON_PATH,
-  copy: 'M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM3 16V5a2 2 0 0 1 2-2h10',
-  // 左右两份文档并排：与「合并成一篇」的图标区分开，用于「综述对比」。
-  review: 'M4 4h7v16H4zM13 4h7v16h-7zM6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2',
-  // 横线加勾：与「整篇全文」的纯横线区分，表示「挑出其中有内容的那些」。
-  digest: 'M3 6h9M3 11h9M3 16h5M15.5 12.5l2 2 3.5-4',
-  text: 'M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6',
-  numbers: 'M10 6h10m-10 6h10m-10 6h10M3 4h2v4m-2 0h4m-4 3h3a1 1 0 0 1 0 2h-2l-1 2h4',
-}
-
-function ItemMenuIcon({ name }: { name: ItemMenuIconName }): ReactElement {
-  return (
-    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth={1.65} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d={ITEM_MENU_ICON_PATHS[name]} />
-    </svg>
-  )
-}
-
 function toMenuEntry(entry: ItemMenuEntry): MenuEntry {
   return {
     id: entry.id,
     label: entry.label,
     disabled: entry.disabled,
-    icon: <ItemMenuIcon name={entry.icon} />,
+    icon: entry.icon === undefined ? undefined : <ItemMenuIcon name={entry.icon} />,
     submenu: entry.submenu?.map((style) => ({
       ...style,
       icon: <ItemMenuIcon name={style.icon} />,
     })),
   }
-}
-
-interface MenuPoint {
-  x: number
-  y: number
-}
-
-function ItemContextMenu({ point, items, onClose, onSelect }: {
-  point: MenuPoint
-  items: readonly MenuEntry[]
-  onClose(): void
-  onSelect(id: string): void
-}): ReactElement {
-  const containerRef = useRef<HTMLDivElement>(null)
-  // 宿主处理外部点击，包括可能独立挂载的子菜单。这里只补全 Esc 关闭。
-  useDismiss(true, containerRef, onClose, { pinned: true })
-
-  useLayoutEffect(() => {
-    const container = containerRef.current
-    const menu = container?.querySelector<HTMLElement>('[role="menu"]')
-    if (container === null || !menu) return
-    const position = (): void => {
-      const { width, height } = menu.getBoundingClientRect()
-      const { clientWidth, clientHeight } = document.documentElement
-      const x = Math.max(ITEM_MENU_GUTTER, Math.min(point.x, clientWidth - width - ITEM_MENU_GUTTER))
-      const y = Math.max(ITEM_MENU_GUTTER, Math.min(point.y + 4, clientHeight - height - ITEM_MENU_GUTTER))
-      container.style.left = `${x}px`
-      container.style.top = `${y}px`
-      container.classList.toggle('dsh-zotero-context-open-left', x + width + ITEM_SUBMENU_SPACE > clientWidth)
-    }
-    position()
-    const observer = new ResizeObserver(position)
-    observer.observe(menu)
-    window.addEventListener('resize', position)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', position)
-    }
-  }, [point])
-
-  return createPortal(
-    // 直接摆放整个菜单，宿主 Menu 仍负责交互和绘制。
-    <div ref={containerRef} className="dsh-zotero-item-context"
-      style={{ display: 'flex', position: 'fixed', left: point.x, top: point.y, zIndex: 1000 }}>
-      <Menu
-        open
-        portal={false}
-        onClose={onClose}
-        onSelect={onSelect}
-        items={items}
-        anchor={<span aria-hidden="true" />}
-      />
-    </div>,
-    document.body,
-  )
 }
 
 function ItemRow({ t, item, selected, onSelect, onOpen, menuItems, onMenuSelect }: {
@@ -588,7 +503,7 @@ function ItemRow({ t, item, selected, onSelect, onOpen, menuItems, onMenuSelect 
         </div>
       </div>
       {menuPoint !== null && (
-        <ItemContextMenu
+        <MenuAtPoint
           point={menuPoint}
           items={menuItems}
           onClose={() => setMenuPoint(null)}
@@ -677,25 +592,17 @@ export function ItemList(props: Props): ReactElement {
     setCopying(true)
     setCopyResult(null)
     try {
-      const result = await fetchBibliography(selection.map(({ key }) => key), style)
-      const skippedKeys = new Set(result.skippedKeys)
-      const skipped = selection.filter(({ key }) => skippedKeys.has(key))
-      if (result.count > 0) {
-        const formatted = formatBibliography(result.html)
-        if (formatted.count !== result.count || formatted.text === '') {
-          showToast(t('toast.copyFailed'))
-          return
-        }
-        if (!await writeClipboard(formatted.text, formatted.html)) {
-          showToast(t('toast.copyFailed'))
-          return
-        }
+      const outcome = await copyBibliography(selection, style)
+      if (!outcome.ok) {
+        if (outcome.reason === 'clipboard') showToast(t('toast.copyFailed'))
+        else showToast(tpl(t('bibliography.failed'), { message: outcome.message }))
+        return
       }
-      if (selection.length > 1 || skipped.length > 0) setCopyResult({ count: result.count, style, skipped })
-      else showToast(tpl(t('bibliography.copied'), { n: result.count }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      showToast(tpl(t('bibliography.failed'), { message }))
+      if (selection.length > 1 || outcome.skipped.length > 0) {
+        setCopyResult({ count: outcome.count, style, skipped: outcome.skipped })
+      } else {
+        showToast(tpl(t('bibliography.copied'), { n: outcome.count }))
+      }
     } finally {
       setCopying(false)
     }

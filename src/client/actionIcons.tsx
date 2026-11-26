@@ -7,6 +7,8 @@
 
 import type { ReactElement } from 'react'
 
+import type { ItemMenuIconName } from './itemContextMenu'
+
 /**
  * 「加入对话」统一图标：聊天气泡。
  *
@@ -77,6 +79,27 @@ export function TranslateIcon({ size = 12 }: { size?: number }): ReactElement {
       <circle cx="8" cy="8" r="5.8" />
       <path d="M2.2 8h11.6" />
       <path d="M8 2.2c1.6 1.5 2.4 3.5 2.4 5.8s-.8 4.3-2.4 5.8c-1.6-1.5-2.4-3.5-2.4-5.8S6.4 3.7 8 2.2Z" />
+    </svg>
+  )
+}
+
+const ITEM_MENU_ICON_PATHS: Record<ItemMenuIconName, string> = {
+  chat: CHAT_ICON_PATH,
+  copy: 'M8 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM3 16V5a2 2 0 0 1 2-2h10',
+  // 左右两份文档并排：与「合并成一篇」的图标区分开，用于「综述对比」。
+  review: 'M4 4h7v16H4zM13 4h7v16h-7zM6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2',
+  // 横线加勾：与「整篇全文」的纯横线区分，表示「挑出其中有内容的那些」。
+  digest: 'M3 6h9M3 11h9M3 16h5M15.5 12.5l2 2 3.5-4',
+  text: 'M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6',
+  numbers: 'M10 6h10m-10 6h10m-10 6h10M3 4h2v4m-2 0h4m-4 3h3a1 1 0 0 1 0 2h-2l-1 2h4',
+}
+
+/** 条目 / 目录右键菜单的动作图标（与 {@link ItemMenuIconName} 一一对应）。 */
+export function ItemMenuIcon({ name }: { name: ItemMenuIconName }): ReactElement {
+  return (
+    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.65} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d={ITEM_MENU_ICON_PATHS[name]} />
     </svg>
   )
 }
