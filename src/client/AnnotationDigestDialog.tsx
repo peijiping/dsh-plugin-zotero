@@ -233,6 +233,7 @@ export function AnnotationDigestDialog({ t, items, onClose, onInsert }: Props): 
           notes: paper.notes.map((note) => note.key),
           annTotal: paper.annotationTotal,
           noteTotal: paper.noteTotal,
+          evidenceOffset: paper.evidenceOffset,
         })),
         batch: [index + 1, plan.batches.length],
         range: [Math.min(...numbers), Math.max(...numbers)],

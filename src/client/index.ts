@@ -27,7 +27,7 @@ import { ensureItemTitle, rememberItemTitle, useItemTitle } from './itemTitles'
 import { dicts, NS, type Translate } from './locales'
 import { resetPaneStore, showToast } from './paneStore'
 import { EVIDENCE_LINK_PREFIX, evidenceFromHref, type EvidenceTarget } from './evidence'
-import { linkReviewAnswers } from './reviewAnswerLinks'
+import { linkEvidenceAnswers } from './answerEvidenceLinks'
 import { loadReviewEvidence, parseReviewEvidenceHref, type ReviewEvidenceRef } from './reviewEvidence'
 import { createZoteroSource, type SessionsFace, type ZoteroTriggerSource } from './reference'
 import { SettingsNavIcon } from './SettingsNavIcon'
@@ -195,11 +195,12 @@ export function apply(ctx: ClientContext): void {
     )
   }
 
+  let evidenceRequest = 0
   function openEvidence(target: EvidenceTarget): void {
-    ctx.sidebarRight.openResource(`${ITEM_ADDRESS_PREFIX}${target.key}`, { params: { evidence: target } })
+    evidenceRequest += 1
+    ctx.sidebarRight.openResource(`${ITEM_ADDRESS_PREFIX}${target.key}`, { params: { evidence: { ...target } } })
   }
 
-  let evidenceRequest = 0
   function openReviewEvidence(ref: ReviewEvidenceRef): void {
     const request = ++evidenceRequest
     void loadReviewEvidence(ref).catch(() => null).then((target) => {
@@ -223,7 +224,6 @@ export function apply(ctx: ClientContext): void {
         openReviewEvidence(review)
         return
       }
-      evidenceRequest += 1
       const target = evidenceFromHref(href)
       if (target === null) showToast(t('review.evidenceUnavailable'))
       else openEvidence(target)
@@ -236,7 +236,7 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-plugin-zotero: open evidence')
 
-  ctx.effect(linkReviewAnswers, 'dsh-plugin-zotero: link review evidence in answers')
+  ctx.effect(linkEvidenceAnswers, 'dsh-plugin-zotero: link evidence in answers')
 
   // 引用 chip 的展开器：面板插的 chip 只带 key，提交时由这个 codec 现取文本。
   ctx.effect(

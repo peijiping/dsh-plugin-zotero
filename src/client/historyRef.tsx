@@ -18,10 +18,11 @@ import { useMemo, useState, type CSSProperties, type MouseEvent } from 'react'
 import { HoverCard, Modal, ReferenceChip } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { Translate } from './locales'
-import { evidenceDisplayText, evidenceIn, type EvidenceTarget } from './evidence'
+import { evidenceDisplayText, evidenceHref, evidenceIn, type EvidenceTarget } from './evidence'
+import { digestEvidenceIn } from './digestEvidence'
 import { tpl } from './locales'
 import { itemKeyOf } from './historyRefKey'
-import { REVIEW_CITATION_DATA } from './reviewAnswerLinks'
+import { DIGEST_CITATION_DATA, REVIEW_CITATION_DATA, type DigestCitation } from './answerEvidenceLinks'
 import { displayReviewEvidence, reviewEvidenceGroups, type ReviewEvidenceRef } from './reviewEvidence'
 import { CITATION_CLOSE, CITATION_OPEN } from './reference'
 import { Button } from './ui'
@@ -166,8 +167,11 @@ export function createHistoryRefNode(
 
     const body = citationBody(raw)
     const itemKey = itemKeyOf(body)
-    const evidence = evidenceIn(body)
-    const titles = evidence.length > 0 ? citationTitles(body) : undefined
+    const digest = useMemo(() => digestEvidenceIn(t, body), [t, body])
+    const evidence = digest?.map(({ target }) => target) ?? evidenceIn(body)
+    const titles = digest === null && evidence.length > 0 ? citationTitles(body) : undefined
+    const digestCitations = useMemo(() => digest?.map(({ target, label, paperKey }): DigestCitation =>
+      [target.id, evidenceHref(target), label, paperKey]), [digest])
     const groups = useMemo(() => reviewEvidenceGroups(body), [body])
     const displayText = groups.length === 0 ? evidenceDisplayText(body) : displayReviewEvidence(body)
     const references = groups.flatMap(({ links }) => links)
@@ -205,10 +209,10 @@ export function createHistoryRefNode(
           key={target.id}
           variant="outline"
           size="sm"
-          style={OPEN_BUTTON_STYLE}
+          style={digest === null ? OPEN_BUTTON_STYLE : { ...OPEN_BUTTON_STYLE, marginTop: 0 }}
           onClick={() => { setOpen(false); onOpenEvidence(target) }}
         >
-          {tpl(t('evidence.open'), { name: name + location })}
+          {digest?.[index].label ?? tpl(t('evidence.open'), { name: name + location })}
         </Button>
       )
     }) : itemKey === null ? null : (
@@ -221,8 +225,15 @@ export function createHistoryRefNode(
         {t('history.openItem')}
       </Button>
     )
+    const actions = reviewActions ?? openOriginal
+    const actionList = digest !== null && actions !== null
+      ? <div className="dsh-zp-digest-evidence-actions">{actions}</div>
+      : actions
     return (
       <>
+        {digestCitations !== undefined && digestCitations.length > 0 && (
+          <span hidden {...{ [DIGEST_CITATION_DATA]: JSON.stringify(digestCitations) }} />
+        )}
         {run !== undefined && (
           <span hidden {...{
             [REVIEW_CITATION_DATA]: [run, ...references.filter((ref) => ref.run === run).map((ref) => ref.id)].join(' '),
@@ -240,7 +251,7 @@ export function createHistoryRefNode(
           content={(
             <div style={HOVER_CARD_STYLE}>
               <div style={HOVER_BODY_STYLE}>{displayText}</div>
-              {reviewActions ?? openOriginal}
+              {actionList}
             </div>
           )}
         />
@@ -253,8 +264,8 @@ export function createHistoryRefNode(
             closeLabel={t('action.close')}
           >
             <pre style={MODAL_BODY_STYLE}>{displayText}</pre>
-            {(reviewActions ?? openOriginal) && (
-              <div className="dsh-zp-history-actions">{reviewActions ?? openOriginal}</div>
+            {actionList && (
+              <div className="dsh-zp-history-actions">{actionList}</div>
             )}
           </Modal>
         )}

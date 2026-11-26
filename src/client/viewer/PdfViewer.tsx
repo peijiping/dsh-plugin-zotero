@@ -863,16 +863,19 @@ export function PdfViewer(props: DocumentRendererProps): ReactElement {
   }
 
   function locate(annotationKey: string): boolean {
-    const annotation = annotations.find((item) => item.key === annotationKey)
-    const pageIndex = annotation?.position?.pageIndex
+    const position = annotations.find((item) => item.key === annotationKey)?.position
     const element = scrollRef.current
-    if (annotation === undefined || pageIndex === undefined || element === null) return false
-    const target = element.querySelector<HTMLElement>(`.page[data-page-number="${pageIndex + 1}"]`)
-    if (target === null) return false
-    const targetRect = target.getBoundingClientRect()
+    if (position == null || element === null || !pagesSized) return false
+    const page = viewerApiRef.current?.viewer.getPageView(position.pageIndex)
+    if (page === undefined) return false
+    const targetRect = page.div.getBoundingClientRect()
     const box = element.getBoundingClientRect()
+    const firstRect = position.rects[0]
+    const mark = firstRect === undefined ? undefined : viewportBox(page.viewport, firstRect)
+    const center = mark === undefined ? targetRect.height / 2 : mark.top + mark.height / 2
+    resumedUrlRef.current = url
     element.scrollTo({
-      top: element.scrollTop + targetRect.top - box.top - element.clientHeight / 2 + targetRect.height / 2,
+      top: element.scrollTop + targetRect.top - box.top + center - element.clientHeight / 2,
       behavior: 'smooth',
     })
     setFlashKey(annotationKey)

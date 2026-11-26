@@ -303,6 +303,8 @@ export interface AnnotationSetRef {
     /** 本篇被选中的总数（跨批），供续批写「本篇共 N 条」。 */
     annTotal?: number
     noteTotal?: number
+    /** 此篇在此前批次中已有几条证据。旧草稿不含此字段。 */
+    evidenceOffset?: number
   }[]
   /** 本批序号 / 总批数，1 基。 */
   batch: [number, number]

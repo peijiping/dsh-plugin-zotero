@@ -477,8 +477,11 @@ function sectionPart(t: Translate, continued: boolean, hasMore: boolean, total: 
 }
 
 /** 一篇的块头 + 标注段 + 笔记段。 */
-function digestPaperText(t: Translate, paper: DigestPaper): { text: string; warnings: string[] } {
+function digestPaperText(t: Translate, paper: DigestPaper, number: number): { text: string; warnings: string[] } {
   const warnings: string[] = []
+  // Drafts saved before numbering may lack the offset for a continuation.
+  let evidence = paper.evidenceOffset ?? (paper.continued ? undefined : 0)
+  const nextId = (): string | undefined => evidence === undefined ? undefined : `E${number}.${++evidence}`
   const head = tpl(t('digest.cmp.paper'), {
     title: paper.title,
     key: paper.key,
@@ -506,12 +509,14 @@ function digestPaperText(t: Translate, paper: DigestPaper): { text: string; warn
       if (comment !== '' && quote !== comment) {
         lines.push(`  ${tpl(t('digest.cmp.comment'), { value: comment })}`)
       }
-      const target = makeEvidence(paper.key, {
+      const location = {
         attachmentKey: annotation.attachmentKey,
         annotationKey: annotation.key,
         page: annotation.position === null ? undefined : annotation.position.pageIndex + 1,
         pageLabel: annotation.pageLabel || undefined,
-      })
+      }
+      const id = nextId()
+      const target = id === undefined ? makeEvidence(paper.key, location) : { ...location, key: paper.key, id }
       lines.push(`  ${tpl(t('digest.cmp.evidence'), {
         link: evidenceLink(target),
         page: page === '' ? '' : tpl(t('digest.cmp.evidencePage'), { page }),
@@ -532,6 +537,7 @@ function digestPaperText(t: Translate, paper: DigestPaper): { text: string; warn
         chars: Array.from(body).length,
         date,
         key: note.key,
+        id: nextId() ?? `N-${note.key}`,
       }))
       lines.push(`  ${tpl(t('digest.cmp.noteBody'), { value: body })}`)
       if (note.truncated) {
@@ -563,8 +569,8 @@ export function annotationSetText(
   ].join('\n'))
 
   const warnings: string[] = []
-  for (const paper of batch.papers) {
-    const compiled = digestPaperText(t, paper)
+  for (const [index, paper] of batch.papers.entries()) {
+    const compiled = digestPaperText(t, paper, paper.number ?? ctx.from + index)
     blocks.push(compiled.text)
     warnings.push(...compiled.warnings)
   }

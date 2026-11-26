@@ -64,6 +64,10 @@ export interface DigestPaper {
   /** 本批要投递的条目。 */
   annotations: ZoteroAnnotation[]
   notes: ZoteroNote[]
+  /** 本篇在整组中的编号。提交时用于保留已删除文献之前的编号。 */
+  number?: number
+  /** 本篇在此前批次中已安排的标注和笔记数。 */
+  evidenceOffset?: number
   /** 本篇被选中的总数（跨批），用于「续，本篇共 N 条」。 */
   annotationTotal: number
   noteTotal: number
@@ -199,6 +203,7 @@ export function packBatches(papers: readonly DigestPaperInput[]): DigestBatch[] 
         year: paper.year,
         annotations: [],
         notes: [],
+        evidenceOffset: cursor,
         annotationTotal: paper.annotations.length,
         noteTotal: paper.notes.length,
         continued,

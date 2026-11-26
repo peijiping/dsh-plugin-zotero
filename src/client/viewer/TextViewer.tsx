@@ -433,7 +433,7 @@ export function TextViewer({
         <p style={emptyStyle}>{t('detail.noFulltext')}</p>
       ) : selfNote !== null ? (
         <div style={noteStyle}>
-          <div className="dsh-zotero-note" dangerouslySetInnerHTML={{ __html: noteParsed?.html ?? selfNote.html }} />
+          <div ref={contentRef} className="dsh-zotero-note" dangerouslySetInnerHTML={{ __html: noteParsed?.html ?? selfNote.html }} />
           {selfNote.truncated && <div style={truncatedStyle}>{t('detail.noteTruncated')}</div>}
         </div>
       ) : (

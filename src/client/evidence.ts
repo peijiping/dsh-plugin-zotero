@@ -22,9 +22,11 @@ export interface EvidenceTarget extends EvidenceLocation {
 }
 
 export const EVIDENCE_LINK_PREFIX = 'https://zotero-evidence.invalid/'
+export const DIGEST_EVIDENCE_ID = String.raw`E[1-9]\d{0,5}\.[1-9]\d{0,5}`
 const KEY = /^[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}$/u
-const ID = /^E-[0-9a-f]{12}$/u
-const LINK = /\[(E-[0-9a-f]{12})\]\((https:\/\/zotero-evidence\.invalid\/[A-Za-z0-9_-]{1,2400})\)/gu
+const ANNOTATION_ID = `E-[0-9a-f]{12}|${DIGEST_EVIDENCE_ID}`
+const ID = new RegExp(`^(?:${ANNOTATION_ID}|N-[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8})$`, 'u')
+const LINK = new RegExp(String.raw`\[(${ANNOTATION_ID})\]\((https://zotero-evidence\.invalid/[A-Za-z0-9_-]{1,2400})\)`, 'gu')
 
 export function makeEvidence(key: string, location: EvidenceLocation = {}): EvidenceTarget {
   const random = crypto.getRandomValues(new Uint8Array(6))
@@ -36,11 +38,20 @@ export function makeEvidence(key: string, location: EvidenceLocation = {}): Evid
     : target
 }
 
-export function evidenceLink(target: EvidenceTarget): string {
+/** Notes are directly addressable as Zotero items, including child notes. */
+export function noteEvidence(key: string, quote?: string, id = `N-${key}`): EvidenceTarget {
+  return { id, key, quote: quote?.slice(0, 240) }
+}
+
+export function evidenceHref(target: EvidenceTarget): string {
   const bytes = new TextEncoder().encode(JSON.stringify(target))
   const encoded = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
     .replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '')
-  return `[${target.id}](${EVIDENCE_LINK_PREFIX}${encoded})`
+  return EVIDENCE_LINK_PREFIX + encoded
+}
+
+export function evidenceLink(target: EvidenceTarget): string {
+  return `[${target.id}](${evidenceHref(target)})`
 }
 
 function positive(value: unknown): value is number {
@@ -60,6 +71,7 @@ export function evidenceFromHref(href: string): EvidenceTarget | null {
     const decoded = atob(encoded.replace(/-/gu, '+').replace(/_/gu, '/'))
     const value = JSON.parse(new TextDecoder().decode(Uint8Array.from(decoded, (char) => char.charCodeAt(0))))
     if (typeof value?.key !== 'string' || !KEY.test(value.key) || typeof value.id !== 'string' || !ID.test(value.id)) return null
+    if (value.id.startsWith('N-') && value.id !== `N-${value.key}`) return null
     const target: EvidenceTarget = { key: value.key, id: value.id }
     if (typeof value.attachmentKey === 'string' && KEY.test(value.attachmentKey)) target.attachmentKey = value.attachmentKey
     if (typeof value.annotationKey === 'string' && KEY.test(value.annotationKey)) target.annotationKey = value.annotationKey

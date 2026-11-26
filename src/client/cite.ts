@@ -479,7 +479,9 @@ function parseAnnotationSetRef(body: string): AnnotationSetRef {
     Array.isArray(input) && input.every((item) => typeof item === 'string' && item !== '')
   const papersOk = Array.isArray(ref.papers) && ref.papers.length > 0
     && ref.papers.every((paper) => typeof paper?.key === 'string' && paper.key !== ''
-      && strings(paper.anns) && strings(paper.notes))
+      && strings(paper.anns) && strings(paper.notes)
+      && (paper.evidenceOffset === undefined
+        || (Number.isSafeInteger(paper.evidenceOffset) && paper.evidenceOffset >= 0)))
   const optionalOk = [ref.continued, ref.more].every((list) => list === undefined || strings(list))
   const valid = papersOk && optionalOk
     && numbers(ref.batch, 2) && numbers(ref.range, 2) && numbers(ref.total, 4)
@@ -531,7 +533,7 @@ export async function annotationSetCitation(
   }
 
   const papers: DigestPaper[] = []
-  for (const entry of ref.papers) {
+  for (const [index, entry] of ref.papers.entries()) {
     const detail = loaded.get(entry.key)
     if (detail === undefined) continue
     const annotations = pickByKeys(entry.anns, new Map(detail.annotations.map((item) => [item.key, item])))
@@ -543,6 +545,8 @@ export async function annotationSetCitation(
       title: detail.title,
       creators: detail.creators.join('、'),
       year: detail.year,
+      number: ref.range[0] + index,
+      evidenceOffset: entry.evidenceOffset,
       annotations,
       notes,
       annotationTotal: entry.annTotal ?? annotations.length,

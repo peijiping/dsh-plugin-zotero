@@ -201,6 +201,21 @@ export const THEME_CSS = `
   max-height: 24vh;
   overflow: auto;
 }
+.dsh-zp-digest-evidence-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+}
+.dsh-zp-digest-evidence-actions > button {
+  justify-content: flex-start;
+  text-align: left;
+}
+.dsh-zp-answer-citation {
+  color: var(--dsw-alias-link, LinkText);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .dsh-zp-review-modal[role="dialog"] {
   width: min(960px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
