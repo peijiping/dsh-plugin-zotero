@@ -4,10 +4,12 @@
  * 为什么要代理：面板跑在宿主 webview 里，直连微软翻译端点会被 CORS 挡掉
  * （对方不返回 `access-control-allow-origin`），而 Node 侧 fetch 没有这个限制。
  *
- * 两条通道：
+ * 两条通道，**互不回退**：
  * - `bing`：Edge 浏览器翻译用的网页端点，免密钥，国内直连可用，默认引擎。
- * - `deepseek`：宿主 `ctx.llm` 里当前账号的 Flash 模型，译文质量更好，但占账号额度；
- *   任何一步取不到（没装 provider / 模型缺失 / 调用失败）都自动回落到 `bing`。
+ * - `deepseek`：宿主 `ctx.llm` 里当前账号的 Flash 模型，译文质量更好，但占账号额度。
+ *   没装 provider / 模型缺失 / 调用失败一律把原因抛给界面标红，不偷偷换成 Bing ——
+ *   静默换引擎会让译名口径悄悄变化，对要精确术语的场景比没有译文更坏。要换引擎
+ *   由用户在浮层标题栏的下拉里自己选（那一下是显式的，且立刻重译）。
  *
  * 目标语言默认 `auto`：按选区语种自动判向，中文 → 英文、其它语种 → 中文简体，
  * 与 Zotero 翻译插件的「中英互译」一致；设置里选了具体语言则按它来。
@@ -65,7 +67,7 @@ interface LlmLike {
 }
 
 export interface TranslateDeps {
-  /** 取宿主 llm 服务；取不到就只走 Bing。 */
+  /** 取宿主 llm 服务；取不到就报「模型通道不可用」，不退 Bing。 */
   getLlm(): unknown
 }
 
@@ -278,7 +280,7 @@ export function createTranslator(deps: TranslateDeps): (
 
     const signal = timeoutSignal(callerSignal)
     const result = await run(text, target, provider, deps, signal)
-    cacheSet(`${result.provider}|${target}|${text}`, result)
+    // 一路不再回退，所以「实际引擎」恒等于请求的引擎，`key` 一个就够。
     cacheSet(key, result)
     return result
   }
@@ -291,17 +293,22 @@ async function run(
   deps: TranslateDeps,
   signal: AbortSignal,
 ): Promise<TranslateResult> {
-  if (provider === 'deepseek') {
-    const llm = deps.getLlm() as LlmLike | undefined
-    if (llm !== undefined) {
-      try {
-        return { text: await translateWithDeepSeek(text, target, llm, signal), provider, target }
-      } catch (error) {
-        if (signal.aborted) throw error
-        // 模型通道不可用时不该让功能整体哑掉：退到 Bing，界面会显示实际引擎。
-        console.warn('[dsh-plugin-zotero] DeepSeek 翻译失败，回落到 Bing：', error)
-      }
-    }
+  if (provider === 'bing') {
+    return { text: await translateWithBing(text, target, signal), provider, target }
   }
-  return { text: await translateWithBing(text, target, signal), provider: 'bing', target }
+  const llm = deps.getLlm() as LlmLike | undefined
+  if (llm === undefined) {
+    throw new ZoteroError('translate_unavailable', '当前宿主没有模型服务（未安装或未启用 llm）')
+  }
+  // 失败就把原因抛上去：界面标红 + 重试按钮，换引擎是用户自己在浮层里点的显式动作。
+  try {
+    return { text: await translateWithDeepSeek(text, target, llm, signal), provider, target }
+  } catch (error) {
+    // 取消不是失败，别包装成「模型调用失败」。
+    if (signal.aborted) throw error
+    if (error instanceof ZoteroError) throw error
+    // provider 抛的是裸 Error（额度用尽、鉴权过期、网络断），不包装的话前端只能拿到
+    // 一个没有 code 的 500，最后只显示一句「翻译失败，请检查网络」，原因全丢。
+    throw new ZoteroError('translate_unavailable', `模型调用失败（${describe(error)}）`)
+  }
 }

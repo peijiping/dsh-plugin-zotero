@@ -202,7 +202,7 @@ export function TranslationCard(
       >
         <span style={titleStyle}>
           {t('translate.title')}
-          {/* 徽标是**实际**引擎：选了精翻但模型通道不可用时，这里会显示回落后的 Bing。 */}
+          {/* 徽标是**实际**引擎：不做自动回退，所以它恒等于本次请求的引擎。 */}
           {engineLabel === undefined
             ? null
             : <span style={engineStyle} title={t('translate.engine.actualHint')}>{engineLabel}</span>}

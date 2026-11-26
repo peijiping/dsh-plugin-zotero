@@ -128,7 +128,11 @@ export function useTranslation(t: Translate): TranslationController {
  * 参数类错误（选区过长、空文本）Host 给的中文文案最准确，直接用；其余（网络、
  * 服务端）统一一句「翻译失败」+ 重试按钮，不把 HTTP 细节糊到用户脸上。
  *
- * 唯一例外是「未知 action translate」：这是**宿主半还停在旧版本**（插件升级后没重启
+ * 例外是「引擎不可用」：Host 已经不回退到 Bing，若还只说一句「翻译失败，请检查
+ * 网络」，用户既不知道是网络还是账号模型挂了，也不知道该重试还是该换引擎。
+ * 这里带上 Host 的原因（本地化标题 + 原始细节）。
+ *
+ * 另一个例外是「未知 action translate」：这是**宿主半还停在旧版本**（插件升级后没重启
  * DSH）才会出现的 404，原样抛给用户只会得到一句看不懂的路由错误。
  */
 function messageOf(t: Translate, error: unknown): string {
@@ -136,6 +140,9 @@ function messageOf(t: Translate, error: unknown): string {
     if (error.code === 'bad_request') {
       if (error.message.includes('未知 action')) return t('translate.needRestart')
       return error.message
+    }
+    if (error.code === 'translate_unavailable') {
+      return `${t('translate.modelFailed')}：${error.message}`
     }
     return t('translate.failed')
   }

@@ -412,7 +412,7 @@ export function createAnnotations(input: {
 /** 引擎取值；与 Host `TranslateProvider`、设置页下拉、浮层下拉同步。 */
 export type TranslateProvider = 'bing' | 'deepseek'
 
-/** 译文与**实际**用到的引擎（DeepSeek 不可用时会回落到 bing）。 */
+/** 译文与实际使用的引擎（失败不回退，因此恒等于本次请求的引擎）。 */
 export interface TranslateResult {
   text: string
   provider: TranslateProvider
