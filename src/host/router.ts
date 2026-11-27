@@ -35,6 +35,7 @@ import { listRecent, loadPosition, loadViewState, RECENT_LIMIT, savePosition, sa
 import { authorize, writeChannelStatus } from '../zotero/write.js'
 import type { TranslateInput, TranslateResult } from './translate.js'
 import type { JournalRankInput, JournalRankOutcome } from './easyscholar.js'
+import type { JournalTagsInput, JournalTagsOutcome } from './journal-tags.js'
 import type {
   ApiEnvelope,
   ApiError,
@@ -82,6 +83,8 @@ export interface HandlerDeps {
    * 状态属于创建它的那个实例，不该散在路由层。
    */
   journalRank?: (input: JournalRankInput) => Promise<JournalRankOutcome>
+  /** 期刊标签归一查询：Style → 本地缓存 → easyScholar，由入口注入。 */
+  journalTags?: (input: JournalTagsInput) => Promise<JournalTagsOutcome>
 }
 
 /** 单条条目列表的条数上限，防止 Client 拉爆宿主。 */
@@ -125,6 +128,7 @@ const WRITE_ACTIONS = new Set([
   'translate',
   // 同样不改 Zotero 数据，但会把刊名发给 easyScholar，并发起外部网络请求。
   'journal-rank',
+  'journal-tags',
 ])
 
 /** 自定义写头 + JSON content-type：让任何跨源写都变成需要预检的非简单请求。 */
@@ -1038,6 +1042,27 @@ async function handleJournalRank(
   ok(res, await journalRank({ publicationName: name }))
 }
 
+/** 按刊名查归一标签（Style / 本地缓存 / API），一律 200 + status 表达业务语义。 */
+async function handleJournalTags(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HandlerDeps,
+): Promise<void> {
+  const journalTags = deps.journalTags
+  if (journalTags === undefined) {
+    throw new ZoteroError('internal_error', '期刊标签查询未就绪：插件入口没有注入查询器')
+  }
+  const record = await readJsonBody(req, JOURNAL_RANK_BODY_LIMIT)
+  const name = record.publicationName
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new ZoteroError('bad_request', 'publicationName 必须是非空字符串')
+  }
+  if (name.length > 300) {
+    throw new ZoteroError('bad_request', 'publicationName 过长')
+  }
+  ok(res, await journalTags({ publicationName: name }))
+}
+
 /**
  * action → 允许的 HTTP 方法。
  *
@@ -1079,6 +1104,7 @@ const ROUTE_METHODS = new Map<string, 'GET' | 'POST'>([
   ['review-evidence-save', 'POST'],
   ['translate', 'POST'],
   ['journal-rank', 'POST'],
+  ['journal-tags', 'POST'],
 ])
 
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
@@ -1225,6 +1251,9 @@ export function createHandler(
             return
           case 'journal-rank':
             await handleJournalRank(req, res, deps)
+            return
+          case 'journal-tags':
+            await handleJournalTags(req, res, deps)
             return
           default:
             fail(res, 404, 'bad_request', `未知 action ${action}`)

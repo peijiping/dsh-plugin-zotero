@@ -31,7 +31,7 @@ import {
   type ReactNode,
 } from 'react'
 
-import type { ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
+import type { JournalTags, ZoteroAnnotation, ZoteroItemDetail, ZoteroNote } from '../zotero/types'
 import { isBibliographicItem, isBibliographyStyle, type BibliographyStyle } from '../zotero/bibliography'
 import { AnnotationList } from './AnnotationList'
 import type { AnnotationFilter } from './annotationRuns'
@@ -48,11 +48,11 @@ import { itemFieldRows } from './itemFields'
 import { itemTypeLabel } from './itemType'
 import { tpl, type Translate } from './locales'
 import { NoteList } from './NoteList'
-import { fetchBibliography, fetchJournalRank, openJournalUrl, type JournalRank } from './api'
-import { extraChips, rankChips, readJournalMetrics, type MetricChip } from './journalMetrics'
+import { fetchBibliography, fetchJournalTags, openJournalUrl } from './api'
+import { extraChips, extraSupplementChips, journalTagChips, readJournalMetrics, type MetricChip } from './journalMetrics'
 import { journalLinks } from './journalLinks'
 import { showToast } from './paneStore'
-import { ACCENT, SECTION_TOGGLE_CLASS, TREE_ORANGE } from './styles'
+import { ACCENT, journalChipStyle, SECTION_TOGGLE_CLASS, TREE_ORANGE } from './styles'
 import { estimateTokens } from './tokens'
 import { OpenInZoteroIcon } from './viewer/OpenInZoteroIcon'
 import {
@@ -155,10 +155,10 @@ function Block({ t, label, hint, open, onToggle, action, children }: BlockProps)
  * `no_key` / `miss` 都不是错误：前者提示去设置页填密钥，后者说明这刊不在
  * easyScholar 库里 —— 静默跳过，不要制造「功能坏了」的错觉。
  */
-type RemoteRank =
+type TagsState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'ok'; rank: JournalRank }
+  | { kind: 'ok'; tags: JournalTags }
   | { kind: 'no_key' }
   | { kind: 'miss' }
   | { kind: 'failed'; message: string }
@@ -387,19 +387,19 @@ export function InfoPanel({
     : detail.journalAbbreviation.trim()
 
   /**
-   * 远程查询：仅在「浮层打开 + 库里没有指标 + 有刊名」时发起。
+   * 归一标签查询：浮层打开 + 有刊名就查。
    *
-   * 三个条件缺一不可 —— 收起浮层不该消耗查询额度；用户库里已有数据时也不该用
-   * 第三方结果盖掉他自己核对过的值（`extra` 优先，远程只做兜底）。
+   * 优先取 Zotero Style 算好的结果；没有才用本插件缓存，最后才打 easyScholar
+   * （结果写回本地缓存，供列表直接渲染）。库里 extra 的指标不再抢占这三枚胶囊，
+   * 但会作为补充项留在同一张卡里，且 extra 原文仍在字段表中。
    */
-  const [remote, setRemote] = useState<RemoteRank>({ kind: 'idle' })
+  const [tags, setTags] = useState<TagsState>({ kind: 'idle' })
 
   /**
    * 「重查」计数：点一下 +1，让下面那个 effect 重跑。
    *
-   * 不另加 force 参数去绕过 Host 的 6 小时缓存 —— 缓存命中是即时的，而真正
-   * 需要远端新数据的场景是「刚在设置页填好密钥」，那种情况 effect 重跑本身
-   * 就会重新读配置（`getSettings()` 是 volatile 的），不需要重启 DSH。
+   * 不另加 force 参数去绕过 Host 的缓存 —— 缓存命中是即时的，而真正需要远端
+   * 新数据的场景是「刚在设置页填好密钥」，effect 重跑本身就会读到新配置。
    */
   const [refreshNonce, setRefreshNonce] = useState(0)
 
@@ -413,29 +413,29 @@ export function InfoPanel({
   const [showSource, setShowSource] = useState(false)
 
   useEffect(() => {
-    if (!open || metrics !== null || journalName === '') {
-      setRemote({ kind: 'idle' })
+    if (!open || journalName === '') {
+      setTags({ kind: 'idle' })
       return
     }
     const controller = new AbortController()
-    setRemote({ kind: 'loading' })
-    void fetchJournalRank(journalName, controller.signal)
+    setTags({ kind: 'loading' })
+    void fetchJournalTags(journalName, controller.signal)
       .then((outcome) => {
         if (controller.signal.aborted) return
-        if (outcome.status === 'ok') setRemote({ kind: 'ok', rank: outcome.rank })
-        else if (outcome.status === 'no_key') setRemote({ kind: 'no_key' })
-        else if (outcome.status === 'miss') setRemote({ kind: 'miss' })
-        else setRemote({ kind: 'failed', message: outcome.message })
+        if (outcome.status === 'ok') setTags({ kind: 'ok', tags: outcome.tags })
+        else if (outcome.status === 'no_key') setTags({ kind: 'no_key' })
+        else if (outcome.status === 'miss') setTags({ kind: 'miss' })
+        else setTags({ kind: 'failed', message: outcome.message })
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
-        setRemote({
+        setTags({
           kind: 'failed',
           message: error instanceof Error ? error.message : String(error),
         })
       })
     return () => { controller.abort() }
-  }, [open, metrics, journalName, refreshNonce])
+  }, [open, journalName, refreshNonce])
 
   /**
    * 外部站点入口：四个站查的东西不重叠（指标 / 收录核验 / 投稿参考 / SJR），
@@ -483,44 +483,50 @@ export function InfoPanel({
   }
 
   /*
-   * 期刊指标卡：胶囊 + 一行操作。
+   * 期刊指标卡：三枚彩色胶囊（IF / SCI / 中科院）+ extra 里的补充项 + 一行操作。
    *
    * 为什么单独成块：这些数字评价的是**期刊**，不是这篇文献，跟上面的类型 / 作者 /
-   * 年份不是一类信息。浅底容器把它从元数据里拎出来，值改用胶囊 —— 形态本身就在
-   * 说「这是另一类东西」，而不是靠颜色暗示（绿色红色会被读成「好刊 / 烂刊」）。
-   *
-   * 来源优先级：条目 extra（用户自己库里、可能核对过）> easyScholar 远程查询。
+   * 年份不是一类信息。前 3 枚与 Zotero Style 列同款；中文期刊的知网口径、被引
+   * 等 Style 不显示的信息作为补充胶囊保留，来源不同不混成一枚。
    */
-  const chips: MetricChip[] = metrics !== null
-    ? extraChips(metrics)
-    : remote.kind === 'ok' ? rankChips(remote.rank) : []
+  const tagChips = tags.kind === 'ok' ? journalTagChips(tags.tags) : []
+  const supplements: MetricChip[] = metrics === null
+    ? []
+    : tagChips.length > 0 ? extraSupplementChips(metrics) : extraChips(metrics)
 
-  // 没有指标时用一句话说明原因：没密钥 / 查不到 / 出错。查到了就只显示胶囊。
+  // 全都没有时用一句话说明原因：没密钥 / 查不到 / 出错。查到了就只显示胶囊。
   let note: string | null = null
   let noteWarn = false
-  if (metrics === null && journalName !== '') {
-    if (remote.kind === 'loading') note = t('detail.querying')
-    else if (remote.kind === 'no_key') note = t('detail.noKeyHint')
-    else if (remote.kind === 'miss') note = t('detail.missHint')
-    else if (remote.kind === 'failed') {
-      note = remote.message
+  if (tagChips.length === 0 && supplements.length === 0 && journalName !== '') {
+    if (tags.kind === 'loading') note = t('detail.querying')
+    else if (tags.kind === 'no_key') note = t('detail.noKeyHint')
+    else if (tags.kind === 'miss') note = t('detail.missHint')
+    else if (tags.kind === 'failed') {
+      note = tags.message
       noteWarn = true
     }
   }
 
-  const showRetry = metrics === null && journalName !== '' && remote.kind !== 'loading'
-  if (chips.length > 0 || note !== null || journalQueryLinks.length > 0) {
+  const showRetry = tagChips.length === 0 && journalName !== '' && tags.kind !== 'loading'
+  if (tagChips.length > 0 || supplements.length > 0 || note !== null || journalQueryLinks.length > 0) {
     // ⓘ 的说明随来源变化：本地读的和第三方查的，责任完全不同。
-    const sourceHint = metrics !== null
-      ? t('detail.metricsSourceExtra')
-      : t('detail.metricsSourceRemote')
+    const sourceHint = tags.kind === 'ok'
+      ? t(tags.tags.source === 'style' ? 'detail.metricsSourceStyle'
+        : tags.tags.source === 'cache' ? 'detail.metricsSourceCache' : 'detail.metricsSourceApi')
+      : metrics !== null ? t('detail.metricsSourceExtra') : t('detail.metricsSourceRemote')
     metaRows.push({
       block: (
         <div style={metricCardStyle}>
           <div style={metricCardTitleStyle}>{t('detail.journalMetrics')}</div>
-          {(chips.length > 0 || note !== null) && (
+          {(tagChips.length > 0 || supplements.length > 0 || note !== null) && (
             <div style={chipGroupStyle}>
-              {chips.map((chip, index) => (
+              {tagChips.map((chip, index) => (
+                <span key={`${chip.label}-${String(index)}`} style={journalChipStyle(chip.tone)}>
+                  <span>{chip.label}</span>
+                  {chip.value !== '' && <span style={chipValueStyle}>{chip.value}</span>}
+                </span>
+              ))}
+              {supplements.map((chip, index) => (
                 <span key={`${chip.tagKey}-${String(index)}`} style={chipStyle}>
                   {chip.tagKey !== '' && <span style={chipTagStyle}>{t(chip.tagKey)}</span>}
                   {chip.value !== '' && (
@@ -552,7 +558,7 @@ export function InfoPanel({
                 onClick={() => { setRefreshNonce((prev) => prev + 1) }}
                 style={journalLinkStyle}
               >
-                {remote.kind === 'idle' ? t('detail.queryNow') : t('detail.queryRetry')}
+                {tags.kind === 'idle' ? t('detail.queryNow') : t('detail.queryRetry')}
               </button>
             )}
             <button

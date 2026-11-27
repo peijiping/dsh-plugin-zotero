@@ -53,6 +53,8 @@ const DISABLED_FIELD = 'disabledMcpTools'
 
 /** 写入总开关的配置字段名。 */
 const WRITE_FIELD = 'writeEnabled'
+/** 期刊标签是否优先复用 Zotero Style 的结果（与写权限无关，默认开）。 */
+const STYLE_TAGS_FIELD = 'styleJournalTags'
 
 /** 划词翻译的引擎字段名。 */
 const TRANSLATE_PROVIDER_FIELD = 'translateProvider'
@@ -144,6 +146,7 @@ interface CardState extends SettingsFormState {
   translateProvider: SettingsFieldState
   translateTarget: SettingsFieldState
   easyScholarKey: SettingsFieldState
+  styleJournalTags: SettingsFieldState
 }
 
 /** 席位注册时经 `inject()` 下发给组件的面。 */
@@ -251,6 +254,7 @@ export class ZoteroCardController {
         field.numeric ? settingsNumberField(field.name) : settingsTextField(field.name)),
       disabledToolsField(DISABLED_FIELD),
       booleanField(WRITE_FIELD),
+      booleanField(STYLE_TAGS_FIELD),
       enumField(TRANSLATE_PROVIDER_FIELD, TRANSLATE_PROVIDERS, 'bing'),
       enumField(TRANSLATE_TARGET_FIELD, TRANSLATE_TARGETS, 'auto'),
     ])
@@ -271,6 +275,7 @@ export class ZoteroCardController {
       translateProvider: this.form.field(TRANSLATE_PROVIDER_FIELD),
       translateTarget: this.form.field(TRANSLATE_TARGET_FIELD),
       easyScholarKey: this.form.field('easyScholarKey'),
+      styleJournalTags: this.form.field(STYLE_TAGS_FIELD),
     }
   }
 
@@ -534,6 +539,7 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
     state.translateTarget.text,
     // 漏一个字段就会「填完不保存」：这个指纹才是防抖自动保存的依赖。
     state.easyScholarKey.text,
+    state.styleJournalTags.text,
   ].join('\u0000')
 
   /**
@@ -838,6 +844,24 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
     </div>
   )
 
+  /** 期刊标签：优先复用 Zotero Style 已算好的结果，关掉就只用本插件缓存 / API。 */
+  const renderStyleTags = (): ReactElement => (
+    <div style={TOOL_ROW_STYLE}>
+      <div style={TOOL_INFO_STYLE}>
+        <span style={{ ...TOOL_NAME_STYLE, fontSize: 13, fontWeight: 600 }}>
+          {t('field.styleJournalTags')}
+        </span>
+        <span style={TOOL_DESC_STYLE}>{t('field.styleJournalTagsHint')}</span>
+      </div>
+      <Switch
+        checked={state.styleJournalTags.text === 'true'}
+        disabled={locked}
+        label={t('field.styleJournalTags')}
+        onChange={(next) => { props.edit(STYLE_TAGS_FIELD, next ? 'true' : 'false') }}
+      />
+    </div>
+  )
+
   /**
    * 「划词翻译」：引擎与目标语言都用原生下拉。
    *
@@ -923,6 +947,7 @@ export function ZoteroSettingsSection(props: CardProps): ReactElement {
       </section>
       <section style={SETTINGS_CARD_STYLE}>
         <SectionTitle style={CARD_TITLE_STYLE}>{t('group.journal')}</SectionTitle>
+        {renderStyleTags()}
         {JOURNAL_FIELDS.map(renderSecretField)}
       </section>
     </div>

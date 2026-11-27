@@ -23,6 +23,7 @@ import { createSnapshotHandler } from './host/snapshot.js'
 import { createStaticHandler } from './host/static.js'
 import { createTranslator } from './host/translate.js'
 import { createJournalRanker } from './host/easyscholar.js'
+import { createJournalTagsResolver } from './host/journal-tags.js'
 import { ZoteroWriteToolBridge } from './host/write-tools.js'
 import { listMcpTools } from './zotero/client.js'
 import { scheduleReviewEvidenceCleanup } from './zotero/review-evidence.js'
@@ -80,6 +81,8 @@ export const Config = Schema.object({
    * 明文存在本地 DSH 配置里：这是用户自己的第三方密钥，需要在设置页可见可改。
    */
   easyScholarKey: Schema.string().default('').volatile(),
+  /** 期刊标签优先复用 Zotero Style 算好的结果；没装或没查过时走本插件缓存 / API。 */
+  styleJournalTags: Schema.boolean().default(true).volatile(),
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
@@ -98,6 +101,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     translateProvider: config.translateProvider.get() === 'deepseek' ? 'deepseek' : 'bing',
     translateTarget: config.translateTarget.get() || TRANSLATE_TARGET,
     easyScholarKey: config.easyScholarKey.get().trim(),
+    styleJournalTags: config.styleJournalTags.get(),
   }))
 
   // 模型侧：自持集成 MCP 连接，按 disabledMcpTools 过滤后注册工具。
@@ -129,6 +133,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
 
   ctx.inject(['webServer'], (hostCtx: Context) => {
     const webServer = (hostCtx as unknown as { webServer: WebServerLike }).webServer
+    const ranker = createJournalRanker()
     // 面板打开「配置」页与保存后都会 GET 该路由：顺带按最新开关重建两批注册。
     const handler = createHandler({
       syncTools: async () => {
@@ -139,9 +144,11 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
         }
         return bridge ? bridge.sync() : listMcpTools()
       },
-      // 期刊等级查询：读配置里的 easyScholar SecretKey，限速 + 内存缓存。
-      // 无 key 时返回 `no_key`，界面据此提示去设置页填，不会发请求。
-      journalRank: createJournalRanker(),
+    // 期刊等级查询：读配置里的 easyScholar SecretKey，限速 + 内存缓存。
+    // 无 key 时返回 `no_key`，界面据此提示去设置页填，不会发请求。
+    journalRank: ranker,
+    // 归一标签：优先复用 Zotero Style 算好的结果，没查过才走 ranker 并落本地缓存。
+    journalTags: createJournalTagsResolver(ranker),
       // llm 服务由 `dsh-base` 提供，但不保证每种部署都装了 provider，
       // 所以这里按需取、取不到就让翻译器只走免密钥端点。
       translate: createTranslator({

@@ -15,6 +15,8 @@ import type {
   ZoteroFulltext,
   ZoteroGroup,
   ZoteroHealth,
+  JournalRankOutcome,
+  JournalTagsOutcome,
   ZoteroItemDetail,
   ZoteroItemScope,
   ZoteroItems,
@@ -436,36 +438,13 @@ export function translateSelection(text: string, options: TranslateOptions = {})
   return post<TranslateResult>('translate', { text, provider: options.provider }, options.signal)
 }
 
-/**
- * 期刊等级（easyScholar 开放接口的返回值）。
- *
- * 字段由 Host 从接口的 37 个等级里挑出与「这刊什么档次」相关的那批，全空表示
- * 这刊不在 easyScholar 库里。
- */
-export interface JournalRank {
-  impactFactor: string
-  jcrQuartile: string
-  fiveYearIf: string
-  casUp: string
-  casUpSmall: string
-  casUpTop: string
-  casWarn: string
-  xr: string
-  xrTop: string
-  ccf: string
-  pku: string
-  cssci: string
-}
-
-/**
- * 查询结果。`no_key` 与 `miss` 都是正常态 —— 前者提示去设置页填密钥，
- * 后者说明这刊不在库里，只有 `failed` 需要报错。
- */
-export type JournalRankOutcome =
-  | { status: 'ok'; rank: JournalRank }
-  | { status: 'no_key' }
-  | { status: 'miss' }
-  | { status: 'failed'; message: string }
+// 期刊等级与归一标签的类型统一定义于 zotero/types.ts，Host 与 Client 共用。
+export type {
+  JournalRank,
+  JournalRankOutcome,
+  JournalTags,
+  JournalTagsOutcome,
+} from '../zotero/types'
 
 /**
  * 按刊名查期刊等级。
@@ -477,4 +456,16 @@ export function fetchJournalRank(
   signal?: AbortSignal,
 ): Promise<JournalRankOutcome> {
   return post<JournalRankOutcome>('journal-rank', { publicationName }, signal)
+}
+
+/**
+ * 按刊名查归一标签：Style 结果 → 本插件缓存 → easyScholar 接口。
+ *
+ * 命中 Style 或缓存时不会打接口；接口查到后会写回本地缓存，供列表下次直接渲染。
+ */
+export function fetchJournalTags(
+  publicationName: string,
+  signal?: AbortSignal,
+): Promise<JournalTagsOutcome> {
+  return post<JournalTagsOutcome>('journal-tags', { publicationName }, signal)
 }

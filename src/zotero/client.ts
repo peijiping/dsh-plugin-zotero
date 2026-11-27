@@ -31,6 +31,7 @@ import {
   zoteroProbeUrl,
 } from './config.js'
 import { readZoteroPaths } from './prefs.js'
+import { tagsForSummary } from './journal-tags.js'
 import type {
   ApiErrorCode,
   ApiFix,
@@ -600,7 +601,7 @@ export async function getAnnotationHost(key: string): Promise<AnnotationHostInfo
   }
 }
 
-function toSummary(raw: RawItem, child: ChildState): ZoteroItemSummary {
+async function toSummary(raw: RawItem, child: ChildState): Promise<ZoteroItemSummary> {
   const data = raw.data ?? {}
   const itemType = data.itemType ?? ''
   // 笔记没有 title 字段，用正文首段摘要当标题。
@@ -608,6 +609,11 @@ function toSummary(raw: RawItem, child: ChildState): ZoteroItemSummary {
     || data.filename
     || (itemType === 'note' ? noteTitle(data.note ?? '') : '')
     || '(无标题)'
+  // 列表只带「已经算好」的标签：Style 结果或本插件缓存，绝不在这里发请求。
+  // 一屏最多 200 条，逐条查接口会被 easyScholar 限速挡死。
+  const journalName = (data.publicationTitle ?? '').trim() !== ''
+    ? data.publicationTitle
+    : (data.journalAbbreviation ?? '')
   return {
     key: raw.key,
     title,
@@ -617,6 +623,7 @@ function toSummary(raw: RawItem, child: ChildState): ZoteroItemSummary {
     kind: childKind(raw),
     attachments: child.children,
     lastRead: child.lastRead,
+    journalTags: await tagsForSummary(journalName ?? ''),
   }
 }
 
@@ -1256,7 +1263,7 @@ async function searchItemsWithRollup(
     if (typeof parent === 'string' && parent !== '') continue
     if (options.scope === 'unfiled' && (raw.data?.collections ?? []).length > 0) continue
     if (!itemHasTags(raw, tags, options.tagMode)) continue
-    rows.push(toSummary(raw, { lastRead: null, children: [] }))
+    rows.push(await toSummary(raw, { lastRead: null, children: [] }))
   }
   if (options.sort === 'title') {
     const sign = options.direction === 'desc' ? -1 : 1
@@ -1490,7 +1497,7 @@ export async function listRecentItems(
     const raw = itemByKey.get(key)
     if (raw === undefined) continue
     if (matched !== null && !matched.has(key)) continue
-    const row = toSummary(raw, { lastRead: readAtByKey.get(key) ?? null, children: [] })
+    const row = await toSummary(raw, { lastRead: readAtByKey.get(key) ?? null, children: [] })
     if (tags.length > 0) {
       const names = new Set((raw.data?.tags ?? []).map((tag) => tag.tag?.trim() ?? ''))
       const hit = options.tagMode === 'any'

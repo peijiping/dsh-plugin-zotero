@@ -11,7 +11,7 @@
  * 那一栏不给排序入口（见 {@link isRecentSelection}）。
  *
  * 行内排版是两行：第一行只放标题，第二行小字灰色放「类型 + 年份 + 作者」，
- * 行与行之间用一条浅色细线分隔。
+ * 右端依次是期刊标签胶囊与附件图标；行与行之间用一条浅色细线分隔。
  */
 
 import { useState, type ReactElement } from 'react'
@@ -32,8 +32,10 @@ import {
   itemMenuEntries,
   type ItemMenuEntry,
 } from './itemContextMenu'
+import { journalTagChips } from './journalMetrics'
 import type { Translate } from './locales'
 import { tpl } from './locales'
+import { journalChipStyle } from './styles'
 import type { ItemSort } from './paneStore'
 import { isRecentSelection, showToast, TREE_ROOT_ID } from './paneStore'
 import { isRead, itemTooltip, readTitleStyle } from './readState'
@@ -186,7 +188,12 @@ const itemTitleStyle: React.CSSProperties = {
   lineHeight: 1.45,
 }
 
-/** 第二行：类型 + 年份 + 作者，小字灰。 */
+/**
+ * 第二行：类型 + 年份 + 作者，小字灰；右端依次是期刊标签与附件统计。
+ *
+ * 透明度只加在文字元素上，不能加在这一行本身 —— 胶囊要和标题一样清晰，
+ * 整行 opacity 会把彩色胶囊一起冲淡。
+ */
 const itemMetaStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'baseline',
@@ -195,13 +202,12 @@ const itemMetaStyle: React.CSSProperties = {
   marginTop: 1,
   fontSize: 11,
   lineHeight: 1.4,
-  opacity: 0.5,
 }
 
 /** 类型与年份比作者再淡一点：作者是主要识别信息。 */
-const itemMetaTypeStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85 }
+const itemMetaTypeStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.425 }
 
-const itemMetaYearStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.85 }
+const itemMetaYearStyle: React.CSSProperties = { flex: '0 0 auto', opacity: 0.425 }
 
 /** 第二行末尾的子项统计：一组「类型图标 + 数字」，靠右且不参与作者截断。 */
 const itemMetaChildKindsStyle: React.CSSProperties = {
@@ -209,9 +215,7 @@ const itemMetaChildKindsStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 6,
   flex: '0 0 auto',
-  // 作者缺失时没有可伸展元素把统计顶到右边，这里显式靠右对齐。
-  marginLeft: 'auto',
-  opacity: 0.85,
+  opacity: 0.425,
 }
 
 /** 单种类型的「图标 + 个数」。 */
@@ -228,6 +232,19 @@ const itemMetaTextStyle: React.CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+  opacity: 0.5,
+}
+
+/**
+ * 第二行右端的期刊标签胶囊：贴在附件统计左侧，整组靠右、不换行、不被挤压。
+ * 没有已算好的数据就不渲染，列表绝不实时查接口。
+ */
+const itemJournalTagsStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  flex: '0 0 auto',
+  marginLeft: 'auto',
 }
 
 const itemBodyStyle: React.CSSProperties = { flex: 1, minWidth: 0 }
@@ -427,6 +444,9 @@ function ItemRow({ t, item, selected, onSelect, onOpen, menuItems, onMenuSelect 
   for (const child of children) {
     kindCounts.set(child.kind, (kindCounts.get(child.kind) ?? 0) + 1)
   }
+  // 只画摘要里已经带出来的标签（Style 结果 / 本插件缓存）；未命中留空，
+  // 列表渲染绝不打接口 —— 一屏几十条会把 easyScholar 限速打满。
+  const journalChips = item.journalTags == null ? [] : journalTagChips(item.journalTags)
   const shownKinds = CHILD_KIND_ORDER.filter((kind) => kindCounts.has(kind))
   const countTitle = shownKinds
     .map((kind) => `${childKindLabel(t, kind)} ${kindCounts.get(kind)}`)
@@ -479,13 +499,27 @@ function ItemRow({ t, item, selected, onSelect, onOpen, menuItems, onMenuSelect 
         </span>
         <div style={itemBodyStyle}>
           <span style={{ ...itemTitleStyle, ...readTitleStyle(read) }}>{item.title}</span>
-          {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasChildren) && (
+          {(typeLabel !== '' || item.year !== '' || item.creators !== '' || hasChildren || journalChips.length > 0) && (
             <div style={itemMetaStyle}>
               {typeLabel !== '' && <span style={itemMetaTypeStyle}>{typeLabel}</span>}
               {item.year !== '' && <span style={itemMetaYearStyle}>{item.year}</span>}
               {item.creators !== '' && <span style={itemMetaTextStyle}>{item.creators}</span>}
+              {journalChips.length > 0 && (
+                <span style={itemJournalTagsStyle}>
+                  {journalChips.map((chip, index) => (
+                    <span key={`${chip.label}-${String(index)}`} style={journalChipStyle(chip.tone, true)}>
+                      {chip.label} {chip.value}
+                    </span>
+                  ))}
+                </span>
+              )}
               {hasChildren && (
-                <span style={itemMetaChildKindsStyle} title={countTitle}>
+                <span
+                  style={journalChips.length > 0
+                    ? itemMetaChildKindsStyle
+                    : { ...itemMetaChildKindsStyle, marginLeft: 'auto' }}
+                  title={countTitle}
+                >
                   {shownKinds.map((kind) => (
                     <span
                       key={kind}

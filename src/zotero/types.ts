@@ -90,7 +90,62 @@ export interface ZoteroItemSummary {
    * `null` 表示从未读过。Zotero 不记录读到第几页，只有这一个「读过没有」的信号。
    */
   lastRead: number | null
+  /**
+   * 列表行直接可画的期刊标签；`null` 表示当前还没有可用数据（未命中留空）。
+   *
+   * 由 Host 从「Style 结果 → 插件本地缓存」同步带出，**列表渲染不发任何请求**。
+   */
+  journalTags?: JournalTags | null
 }
+
+/* ── 期刊标签（三源归一） ────────────────────────────────────────── */
+
+/**
+ * easyScholar `/open/getPublicationRank` 的返回值（Host 侧只保留这些字段）。
+ *
+ * `casBase` 是中科院**基础版**分区（Style 的 `sciBase`），与升级版 `casUp`
+ * 口径不同，两者不能互相顶替 —— 用户看到的 Style 列用的是基础版。
+ */
+export interface JournalRank {
+  impactFactor: string
+  jcrQuartile: string
+  fiveYearIf: string
+  casUp: string
+  casUpSmall: string
+  casUpTop: string
+  casBase: string
+  casWarn: string
+  xr: string
+  xrTop: string
+  ccf: string
+  pku: string
+  cssci: string
+}
+
+export type JournalRankOutcome =
+  | { status: 'ok'; rank: JournalRank }
+  | { status: 'no_key' }
+  | { status: 'miss' }
+  | { status: 'failed'; message: string }
+
+/**
+ * 归一后的期刊标签：固定取 IF / JCR / 中科院基础版三项，与 Zotero Style
+ * 列里 `sciif` / `sci` / `sciBase` 的显示一致。
+ *
+ * `source` 只用于详情面板的来源说明，列表不显示。
+ */
+export interface JournalTags {
+  impactFactor: string
+  jcrQuartile: string
+  casQuartile: string
+  source: 'style' | 'cache' | 'api'
+}
+
+export type JournalTagsOutcome =
+  | { status: 'ok'; tags: JournalTags }
+  | { status: 'no_key' }
+  | { status: 'miss' }
+  | { status: 'failed'; message: string }
 
 /** 条目下的一个附件。 */
 export interface ZoteroAttachment {

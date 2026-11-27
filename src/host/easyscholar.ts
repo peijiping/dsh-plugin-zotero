@@ -7,8 +7,9 @@
  *
  * 接口是 easyScholar 的**官方开放接口**（`/open/getPublicationRank`），免登录、
  * 不与会员服务绑定、靠用户自己的 SecretKey 识别身份。它返回的是第三方转抄的
- * 期刊等级数据，权威性有限 —— 所以插件**只显示、不写回 Zotero、不落盘**：
- * 写回会污染用户文库并让插件替数据错误负责，落盘则会在数据更新后留下过期副本。
+ * 期刊等级数据，权威性有限 —— 插件**不写回 Zotero**：写回会污染用户文库并让
+ * 插件替数据错误负责。查询结果只落在本插件自己的缓存文件里（24h TTL），
+ * 供条目列表直接复用，列表不会为此打接口。
  *
  * 文档明确要求「每秒最多 2 次请求」，这里用一个全局时间槽做节流，并对同一刊名
  * 做内存缓存（跨文献复用，切来切去不会反复打接口）。
@@ -16,41 +17,10 @@
 
 import { ZoteroError } from '../zotero/client.js'
 import { getSettings } from '../zotero/config.js'
+import type { JournalRank, JournalRankOutcome } from '../zotero/types.js'
 
-/** 一次查询能拿到的字段，全部原样保留字符串形态。 */
-export interface JournalRank {
-  /** SCI 影响因子（JCR）。 */
-  impactFactor: string
-  /** SCI 分区（JCR），形如 `Q1`。 */
-  jcrQuartile: string
-  /** SCI 五年影响因子（JCR）。 */
-  fiveYearIf: string
-  /** 中科院升级版分区。 */
-  casUp: string
-  /** 中科院升级版小类分区。 */
-  casUpSmall: string
-  /** 中科院升级版 Top 分区标记。 */
-  casUpTop: string
-  /** 中科院预警标记。 */
-  casWarn: string
-  /** 新锐学术分区（中科院分区停更后出现的第三方替代口径）。 */
-  xr: string
-  /** 新锐学术 Top 分区标记。 */
-  xrTop: string
-  /** CCF 推荐等级。 */
-  ccf: string
-  /** 北大核心。 */
-  pku: string
-  /** 南大核心（CSSCI）。 */
-  cssci: string
-}
-
-/** 查询结果。`no_key` 与 `miss` 都是正常态，只有 `failed` 是异常。 */
-export type JournalRankOutcome =
-  | { status: 'ok'; rank: JournalRank }
-  | { status: 'no_key' }
-  | { status: 'miss' }
-  | { status: 'failed'; message: string }
+// 统一类型放在 zotero/types.ts，Host 与 Client 共用同一份字段定义。
+export type { JournalRank, JournalRankOutcome }
 
 export interface JournalRankInput {
   publicationName: string
@@ -91,6 +61,8 @@ const FIELD_MAP: Record<string, keyof JournalRank> = {
   sciUp: 'casUp',
   sciUpSmall: 'casUpSmall',
   sciUpTop: 'casUpTop',
+  // 中科院基础版（Style 的 `sciBase`）：与升级版口径不同，必须单独留一列。
+  sciBase: 'casBase',
   sciwarn: 'casWarn',
   xr: 'xr',
   xrTop: 'xrTop',
@@ -126,6 +98,7 @@ function toRank(official: unknown): JournalRank | null {
     casUp: '',
     casUpSmall: '',
     casUpTop: '',
+    casBase: '',
     casWarn: '',
     xr: '',
     xrTop: '',

@@ -228,6 +228,11 @@ export interface ZoteroSettings {
    * 不绑会员。它只用于查询期刊等级，插件不写回 Zotero，也不缓存结果到磁盘。
    */
   easyScholarKey: string
+  /**
+   * 是否优先复用 Zotero 其它插件算好的期刊标签（Zotero Style 的
+   * `zoterostyle.json`）。默认开；关掉后只用本插件的缓存 / API。
+   */
+  styleJournalTags: boolean
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -243,6 +248,7 @@ let readSettings = (): ZoteroSettings => ({
   translateProvider: 'bing',
   translateTarget: TRANSLATE_TARGET,
   easyScholarKey: '',
+  styleJournalTags: true,
 })
 
 /**

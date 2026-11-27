@@ -25,6 +25,51 @@ export const TREE_PURPLE = '#8a63e8'
 /** 中性灰：最近阅读的时钟图标（Zotero 左栏的时钟也是灰色）。 */
 export const TREE_GRAY = '#6f7a86'
 
+/**
+ * 期刊标签胶囊的固定配色（对齐 Zotero Style 列，不读它的自定义配置）。
+ *
+ * 色值只在这里出现：IF / SCI 用紫，中科院按区着色（1 区红、2/4 区橙、3 区绿）。
+ * 深浅主题都给可读的文字色，底色用低透明度的同色，不铺大面积实色。
+ */
+export type JournalChipTone = 'if' | 'sci' | 'cas1' | 'cas2' | 'cas3' | 'cas4' | 'cas'
+
+const JOURNAL_TONES: Record<JournalChipTone, readonly [string, string]> = {
+  if: ['light-dark(#6f45bd, #c9a9ff)', 'light-dark(rgba(138,99,232,0.13), rgba(138,99,232,0.22))'],
+  sci: ['light-dark(#6f45bd, #c9a9ff)', 'light-dark(rgba(138,99,232,0.13), rgba(138,99,232,0.22))'],
+  cas1: ['light-dark(#c0392b, #ff9992)', 'light-dark(rgba(220,90,85,0.14), rgba(220,90,85,0.24))'],
+  cas2: ['light-dark(#b9691e, #f0b172)', 'light-dark(rgba(224,135,47,0.16), rgba(224,135,47,0.24))'],
+  cas3: ['light-dark(#237a4b, #79d3a1)', 'light-dark(rgba(47,158,99,0.14), rgba(47,158,99,0.24))'],
+  cas4: ['light-dark(#a86118, #e8b26c)', 'light-dark(rgba(224,135,47,0.18), rgba(224,135,47,0.26))'],
+  cas: ['light-dark(#237a4b, #79d3a1)', 'light-dark(rgba(47,158,99,0.14), rgba(47,158,99,0.24))'],
+}
+
+/** 中科院分区 → 配色档；`医学4区` / `2区Top` / `四区` 都能认。 */
+export function journalCasTone(value: string): JournalChipTone {
+  const match = /([1-4一二三四])\s*区/iu.exec(value)
+  const digit = match?.[1] ?? ''
+  const n = '一二三四'.indexOf(digit)
+  const level = n >= 0 ? n + 1 : Number(digit)
+  return level >= 1 && level <= 4 ? (`cas${String(level)}` as JournalChipTone) : 'cas'
+}
+
+/** 一枚彩色胶囊；`compact` 供列表行用（更小、更窄）。 */
+export function journalChipStyle(tone: JournalChipTone, compact = false): CSSProperties {
+  const [color, background] = JOURNAL_TONES[tone]
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: compact ? 3 : 4,
+    padding: compact ? '0px 4px' : '1px 6px',
+    border: 'none',
+    borderRadius: 3,
+    color,
+    background,
+    fontSize: compact ? 10.5 : 12,
+    lineHeight: compact ? 1.55 : 1.5,
+    whiteSpace: 'nowrap',
+  }
+}
+
 /** 标题的蓝→紫点缀。 */
 export const TITLE_BAR_GRADIENT = `linear-gradient(180deg, #4a86e8 0%, ${TREE_PURPLE} 100%)`
 

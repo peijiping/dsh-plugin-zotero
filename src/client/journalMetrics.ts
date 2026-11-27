@@ -17,7 +17,9 @@
  * 一行错的「影响因子 5.2」比少一行严重得多，用户会拿它去投稿和填表。
  */
 
+import type { JournalTags } from '../zotero/types'
 import type { JournalRank } from './api'
+import { journalCasTone, type JournalChipTone } from './styles'
 
 /** 解析出的指标。所有值都是原样字符串：用户写了什么就显示什么。 */
 export interface JournalMetrics {
@@ -359,4 +361,42 @@ export function rankChips(rank: JournalRank): MetricChip[] {
   // 预警放最后且带警示色：它说明的是投稿风险，不该混在档次里。
   if (rank.casWarn !== '') chips.push({ tagKey: 'chip.warn', value: rank.casWarn, warn: true })
   return chips
+}
+
+/* ── 归一标签（Style / 缓存 / API）的彩色胶囊 ─────────────────────── */
+
+/** 与 Zotero Style 列同款的三枚胶囊：IF / SCI / 中科院。 */
+export interface JournalTagChip {
+  label: string
+  value: string
+  tone: JournalChipTone
+}
+
+/**
+ * 归一标签 → 胶囊，顺序固定为 IF → SCI → 中科院。
+ *
+ * 文案不读用户配置（边界：只复用结果数据），中科院值裁掉学科名只留 `N区`，
+ * 与 Style 列里 `Map: SCI基础版=中科院` 的显示效果一致。
+ */
+export function journalTagChips(tags: JournalTags): JournalTagChip[] {
+  const chips: JournalTagChip[] = []
+  if (tags.impactFactor !== '') chips.push({ label: 'IF', value: tags.impactFactor, tone: 'if' })
+  if (tags.jcrQuartile !== '') chips.push({ label: 'SCI', value: tags.jcrQuartile, tone: 'sci' })
+  if (tags.casQuartile !== '') {
+    const value = trimCas(tags.casQuartile)
+    chips.push({ label: '中科院', value, tone: journalCasTone(tags.casQuartile) })
+  }
+  return chips
+}
+
+/**
+ * extra / 标签里不属于 Style 那三枚的补充项（五年 IF、知网口径、收录、被引）。
+ *
+ * 这些是中文期刊与单篇文献的信息，Style 列本来就不显示；保留它们是为了不回退
+ * 既有能力，但不再让 extra 里的 IF / 分区抢掉归一标签的位置。
+ */
+export function extraSupplementChips(metrics: JournalMetrics): MetricChip[] {
+  return extraChips(metrics).filter(
+    (chip) => chip.tagKey !== 'chip.if' && chip.tagKey !== 'chip.jcr' && chip.tagKey !== 'chip.cas',
+  )
 }

@@ -104,6 +104,13 @@ function descriptionFor(tool: McpToolInfo): string {
   return `${parts.join('\n\n')}\n\n${base}`
 }
 
+/** 三类破坏性操作各自「到底改了什么」，直接写进审批卡片，省得用户去猜。 */
+const ACTION_HINT: Record<string, { zh: string; en: string }> = {
+  trash_item: { zh: '移入回收站，可在 Zotero 恢复', en: 'moved to trash, recoverable in Zotero' },
+  delete_collection: { zh: '删除分类，分类结构不可恢复，条目本身保留', en: 'collection removed, items kept' },
+  remove_items_from_collection: { zh: '移出分类，条目仍留在文库', en: 'removed from collection, items kept in library' },
+}
+
 /**
  * 给 MCP 破坏性工具生成审批文案：尽量把调用里的条目 / 分类 key 摆到卡片上。
  *
@@ -121,11 +128,18 @@ function mcpApprovalText(tool: McpToolInfo, args: unknown): ApprovalText {
       else if (typeof value === 'string') keys.push(value)
     }
   }
-  const target = keys.length === 0 ? '' : `：${keys.slice(0, 8).join('、')}${keys.length > 8 ? ` 等 ${keys.length} 个` : ''}`
-  const action = tool.name === 'trash_item' ? '移入回收站（可在 Zotero 恢复）' : '删除'
+  const zhList = keys.length === 0
+    ? ''
+    : `：${keys.slice(0, 8).join('、')}${keys.length > 8 ? ` 等 ${keys.length} 个` : ''}`
+  const enList = keys.length === 0
+    ? ''
+    : `: ${keys.slice(0, 8).join(', ')}${keys.length > 8 ? ` and ${keys.length - 8} more` : ''}`
+  const hint = ACTION_HINT[tool.name]
+  const zhHint = hint === undefined ? '' : `（${hint.zh}）`
+  const enHint = hint === undefined ? '' : ` (${hint.en})`
   return {
-    en: `Approve Zotero ${tool.name}: ${action}${target}.`,
-    zh: `即将对 Zotero 执行 ${action} ${tool.name}${target}，请核对后确认。`,
+    en: `Approve Zotero ${tool.name}${enHint}${enList}.`,
+    zh: `即将对 Zotero 执行 ${tool.name}${zhHint}${zhList}。请核对后确认。`,
   }
 }
 
