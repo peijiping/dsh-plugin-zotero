@@ -69,6 +69,10 @@ const FIELD_MAP: Record<string, keyof JournalRank> = {
   ccf: 'ccf',
   pku: 'pku',
   cssci: 'cssci',
+  // 与 Style 结果归一：中文刊经常只有这几项，没有 JCR / 中科院分区。
+  ei: 'ei',
+  eii: 'ei',
+  zhongguokejihexin: 'zhongguokejihexin',
 }
 
 function clean(raw: unknown): string {
@@ -105,6 +109,8 @@ function toRank(official: unknown): JournalRank | null {
     ccf: '',
     pku: '',
     cssci: '',
+    ei: '',
+    zhongguokejihexin: '',
   }
 
   for (const source of [all, select]) {

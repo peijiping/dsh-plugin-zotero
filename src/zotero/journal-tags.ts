@@ -1,9 +1,9 @@
 /**
  * 期刊标签的「读结果 + 本地缓存」层。
  *
- * 复用边界：只读取 Zotero 生态里别的插件**已经算好**的结果数据，不读它们的
- * 配置（Fields / Map / 配色），也不复刻第二个设置页。Style 的 `zoterostyle.json`
- * 是按刊名索引的私有缓存，本模块只取 `rank.sciif / sci / sciBase` 三项。
+ * 复用边界：读 Style 算好的 `zoterostyle.json`，并按用户明确授权读取它的
+ * PublicationTags 列配置（Fields / Map / source）来复刻显示范围；仍然不读密钥、
+ * 不改它的文件、不复刻第二个设置页。显示口径的实现见 `publicationTags.ts`。
  *
  * 查询优先级（详见 `host/journal-tags.ts`）：
  *   ① Style 的 `zoterostyle.json`（用户装了并且查过这本刊）
@@ -18,7 +18,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { getSettings } from './config.js'
+import { journalRankToRaw, publicationTagEntries, readPublicationTagsPrefs } from './publicationTags.js'
 import { readZoteroPaths } from './prefs.js'
+import { KNOWN_STYLE_FIELDS } from './styleFields.js'
 import type { JournalRank, JournalTags } from './types.js'
 
 /** 缓存 24 小时：期刊等级是年度量级的数据，6 小时太短。 */
@@ -68,6 +70,7 @@ function emptyRank(): JournalRank {
     impactFactor: '', jcrQuartile: '', fiveYearIf: '',
     casUp: '', casUpSmall: '', casUpTop: '', casBase: '',
     casWarn: '', xr: '', xrTop: '', ccf: '', pku: '', cssci: '',
+    ei: '', zhongguokejihexin: '',
   }
 }
 
@@ -91,25 +94,29 @@ const STYLE_FIELDS: ReadonlyArray<readonly [string, keyof JournalRank]> = [
   ['ccf', 'ccf'],
   ['pku', 'pku'],
   ['cssci', 'cssci'],
+  // EI 与科技核心：中文刊经常只有这两项，没有 IF / 分区。
+  ['eii', 'ei'],
+  ['zhongguokejihexin', 'zhongguokejihexin'],
 ]
 
 /**
  * 已知键并集，只用于判断「文件结构是不是变了」。
  *
- * 除上面展示的字段外，还收 Style 会写、但我们不展示的中文核心与收录标记 ——
- * 一个全是中文期刊的库，键名同样合法，不该被误报成结构异常。
+ * 除上面映射的字段外，还收 Style 会写的校内目录与收录标记（见 `styleFields.ts`）——
+ * 一个全是中文期刊或军工期刊的库，键名同样合法，不该被误报成结构异常。
  */
-const KNOWN_STYLE_KEYS = new Set<string>([
-  ...STYLE_FIELDS.map(([key]) => key),
-  'zhongguokejihexin', 'cscd', 'xju', 'cju', 'jci', 'esci', 'esi',
-])
+const KNOWN_STYLE_KEYS = KNOWN_STYLE_FIELDS
 
 export function styleRankToJournalRank(raw: unknown): JournalRank | null {
-  if (raw === null || typeof raw !== 'object') return null
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const fields = raw as Record<string, unknown>
   const rank = emptyRank()
   for (const [key, field] of STYLE_FIELDS) rank[field] = clean(fields[key])
-  return Object.values(rank).some((value) => value !== '') ? rank : null
+  // 只有用户配置里才用到的字段（如某校目录）时 rank 会全空，但 raw 仍有效。
+  const hit = Object.entries(fields).some(
+    ([key, value]) => KNOWN_STYLE_KEYS.has(key) && clean(value) !== '',
+  )
+  return hit ? rank : null
 }
 
 /** 中科院分区统一取基础版：与 Style 的 `sciBase` 口径一致；再退新锐 / 升级版 / 仅 TOP。 */
@@ -117,25 +124,53 @@ function casOf(rank: JournalRank): string {
   return rank.casBase || rank.xr || rank.casUp || rank.xrTop
 }
 
-/** 三项都有值才算一条完整标签；缺项留空，由界面跳过那一枚胶囊。 */
+/**
+ * 收录标记的值校验：宁可漏，也不要把「EI 收录：否」或校内目录备注当成核心收录。
+ *
+ * - `eii`：Style 实际写的是 `EI`；大小写放开，但不认 `EI检索` 之外的长串。
+ * - `pku`：Style 与 easyScholar 都用 `1` 表示北大核心，`0` / 空都不算。
+ * - `zhongguokejihexin`：认「科技核心」字样，原样留着供界面显示。
+ */
+function coreValue(raw: unknown, kind: 'ei' | 'pku' | 'keji'): string {
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  if (kind === 'ei') return /^ei$/iu.test(value) ? 'EI' : ''
+  if (kind === 'pku') return value === '1' ? '1' : ''
+  return value.includes('科技核心') ? value : ''
+}
+
+/**
+ * 归一成可展示标签。缺项留空，由界面跳过那一枚胶囊；旧缓存条目没有新字段时
+ * 用 `?? ''` 兜底，不能让 `undefined` 混进 `hasTags` 被当成命中。
+ */
 export function rankToTags(rank: JournalRank, source: JournalTags['source']): JournalTags {
   return {
-    impactFactor: rank.impactFactor,
-    jcrQuartile: rank.jcrQuartile,
+    impactFactor: rank.impactFactor ?? '',
+    jcrQuartile: rank.jcrQuartile ?? '',
     casQuartile: casOf(rank),
+    ei: coreValue(rank.ei, 'ei'),
+    pku: coreValue(rank.pku, 'pku'),
+    zhongguokejihexin: coreValue(rank.zhongguokejihexin, 'keji'),
+    mirrored: [],
     source,
   }
 }
 
+/** 按 Zotero 列配置决定「这一本有没有可显示的项」：配置没选的字段一律不算。 */
 function hasTags(tags: JournalTags): boolean {
-  return tags.impactFactor !== '' || tags.jcrQuartile !== '' || tags.casQuartile !== ''
+  return (tags.mirrored?.length ?? 0) > 0
 }
 
 // ---- Style 结果缓存 ---------------------------------------------------------
 
+interface StyleEntry {
+  rank: JournalRank | null
+  /** Style 的原始 rank，按用户 Fields 配置生成胶囊时要用。 */
+  raw: Record<string, unknown>
+}
+
 interface StyleFile {
   stamp: string
-  ranks: Map<string, JournalRank | null>
+  ranks: Map<string, StyleEntry>
 }
 
 let styleCache: StyleFile | null = null
@@ -149,7 +184,7 @@ let warnedShape = false
  * 用户可能随时在 Zotero 里新查了一本刊；每次请求 stat 一次足够便宜，又能让
  * 新结果在下一次打开详情时立刻可见（不需要重启 DSH）。
  */
-async function loadStyleRanks(): Promise<Map<string, JournalRank | null>> {
+async function loadStyleRanks(): Promise<Map<string, StyleEntry>> {
   const paths = await readZoteroPaths()
   // `extensions.zotero.dataDir` 只有用户改过数据目录才会写进 prefs.js；没写过的
   // 机器 Zotero 用默认的 `~/Zotero`。少了这步兜底，装了 Style 也读不到结果。
@@ -170,7 +205,7 @@ async function loadStyleRanks(): Promise<Map<string, JournalRank | null>> {
     // 插件正在写文件时可能读到半截 JSON：这次按未命中，下次 stamp 变了再读。
     return new Map()
   }
-  const ranks = new Map<string, JournalRank | null>()
+  const ranks = new Map<string, StyleEntry>()
   const unknown: string[] = []
   let knownHits = 0
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -188,7 +223,12 @@ async function loadStyleRanks(): Promise<Map<string, JournalRank | null>> {
           if (clean(value) !== '') knownHits += 1
         }
       }
-      ranks.set(nameKey(name), styleRankToJournalRank(rankRaw))
+      ranks.set(nameKey(name), {
+        rank: styleRankToJournalRank(rankRaw),
+        raw: rankRaw !== null && typeof rankRaw === 'object' && !Array.isArray(rankRaw)
+          ? { ...(rankRaw as Record<string, unknown>) }
+          : {},
+      })
     }
   }
   // 文件有内容却一个字段都对不上：多半是 Style 改了字段名。只报一次，且不打断
@@ -206,9 +246,11 @@ export async function lookupStyleTags(name: string): Promise<JournalTags | null>
   if (!getSettings().styleJournalTags) return null
   const key = nameKey(name)
   if (key === '') return null
-  const rank = (await loadStyleRanks()).get(key)
-  if (rank === null || rank === undefined) return null
-  const tags = rankToTags(rank, 'style')
+  const found = (await loadStyleRanks()).get(key)
+  if (found === undefined || (found.rank === null && Object.keys(found.raw).length === 0)) return null
+  const prefs = await readPublicationTagsPrefs()
+  const tags = rankToTags(found.rank ?? emptyRank(), 'style')
+  tags.mirrored = publicationTagEntries(found.raw, prefs)
   return hasTags(tags) ? tags : null
 }
 
@@ -271,7 +313,9 @@ export async function lookupCachedTags(name: string): Promise<JournalTags | null
   const entry = (await loadCache()).ranks[key]
   if (entry === undefined) return null
   if (Date.now() - entry.at >= CACHE_TTL_MS) return null
+  const prefs = await readPublicationTagsPrefs()
   const tags = rankToTags(entry.rank, 'cache')
+  tags.mirrored = publicationTagEntries(journalRankToRaw(entry.rank), prefs)
   return hasTags(tags) ? tags : null
 }
 

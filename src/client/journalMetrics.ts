@@ -365,20 +365,40 @@ export function rankChips(rank: JournalRank): MetricChip[] {
 
 /* ── 归一标签（Style / 缓存 / API）的彩色胶囊 ─────────────────────── */
 
-/** 与 Zotero Style 列同款的三枚胶囊：IF / SCI / 中科院。 */
+/** 列表与详情里的一枚期刊标签胶囊。 */
 export interface JournalTagChip {
   label: string
   value: string
   tone: JournalChipTone
 }
 
+/** 配色仍用我们自己的档位；文案与顺序完全由 Zotero 的 Fields / Map 决定。 */
+function mirroredTone(label: string, value: string): JournalChipTone {
+  if (label === 'IF') return 'if'
+  if (label === 'SCI') return 'sci'
+  if (label === '中科院') return journalCasTone(value)
+  if (label === 'EI检索' || label === '北核' || label === '科核') return 'core'
+  return 'extra'
+}
+
 /**
- * 归一标签 → 胶囊，顺序固定为 IF → SCI → 中科院。
+ * 归一标签 → 胶囊。
  *
- * 文案不读用户配置（边界：只复用结果数据），中科院值裁掉学科名只留 `N区`，
- * 与 Style 列里 `Map: SCI基础版=中科院` 的显示效果一致。
+ * Host 已按 Zotero Style 的有效配置生成 `mirrored`（字段顺序、改名、值都已算好），
+ * Client 只按原顺序画出来，不再裁剪、去重或改文案。中科院值保留完整的
+ * `工程技术3区`，与 Zotero 那列一致；配色仍用我们自己的档位。
+ *
+ * `mirrored` 缺失只发生在「只重建了 client、Host 还是旧版」的过渡期，此时走
+ * 旧版核心六枚渲染，避免整块空白。
  */
 export function journalTagChips(tags: JournalTags): JournalTagChip[] {
+  if (tags.mirrored !== undefined) {
+    return tags.mirrored.map((entry) => ({
+      label: entry.label,
+      value: entry.value,
+      tone: mirroredTone(entry.label, entry.value),
+    }))
+  }
   const chips: JournalTagChip[] = []
   if (tags.impactFactor !== '') chips.push({ label: 'IF', value: tags.impactFactor, tone: 'if' })
   if (tags.jcrQuartile !== '') chips.push({ label: 'SCI', value: tags.jcrQuartile, tone: 'sci' })
@@ -386,6 +406,9 @@ export function journalTagChips(tags: JournalTags): JournalTagChip[] {
     const value = trimCas(tags.casQuartile)
     chips.push({ label: '中科院', value, tone: journalCasTone(tags.casQuartile) })
   }
+  if (tags.ei !== '') chips.push({ label: 'EI检索', value: '', tone: 'core' })
+  if (tags.pku !== '') chips.push({ label: '北核', value: '', tone: 'core' })
+  if (tags.zhongguokejihexin !== '') chips.push({ label: '科核', value: '', tone: 'core' })
   return chips
 }
 

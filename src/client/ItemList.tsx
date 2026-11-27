@@ -242,8 +242,12 @@ const itemMetaTextStyle: React.CSSProperties = {
 const itemJournalTagsStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
+  flexWrap: 'wrap',
+  justifyContent: 'flex-end',
   gap: 4,
-  flex: '0 0 auto',
+  // 字段全带出来时可能有很多枚：允许收缩并换行，别把标题挤没。
+  flex: '0 1 auto',
+  minWidth: 0,
   marginLeft: 'auto',
 }
 
@@ -508,7 +512,7 @@ function ItemRow({ t, item, selected, onSelect, onOpen, menuItems, onMenuSelect 
                 <span style={itemJournalTagsStyle}>
                   {journalChips.map((chip, index) => (
                     <span key={`${chip.label}-${String(index)}`} style={journalChipStyle(chip.tone, true)}>
-                      {chip.label} {chip.value}
+                      {chip.value === '' ? chip.label : `${chip.label} ${chip.value}`}
                     </span>
                   ))}
                 </span>

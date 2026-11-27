@@ -120,6 +120,10 @@ export interface JournalRank {
   ccf: string
   pku: string
   cssci: string
+  /** Style 的 `eii`（EI 收录）；easyScholar 侧字段名可能是 `ei` / `eii`。 */
+  ei: string
+  /** Style 的 `zhongguokejihexin`（中国科技核心期刊，即「科核」）。 */
+  zhongguokejihexin: string
 }
 
 export type JournalRankOutcome =
@@ -129,8 +133,23 @@ export type JournalRankOutcome =
   | { status: 'failed'; message: string }
 
 /**
- * 归一后的期刊标签：固定取 IF / JCR / 中科院基础版三项，与 Zotero Style
- * 列里 `sciif` / `sci` / `sciBase` 的显示一致。
+ * 按 Zotero Style「期刊标签」列配置生成的一枚胶囊。
+ *
+ * `label` / `value` 已经走完 Style 的字段显示名与 Map 规则，Client 只管画。
+ * 用数组而不是固定字段，是为了让「Zotero 配了哪些字段、按什么顺序显示」完全
+ * 由用户自己的配置决定 —— 我们不再维护第二套字段白名单。
+ */
+export interface JournalTagEntry {
+  label: string
+  value: string
+}
+
+/**
+ * 归一后的期刊标签。
+ *
+ * `impactFactor` / `jcrQuartile` / `casQuartile` 等仍保留，供详情来源说明与旧
+ * Host 数据兼容；**实际显示以 `mirrored` 为准**。mirrored 为空表示按 Style 的
+ * Fields 配置这一屏没有可显示的项，跟 Zotero 那列留空是同一语义。
  *
  * `source` 只用于详情面板的来源说明，列表不显示。
  */
@@ -138,6 +157,16 @@ export interface JournalTags {
   impactFactor: string
   jcrQuartile: string
   casQuartile: string
+  /** 原样值 `EI`；空串表示未收录。 */
+  ei: string
+  /** 原样值 `1`；空串表示非北大核心。 */
+  pku: string
+  /** 原样值「中国科技核心期刊」；空串表示非科技核心。 */
+  zhongguokejihexin: string
+  /**
+   * 按 Style 有效配置镜像出的胶囊；缺失表示旧 Host 数据，Client 走兼容渲染。
+   */
+  mirrored?: JournalTagEntry[]
   source: 'style' | 'cache' | 'api'
 }
 

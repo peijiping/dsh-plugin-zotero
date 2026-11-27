@@ -28,10 +28,11 @@ export const TREE_GRAY = '#6f7a86'
 /**
  * 期刊标签胶囊的固定配色（对齐 Zotero Style 列，不读它的自定义配置）。
  *
- * 色值只在这里出现：IF / SCI 用紫，中科院按区着色（1 区红、2/4 区橙、3 区绿）。
+ * 色值只在这里出现：IF / SCI 用紫，中科院按区着色（1 区红、2/4 区橙、3 区绿），
+ * EI / 北核 / 科核 这三项收录标记用橙红，贴近 Zotero Style 列。
  * 深浅主题都给可读的文字色，底色用低透明度的同色，不铺大面积实色。
  */
-export type JournalChipTone = 'if' | 'sci' | 'cas1' | 'cas2' | 'cas3' | 'cas4' | 'cas'
+export type JournalChipTone = 'if' | 'sci' | 'cas1' | 'cas2' | 'cas3' | 'cas4' | 'cas' | 'core' | 'extra'
 
 const JOURNAL_TONES: Record<JournalChipTone, readonly [string, string]> = {
   if: ['light-dark(#6f45bd, #c9a9ff)', 'light-dark(rgba(138,99,232,0.13), rgba(138,99,232,0.22))'],
@@ -41,6 +42,9 @@ const JOURNAL_TONES: Record<JournalChipTone, readonly [string, string]> = {
   cas3: ['light-dark(#237a4b, #79d3a1)', 'light-dark(rgba(47,158,99,0.14), rgba(47,158,99,0.24))'],
   cas4: ['light-dark(#a86118, #e8b26c)', 'light-dark(rgba(224,135,47,0.18), rgba(224,135,47,0.26))'],
   cas: ['light-dark(#237a4b, #79d3a1)', 'light-dark(rgba(47,158,99,0.14), rgba(47,158,99,0.24))'],
+  core: ['light-dark(#b0441f, #f6a184)', 'light-dark(rgba(208,88,48,0.15), rgba(208,88,48,0.25))'],
+  // 校内目录 / 其他收录：中性蓝灰，不与 IF / 分区 / 核心收录抢色。
+  extra: ['light-dark(#3e6487, #a9c8e8)', 'light-dark(rgba(80,120,160,0.12), rgba(80,120,160,0.22))'],
 }
 
 /** 中科院分区 → 配色档；`医学4区` / `2区Top` / `四区` 都能认。 */
